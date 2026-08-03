@@ -7,7 +7,6 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:1 \
     VNC_GEOMETRY=1280x800 \
     VNC_DEPTH=24 \
-    VNC_PASSWORD_FILE=/run/secrets/vnc_password \
     TEST_APP_STATE_FILE=/tmp/vnc-test-app-state.json
 
 RUN apt-get update \

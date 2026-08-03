@@ -82,12 +82,14 @@ temporary_directory="$(mktemp -d)"
 printf '%s\n' "$password" > "$temporary_directory/vnc_password"
 chmod 0600 "$temporary_directory/vnc_password"
 
-log "building desktop image"
-docker build --pull --tag "$image_name" desktop
-
+log "pulling and recording the immutable desktop base"
+docker pull debian:13.6-slim >/dev/null
 base_digest="$(docker image inspect debian:13.6-slim --format '{{index .RepoDigests 0}}')"
 [[ "$base_digest" == debian@sha256:* ]] || fail "Debian base digest was not available"
 printf 'DESKTOP_BASE_DIGEST=%s\n' "$base_digest"
+
+log "building desktop image"
+docker build --pull --tag "$image_name" desktop
 
 if docker history --no-trunc "$image_name" | grep -Fq "$password"; then
     fail "runtime password appeared in image history"
