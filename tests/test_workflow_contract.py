@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PUBLISHER = ROOT / ".github/workflows/publish-ci-status.yml"
 CI = ROOT / ".github/workflows/ci.yml"
 
+CHECKOUT_SHA = "d23441a48e516b6c34aea4fa41551a30e30af803"
+SETUP_PYTHON_SHA = "ece7cb06caefa5fff74198d8649806c4678c61a1"
+UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+
 
 class WorkflowContractTests(unittest.TestCase):
     def test_publisher_has_minimum_permissions_and_no_checkout(self):
@@ -48,14 +52,18 @@ class WorkflowContractTests(unittest.TestCase):
         text = CI.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("name: CI\n"))
         self.assertRegex(text, r"push:\s*\n\s*branches:\s*\n\s*- master")
-        self.assertIn("actions/checkout@v6", text)
-        self.assertIn("actions/setup-python@v6", text)
-        self.assertIn("actions/upload-artifact@v7", text)
-        self.assertNotIn("actions/checkout@v4", text)
-        self.assertNotIn("actions/setup-python@v5", text)
-        self.assertNotIn("actions/upload-artifact@v4", text)
+        self.assertIn(f"actions/checkout@{CHECKOUT_SHA}", text)
+        self.assertIn(f"actions/setup-python@{SETUP_PYTHON_SHA}", text)
+        self.assertIn(f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}", text)
+        self.assertNotRegex(text, r"actions/(checkout|setup-python|upload-artifact)@v\d")
+        self.assertIn("rustup toolchain install 1.97.1", text)
+        self.assertIn("cargo fmt --all --check", text)
+        self.assertIn("cargo clippy --workspace --all-targets --all-features -- -D warnings", text)
+        self.assertIn("cargo test --workspace --all-features", text)
+        self.assertIn("RUSTDOCFLAGS: -Dwarnings", text)
         self.assertIn("python -m unittest discover", text)
         self.assertIn("ci-evidence", text)
+        self.assertIn("Cargo.lock", text)
 
 
 if __name__ == "__main__":

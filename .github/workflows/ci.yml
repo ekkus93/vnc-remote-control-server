@@ -18,16 +18,47 @@ jobs:
   quality:
     name: Repository quality gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12"
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+
+      - name: Generate bootstrap lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run Clippy with warnings denied
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --workspace --all-features
+
+      - name: Build documentation with warnings denied
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --workspace --all-features --no-deps
 
       - name: Compile CI bridge Python
         run: python -m compileall -q tools/ci_status tests
@@ -63,10 +94,12 @@ jobs:
           )
           PY
 
-      - name: Upload CI evidence
-        uses: actions/upload-artifact@v7
+      - name: Upload CI evidence and bootstrap lockfile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ci-evidence-${{ github.run_id }}
-          path: artifacts/ci-evidence.json
+          path: |
+            artifacts/ci-evidence.json
+            Cargo.lock
           if-no-files-found: error
           retention-days: 30

@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/controller-api",
+  "crates/libvnc-adapter",
+  "crates/remote-desktop-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "MIT"
+repository = "https://github.com/ekkus93/vnc-remote-control-server"
+
+[workspace.dependencies]
+proptest = "1.7.0"
+serde = { version = "1.0.219", features = ["derive"] }
+thiserror = "2.0.12"
+
+[workspace.lints.rust]
+warnings = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
