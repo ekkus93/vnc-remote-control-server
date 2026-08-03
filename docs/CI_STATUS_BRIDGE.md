@@ -90,4 +90,26 @@ During an implementation loop:
 
 ## Validation record
 
-Runtime evidence is added here after the first complete publisher validation.
+### Successful end-to-end path
+
+- Commit: `46aa19ac4e256e16c991878227bf696299e0f3c1`
+- CI run: `30859425666`, attempt `1`
+- Job: `91837912617` — `Repository quality gates`
+- Result: `completed` / `success`
+- Artifact: `8873739323` — `ci-evidence-30859425666`
+- Artifact digest: `sha256:7b10e64f4fcb3bbbb5552e64786569c7b66fddc9f718c56545f0407668abf08f`
+- The downloaded artifact identified the same commit SHA, run ID, attempt, workflow, and successful result.
+
+### Real failure path
+
+A temporary unit-test probe was committed solely to validate failure publication and then removed.
+
+- Probe commit: `be14542314637deec44e5b161fbc7592ae377494`
+- CI run: `30859522752`, attempt `1`
+- Job: `91838208347` — `Repository quality gates`
+- Result: `completed` / `failure`
+- Failed step: `Run CI bridge and workflow contract tests`, step `5`
+- Issue `#1` published the exact failed job ID and failed step without copying raw logs.
+- Probe removal commit: `b6524f77891ae8d7f089010521020aafd4b6d831`
+
+The probe file is not present in the final repository. The final candidate must be accepted only when issue `#1` reports a newer successful run for the exact final SHA.
