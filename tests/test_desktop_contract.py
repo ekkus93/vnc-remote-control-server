@@ -40,6 +40,7 @@ class DesktopContractTests(unittest.TestCase):
         self.assertIn("-SecurityTypes VncAuth", entrypoint)
         self.assertNotIn("SecurityTypes None", entrypoint)
         self.assertNotIn('printf "$password"', entrypoint)
+        self.assertNotIn("    -fg", entrypoint)
 
     def test_vnc_is_only_host_published_for_bounded_smoke_test(self) -> None:
         text = SMOKE.read_text(encoding="utf-8")

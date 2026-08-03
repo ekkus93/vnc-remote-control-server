@@ -110,8 +110,7 @@ Xtigervnc "$display" \
     -AlwaysShared \
     -DisconnectClients=0 \
     -desktop "VNC Remote Control Test Desktop" \
-    -pn \
-    -fg &
+    -pn &
 vnc_pid="$!"
 
 readonly startup_deadline=$((SECONDS + startup_timeout_seconds))
