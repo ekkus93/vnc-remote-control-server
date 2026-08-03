@@ -13,6 +13,8 @@ The v0.1 architecture uses:
 
 Implementation is in progress under [`docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md`](docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md). The repository currently contains the engineering baseline and core domain model. Later milestones add the desktop image, native adapter, controller API, Compose deployment, and real end-to-end validation.
 
+The authoritative `master` quality result is published to GitHub issue `#1` by the repository's ChatGPT-readable CI status bridge.
+
 ## Product boundary
 
 v0.1 provides pixel observation and remote desktop input primitives. OCR, Playwright, accessibility-tree automation, AI planning, multiple sessions, and a browser viewer are explicitly outside the v0.1 scope.
