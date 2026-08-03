@@ -186,7 +186,7 @@ impl Coordinate {
 }
 
 /// A framebuffer rectangle with checked bounds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy,PartialEq, Eq)]
 pub struct FramebufferRect {
     /// Horizontal origin.
     pub x: u32,
@@ -463,7 +463,7 @@ pub enum ConnectionState {
 
 impl ConnectionState {
     /// Returns whether a state transition is allowed by the v0.1 lifecycle.
-    pub const fn can_transition_to(self, next: Self) -> bool {
+    pub fn can_transition_to(self, next: Self) -> bool {
         use ConnectionState::{
             AuthenticationFailed, Connected, Connecting, Degraded, Disconnected, Reconnecting,
             Starting, Stopped,
