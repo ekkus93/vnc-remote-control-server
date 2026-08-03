@@ -21,6 +21,7 @@ RUN apt-get update \
         thunar \
         tigervnc-common \
         tigervnc-standalone-server \
+        tigervnc-tools \
         tini \
         x11-utils \
         x11-xkb-utils \

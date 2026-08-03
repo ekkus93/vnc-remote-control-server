@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import unittest
 from pathlib import Path
 
@@ -18,14 +17,15 @@ class DesktopContractTests(unittest.TestCase):
     def test_image_is_non_root_and_uses_runtime_secret(self) -> None:
         dockerfile = DOCKERFILE.read_text(encoding="utf-8")
         entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
-        self.assertRegex(
-            dockerfile,
-            rf"^FROM debian:13\.6-slim@sha256:{BASE_DIGEST}$",
+        self.assertEqual(
+            dockerfile.splitlines()[0],
+            f"FROM debian:13.6-slim@sha256:{BASE_DIGEST}",
         )
         self.assertIn("USER desktop:desktop", dockerfile)
         self.assertNotIn("VNC_PASSWORD_FILE=", dockerfile)
         self.assertNotIn("VNC_PASSWORD=", dockerfile)
         self.assertIn("tigervnc-standalone-server", dockerfile)
+        self.assertIn("tigervnc-tools", dockerfile)
         self.assertIn("xfce4-session", dockerfile)
         self.assertIn("rm -rf /var/lib/apt/lists/*", dockerfile)
         self.assertIn("${VNC_PASSWORD_FILE:-/run/secrets/vnc_password}", entrypoint)
