@@ -57,11 +57,17 @@ jobs:
           RUSTDOCFLAGS: -Dwarnings
         run: cargo doc --locked --workspace --all-features --no-deps
 
-      - name: Compile CI bridge Python
-        run: python -m compileall -q tools/ci_status tests
+      - name: Compile first-party Python
+        run: python -m compileall -q tools/ci_status tests desktop/test-app
 
-      - name: Run CI bridge and workflow contract tests
+      - name: Run Python and workflow contract tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Check first-party shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n desktop/entrypoint.sh desktop/healthcheck.sh desktop/xstartup tests/desktop/run.sh
 
       - name: Build CI evidence
         env:
@@ -98,3 +104,22 @@ jobs:
           path: artifacts/ci-evidence.json
           if-no-files-found: error
           retention-days: 30
+
+  desktop:
+    name: Secured Debian desktop image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Install TigerVNC viewer probe dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends tigervnc-tools tigervnc-viewer xvfb
+
+      - name: Run desktop image smoke test
+        run: tests/desktop/run.sh
