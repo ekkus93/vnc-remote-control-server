@@ -210,9 +210,7 @@ impl FramebufferRect {
         if width == 0 || height == 0 {
             return Err(DesktopError::InvalidRectangle);
         }
-        let right = x
-            .checked_add(width)
-            .ok_or(DesktopError::InvalidRectangle)?;
+        let right = x.checked_add(width).ok_or(DesktopError::InvalidRectangle)?;
         let bottom = y
             .checked_add(height)
             .ok_or(DesktopError::InvalidRectangle)?;
