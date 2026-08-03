@@ -50,10 +50,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertRegex(text, r"push:\s*\n\s*branches:\s*\n\s*- master")
         self.assertIn("actions/checkout@v6", text)
         self.assertIn("actions/setup-python@v6", text)
+        self.assertIn("actions/upload-artifact@v7", text)
         self.assertNotIn("actions/checkout@v4", text)
         self.assertNotIn("actions/setup-python@v5", text)
+        self.assertNotIn("actions/upload-artifact@v4", text)
         self.assertIn("python -m unittest discover", text)
-        self.assertIn("actions/upload-artifact@v4", text)
         self.assertIn("ci-evidence", text)
 
 
