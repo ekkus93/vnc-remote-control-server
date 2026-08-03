@@ -4,6 +4,7 @@ set -euo pipefail
 readonly image_name="vnc-remote-control-desktop:test"
 readonly container_name="vnc-remote-control-desktop-test-${GITHUB_RUN_ID:-local}-$$"
 readonly password='vnc-test'
+readonly base_reference='debian:13.6-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd'
 temporary_directory=""
 
 log() {
@@ -80,13 +81,12 @@ run_viewer_probe() {
 
 temporary_directory="$(mktemp -d)"
 printf '%s\n' "$password" > "$temporary_directory/vnc_password"
-chmod 0600 "$temporary_directory/vnc_password"
+chmod 0444 "$temporary_directory/vnc_password"
 
-log "pulling and recording the immutable desktop base"
-docker pull debian:13.6-slim >/dev/null
-base_digest="$(docker image inspect debian:13.6-slim --format '{{index .RepoDigests 0}}')"
-[[ "$base_digest" == debian@sha256:* ]] || fail "Debian base digest was not available"
-printf 'DESKTOP_BASE_DIGEST=%s\n' "$base_digest"
+log "pulling the pinned immutable desktop base"
+docker pull "$base_reference" >/dev/null
+docker image inspect "$base_reference" >/dev/null
+printf 'DESKTOP_BASE_DIGEST=%s\n' "${base_reference#*@}"
 
 log "building desktop image"
 docker build --pull --tag "$image_name" desktop
