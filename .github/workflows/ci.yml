@@ -64,7 +64,7 @@ jobs:
           PY
 
       - name: Upload CI evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-evidence-${{ github.run_id }}
           path: artifacts/ci-evidence.json
