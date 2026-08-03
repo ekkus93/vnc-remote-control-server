@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Repository quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile CI bridge Python
+        run: python -m compileall -q tools/ci_status tests
+
+      - name: Run CI bridge and workflow contract tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Build CI evidence
+        env:
+          EVIDENCE_PATH: artifacts/ci-evidence.json
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$EVIDENCE_PATH")"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "schema_version": 1,
+              "workflow": "CI",
+              "head_sha": os.environ["HEAD_SHA"],
+              "run_id": int(os.environ["RUN_ID"]),
+              "run_attempt": int(os.environ["RUN_ATTEMPT"]),
+              "result": "quality-gates-passed",
+          }
+          Path(os.environ["EVIDENCE_PATH"]).write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload CI evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ github.run_id }}
+          path: artifacts/ci-evidence.json
+          if-no-files-found: error
+          retention-days: 30
