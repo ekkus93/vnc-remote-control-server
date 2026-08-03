@@ -1,0 +1,141 @@
+name: Publish CI Status
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - requested
+      - in_progress
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: publish-ci-status-ci-master
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish latest CI status
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+      DEFAULT_BRANCH: master
+      MONITORED_BRANCH: "master"
+      ISSUE_NUMBER: "1"
+      PUBLISHER_WORKFLOW_FILE: .github/workflows/publish-ci-status.yml
+      SCRIPT_PATH: tools/ci_status/publish_status.py
+      MARKER: "<!-- maintained by .github/workflows/publish-ci-status.yml -->"
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_STATUS: ${{ github.event.workflow_run.status }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+
+    steps:
+      - name: Update authoritative CI issue
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$HEAD_BRANCH" != "$MONITORED_BRANCH" ]]; then
+            printf 'Ignoring branch %s; publisher monitors %s.\n' \
+              "$HEAD_BRANCH" "$MONITORED_BRANCH"
+            exit 0
+          fi
+
+          latest_run_id="$({
+            gh api \
+              --method GET \
+              "repos/${REPOSITORY}/actions/workflows/${WORKFLOW_ID}/runs" \
+              -f branch="${MONITORED_BRANCH}" \
+              -f per_page=1 \
+              --jq '.workflow_runs[0].id'
+          })"
+
+          if [[ -z "$latest_run_id" || "$latest_run_id" == "null" ]]; then
+            printf 'Could not resolve the latest applicable CI run.\n' >&2
+            exit 1
+          fi
+          if [[ "$latest_run_id" != "$RUN_ID" ]]; then
+            printf 'Skipping stale run %s; latest applicable run is %s.\n' \
+              "$RUN_ID" "$latest_run_id"
+            exit 0
+          fi
+
+          jobs_file="${RUNNER_TEMP}/jobs-pages.json"
+          artifacts_file="${RUNNER_TEMP}/artifacts-pages.json"
+          issue_body_file="${RUNNER_TEMP}/current-issue.md"
+          publisher_file="${RUNNER_TEMP}/publish_status.py"
+          body_file="${RUNNER_TEMP}/status.md"
+          patch_file="${RUNNER_TEMP}/issue-patch.json"
+          decision_file="${RUNNER_TEMP}/decision.json"
+
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/runs/${RUN_ID}/jobs?filter=latest&per_page=100" \
+            > "$jobs_file"
+
+          if [[ "$RUN_STATUS" == "completed" ]]; then
+            gh api --paginate --slurp \
+              "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" \
+              > "$artifacts_file"
+          else
+            printf '%s\n' '[]' > "$artifacts_file"
+          fi
+
+          gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" --jq '.body' \
+            > "$issue_body_file"
+
+          gh api \
+            "repos/${REPOSITORY}/contents/${SCRIPT_PATH}?ref=${DEFAULT_BRANCH}" \
+            --jq '.content' \
+            | tr -d '\n' \
+            | base64 --decode \
+            > "$publisher_file"
+
+          python3 "$publisher_file" \
+            --event-file "$GITHUB_EVENT_PATH" \
+            --jobs-pages-file "$jobs_file" \
+            --artifacts-pages-file "$artifacts_file" \
+            --current-issue-body-file "$issue_body_file" \
+            --output-body "$body_file" \
+            --output-patch "$patch_file" \
+            --output-decision "$decision_file" \
+            --issue-number "$ISSUE_NUMBER" \
+            --monitored-branch "$MONITORED_BRANCH" \
+            --publisher-workflow-file "$PUBLISHER_WORKFLOW_FILE" \
+            --marker "$MARKER"
+
+          if [[ "$(jq -r '.publish' "$decision_file")" != "true" ]]; then
+            printf 'Publisher skipped this event: %s\n' \
+              "$(jq -r '.reason' "$decision_file")"
+            exit 0
+          fi
+
+          latest_run_id_after="$({
+            gh api \
+              --method GET \
+              "repos/${REPOSITORY}/actions/workflows/${WORKFLOW_ID}/runs" \
+              -f branch="${MONITORED_BRANCH}" \
+              -f per_page=1 \
+              --jq '.workflow_runs[0].id'
+          })"
+          if [[ "$latest_run_id_after" != "$RUN_ID" ]]; then
+            printf 'Skipping run %s after final stale check; latest is %s.\n' \
+              "$RUN_ID" "$latest_run_id_after"
+            exit 0
+          fi
+
+          gh api \
+            --method PATCH \
+            "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" \
+            --input "$patch_file" \
+            >/dev/null
+
+          printf 'Published run %s to issue #%s.\n' "$RUN_ID" "$ISSUE_NUMBER"
