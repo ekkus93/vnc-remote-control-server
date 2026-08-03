@@ -36,11 +36,8 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
 
-      - name: Generate bootstrap lockfile
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo generate-lockfile
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
 
       - name: Check formatting
         run: cargo fmt --all --check
@@ -48,17 +45,17 @@ jobs:
       - name: Run Clippy with warnings denied
         env:
           RUSTFLAGS: -Dwarnings
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Run Rust tests
         env:
           RUSTFLAGS: -Dwarnings
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
 
       - name: Build documentation with warnings denied
         env:
           RUSTDOCFLAGS: -Dwarnings
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo doc --locked --workspace --all-features --no-deps
 
       - name: Compile CI bridge Python
         run: python -m compileall -q tools/ci_status tests
@@ -94,12 +91,10 @@ jobs:
           )
           PY
 
-      - name: Upload CI evidence and bootstrap lockfile
+      - name: Upload CI evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ci-evidence-${{ github.run_id }}
-          path: |
-            artifacts/ci-evidence.json
-            Cargo.lock
+          path: artifacts/ci-evidence.json
           if-no-files-found: error
           retention-days: 30

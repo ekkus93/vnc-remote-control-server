@@ -57,13 +57,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn(f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}", text)
         self.assertNotRegex(text, r"actions/(checkout|setup-python|upload-artifact)@v\d")
         self.assertIn("rustup toolchain install 1.97.1", text)
+        self.assertIn("cargo fetch --locked", text)
         self.assertIn("cargo fmt --all --check", text)
-        self.assertIn("cargo clippy --workspace --all-targets --all-features -- -D warnings", text)
-        self.assertIn("cargo test --workspace --all-features", text)
+        self.assertIn("cargo clippy --locked --workspace --all-targets --all-features -- -D warnings", text)
+        self.assertIn("cargo test --locked --workspace --all-features", text)
+        self.assertIn("cargo doc --locked --workspace --all-features --no-deps", text)
+        self.assertNotIn("cargo generate-lockfile", text)
         self.assertIn("RUSTDOCFLAGS: -Dwarnings", text)
         self.assertIn("python -m unittest discover", text)
         self.assertIn("ci-evidence", text)
-        self.assertIn("Cargo.lock", text)
 
 
 if __name__ == "__main__":
