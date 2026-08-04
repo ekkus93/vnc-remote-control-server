@@ -74,7 +74,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -x tests/native/run.sh
           bash -n \
             desktop/entrypoint.sh \
             desktop/healthcheck.sh \
@@ -162,4 +161,4 @@ jobs:
         run: tests/desktop/run.sh
 
       - name: Run native adapter smoke test
-        run: tests/native/run.sh
+        run: bash tests/native/run.sh
