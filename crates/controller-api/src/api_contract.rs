@@ -194,7 +194,10 @@ mod tests {
             let json = format!("\"{name}\"");
             let parsed: ApiKeyboardKey = serde_json::from_str(&json).expect("known key parses");
             assert_eq!(parsed.into_domain(), key);
-            assert_eq!(serde_json::to_string(&parsed).expect("key serializes"), json);
+            assert_eq!(
+                serde_json::to_string(&parsed).expect("key serializes"),
+                json
+            );
         }
     }
 
@@ -221,12 +224,18 @@ mod tests {
         let request = ChordRequest {
             keys: vec![ApiKeyboardKey(KeyboardKey::Enter); MAX_CHORD_KEYS],
         };
-        assert_eq!(request.into_domain().expect("maximum chord accepted").len(), MAX_CHORD_KEYS);
+        assert_eq!(
+            request.into_domain().expect("maximum chord accepted").len(),
+            MAX_CHORD_KEYS
+        );
 
         let request = ChordRequest {
             keys: vec![ApiKeyboardKey(KeyboardKey::Enter); MAX_CHORD_KEYS + 1],
         };
-        assert!(matches!(request.into_domain(), Err(DesktopError::ChordTooLong { .. })));
+        assert!(matches!(
+            request.into_domain(),
+            Err(DesktopError::ChordTooLong { .. })
+        ));
     }
 
     #[test]
@@ -246,9 +255,18 @@ mod tests {
             ));
         }
 
-        assert!(TextRequest { text: "a".repeat(MAX_TEXT_BYTES) }.validate().is_ok());
+        assert!(
+            TextRequest {
+                text: "a".repeat(MAX_TEXT_BYTES)
+            }
+            .validate()
+            .is_ok()
+        );
         assert!(matches!(
-            TextRequest { text: "a".repeat(MAX_TEXT_BYTES + 1) }.validate(),
+            TextRequest {
+                text: "a".repeat(MAX_TEXT_BYTES + 1)
+            }
+            .validate(),
             Err(DesktopError::TextTooLarge { .. })
         ));
     }
@@ -270,13 +288,25 @@ mod tests {
 
     #[test]
     fn clipboard_boundary_and_embedded_nul_policy_are_explicit() {
-        assert!(ClipboardRequest { text: "x".repeat(MAX_CLIPBOARD_BYTES) }.validate().is_ok());
+        assert!(
+            ClipboardRequest {
+                text: "x".repeat(MAX_CLIPBOARD_BYTES)
+            }
+            .validate()
+            .is_ok()
+        );
         assert!(matches!(
-            ClipboardRequest { text: "x".repeat(MAX_CLIPBOARD_BYTES + 1) }.validate(),
+            ClipboardRequest {
+                text: "x".repeat(MAX_CLIPBOARD_BYTES + 1)
+            }
+            .validate(),
             Err(DesktopError::ClipboardTooLarge { .. })
         ));
         assert_eq!(
-            ClipboardRequest { text: "a\0b".to_owned() }.validate(),
+            ClipboardRequest {
+                text: "a\0b".to_owned()
+            }
+            .validate(),
             Err(DesktopError::ClipboardContainsNul)
         );
     }
