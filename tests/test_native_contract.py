@@ -30,7 +30,10 @@ class NativeContractTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("pkg-config"), 2)
         self.assertIn("tests/native/run.sh", text)
         self.assertIn("test -x tests/native/run.sh", text)
-        self.assertIn("cargo clippy --locked --workspace --all-targets --all-features -- -D warnings", text)
+        self.assertIn(
+            "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+            text,
+        )
 
     def test_native_boundary_is_opaque_and_has_one_destroy_function(self):
         header = SHIM_HEADER.read_text(encoding="utf-8")
@@ -60,6 +63,17 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("while connected", text)
         self.assertIn("docker exec -i", text)
         self.assertIn("native-clipboard-proof", text)
+
+    def test_native_failure_probes_are_bounded_and_fail_cleanly(self):
+        text = NATIVE_SMOKE.read_text(encoding="utf-8")
+        self.assertIn("run_expected_connection_failure", text)
+        self.assertIn("timeout --kill-after=2s 10s", text)
+        self.assertIn('[[ "$status" -eq 1 ]]', text)
+        self.assertIn("wrong-password", text)
+        self.assertIn("unreachable-port", text)
+        self.assertIn("native spike failed:", text)
+        self.assertIn("unexpectedly reached an authenticated proof state", text)
+        self.assertIn("exposed its VNC password in output", text)
 
     def test_desktop_here_doc_assertions_are_not_discarded(self):
         text = DESKTOP_SMOKE.read_text(encoding="utf-8")
