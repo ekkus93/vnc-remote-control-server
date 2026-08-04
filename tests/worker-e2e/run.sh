@@ -6,6 +6,7 @@ readonly container_name="vnc-remote-control-worker-e2e-${GITHUB_RUN_ID:-local}-$
 readonly password='worker-e2e-vnc-password'
 readonly failure_artifact_directory="${WORKER_E2E_FAILURE_ARTIFACT_DIR:-}"
 readonly force_failure_after_input="${WORKER_E2E_FORCE_FAILURE_AFTER_INPUT:-0}"
+readonly redaction_self_test="${WORKER_E2E_REDACTION_SELF_TEST:-0}"
 temporary_directory=""
 worker_log=""
 
@@ -77,6 +78,14 @@ manifest = {
 }
 path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+
+    if [[ "$redaction_self_test" == "1" ]]; then
+        printf '%s\n' "$password" > "$failure_artifact_directory/redaction-self-test.log"
+    fi
+    [[ "$redaction_self_test" == "0" || "$redaction_self_test" == "1" ]] || {
+        printf 'invalid WORKER_E2E_REDACTION_SELF_TEST value\n' \
+            > "$failure_artifact_directory/redaction-self-test-error.log"
+    }
 
     for artifact in "$failure_artifact_directory"/*; do
         sanitize_file "$artifact"
