@@ -41,6 +41,8 @@ version = "0.1.0"
 dependencies = [
  "libvnc-adapter",
  "remote-desktop-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
