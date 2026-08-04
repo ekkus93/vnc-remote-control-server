@@ -3,7 +3,7 @@ use remote_desktop_core::{Coordinate, DisplayInfo, KeyboardKey, checked_rgba_len
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 const EXPECTED_WIDTH: u32 = 1_280;
@@ -25,6 +25,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     let host = env::var("VRC_VNC_HOST")?;
     let port = env::var("VRC_VNC_PORT")?.parse::<u16>()?;
     let password_path = env::var("VRC_VNC_PASSWORD_FILE")?;
+    let proof_hold_seconds = env::var("VRC_PROOF_HOLD_SECONDS")
+        .ok()
+        .map(|value| value.parse::<u64>())
+        .transpose()?
+        .unwrap_or(0);
     let mut password = fs::read_to_string(password_path)?;
     while matches!(password.as_bytes().last(), Some(b'\n' | b'\r')) {
         password.pop();
@@ -81,7 +86,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
 
             println!(
-                "libvncclient_version={} protocol_major={} dimensions={}x{} revision={} bytes={}",
+                "proof_ready=1 libvncclient_version={} protocol_major={} dimensions={}x{} revision={} bytes={}",
                 NativeClient::library_version(),
                 client.protocol_major(),
                 framebuffer.width,
@@ -89,6 +94,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                 framebuffer.revision,
                 framebuffer.bytes.len()
             );
+            io::stdout().flush()?;
+
+            let hold_deadline = Instant::now() + Duration::from_secs(proof_hold_seconds);
+            while Instant::now() < hold_deadline {
+                client.poll(POLL_INTERVAL)?;
+            }
             return Ok(());
         }
 
