@@ -5,6 +5,7 @@ readonly image_name="vnc-remote-control-desktop:native-test"
 readonly container_name="vnc-remote-control-worker-e2e-${GITHUB_RUN_ID:-local}-$$"
 readonly password='worker-e2e-vnc-password'
 readonly failure_artifact_directory="${WORKER_E2E_FAILURE_ARTIFACT_DIR:-}"
+readonly force_failure_after_input="${WORKER_E2E_FORCE_FAILURE_AFTER_INPUT:-0}"
 temporary_directory=""
 worker_log=""
 
@@ -183,63 +184,71 @@ def contains_ordered(events, expected):
     for event in events:
         if index >= len(expected):
             break
-        event_type, key = expected[index]
-        if event.get('type') == event_type and event.get('key') == key:
+        if all(event.get(key) == value for key, value in expected[index].items()):
             index += 1
     return index == len(expected)
 
+
+def count_events(events, **expected):
+    return sum(
+        1
+        for event in events
+        if all(event.get(key) == value for key, value in expected.items())
+    )
+
+
+mouse_sequence = [
+    {'type': 'button_down', 'button': 'left', 'x': 320, 'y': 240},
+    {'type': 'button_up', 'button': 'left', 'x': 320, 'y': 240},
+    {'type': 'button_down', 'button': 'left', 'x': 320, 'y': 240},
+    {'type': 'button_up', 'button': 'left', 'x': 320, 'y': 240},
+    {'type': 'button_down', 'button': 'middle', 'x': 340, 'y': 260},
+    {'type': 'button_up', 'button': 'middle', 'x': 340, 'y': 260},
+    {'type': 'button_down', 'button': 'right', 'x': 360, 'y': 280},
+    {'type': 'button_up', 'button': 'right', 'x': 360, 'y': 280},
+    {'type': 'button_down', 'button': 'left', 'x': 380, 'y': 300},
+    {'type': 'button_up', 'button': 'left', 'x': 380, 'y': 300},
+    {'type': 'button_down', 'button': 'left', 'x': 380, 'y': 300},
+    {'type': 'button_up', 'button': 'left', 'x': 380, 'y': 300},
+]
+
+key_sequence = [
+    {'type': 'key_down', 'key': 'F5'},
+    {'type': 'key_up', 'key': 'F5'},
+    {'type': 'key_down', 'key': 'Control_L'},
+    {'type': 'key_down', 'key': 'Shift_L'},
+    {'type': 'key_down', 'key': 'F6'},
+    {'type': 'key_up', 'key': 'F6'},
+    {'type': 'key_up', 'key': 'Shift_L'},
+    {'type': 'key_up', 'key': 'Control_L'},
+]
 
 while time.monotonic() < deadline:
     state = json.loads(state_path.read_text(encoding='utf-8'))
     events = state['events']
 
-    click_down = any(
-        event.get('type') == 'button_down'
-        and event.get('button') == 'left'
-        and event.get('x') == 320
-        and event.get('y') == 240
-        for event in events
-    )
-    click_up = any(
-        event.get('type') == 'button_up'
-        and event.get('button') == 'left'
-        and event.get('x') == 320
-        and event.get('y') == 240
-        for event in events
-    )
-    vertical_steps = sum(
-        1
-        for event in events
-        if event.get('type') == 'scroll'
-        and event.get('delta_x') == 0
-        and event.get('delta_y') == 1
-    )
-    standalone_key = contains_ordered(
+    positive_vertical_steps = count_events(
         events,
-        [('key_down', 'F5'), ('key_up', 'F5')],
+        type='scroll',
+        delta_x=0,
+        delta_y=1,
     )
-    chord = contains_ordered(
+    negative_vertical_steps = count_events(
         events,
-        [
-            ('key_down', 'Control_L'),
-            ('key_down', 'Shift_L'),
-            ('key_down', 'F6'),
-            ('key_up', 'F6'),
-            ('key_up', 'Shift_L'),
-            ('key_up', 'Control_L'),
-        ],
+        type='scroll',
+        delta_x=0,
+        delta_y=-1,
     )
 
     if (
         state['pointer'] == {'x': 320, 'y': 240}
         and state['buttons'] == {'left': False, 'middle': False, 'right': False}
-        and state['scroll'] == {'x': 0, 'y': 2}
+        and state['scroll'] == {'x': 0, 'y': 1}
         and state['keys_down'] == []
-        and click_down
-        and click_up
-        and vertical_steps == 2
-        and standalone_key
-        and chord
+        and contains_ordered(events, mouse_sequence)
+        and contains_ordered(events, key_sequence)
+        and positive_vertical_steps == 2
+        and negative_vertical_steps == 1
     ):
         break
     time.sleep(0.1)
@@ -253,6 +262,11 @@ PY
 if docker logs "$container_name" 2>&1 | grep -Fq "$password"; then
     fail "runtime password appeared in desktop logs"
 fi
+
+if [[ "$force_failure_after_input" == "1" ]]; then
+    fail "injected post-verification failure for diagnostics self-test"
+fi
+[[ "$force_failure_after_input" == "0" ]] || fail "WORKER_E2E_FORCE_FAILURE_AFTER_INPUT must be 0 or 1"
 
 cat "$worker_log"
 log "WorkerHandle TigerVNC input E2E test passed"
