@@ -27,7 +27,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         password.pop();
     }
     if password.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "VNC password file is empty").into());
+        return Err(
+            io::Error::new(io::ErrorKind::InvalidInput, "VNC password file is empty").into(),
+        );
     }
 
     let config = NativeClientConfig {
