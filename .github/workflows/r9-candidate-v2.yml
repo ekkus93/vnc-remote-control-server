@@ -11,14 +11,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 jobs:
   candidate:
     name: Generate and validate R9 worker candidate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Check out repository
@@ -70,33 +70,82 @@ jobs:
       - name: Run Python contract tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
 
-      - name: Stage validated candidate files
+      - name: Create exact cleanup candidate commit
+        id: commit
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p \
-            candidate/crates/controller-api/src \
-            candidate/crates/remote-desktop-core/src
-          cp crates/controller-api/src/input.rs candidate/crates/controller-api/src/input.rs
-          cp crates/controller-api/src/worker.rs candidate/crates/controller-api/src/worker.rs
-          cp crates/remote-desktop-core/src/lib.rs candidate/crates/remote-desktop-core/src/lib.rs
+          rm -f -- \
+            .github/workflows/r9-candidate.yml \
+            .github/workflows/r9-candidate-v2.yml \
+            tools/r9_worker_patch.py \
+            tools/r9_worker_patch_runner.py
 
-      - name: Upload validated R9 candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: r9-worker-candidate-${{ github.run_id }}
-          path: candidate
-          if-no-files-found: error
-          retention-days: 7
+          git add -A -- \
+            .github/workflows/r9-candidate.yml \
+            .github/workflows/r9-candidate-v2.yml \
+            crates/controller-api/src/input.rs \
+            crates/controller-api/src/worker.rs \
+            crates/remote-desktop-core/src/lib.rs \
+            tools/r9_worker_patch.py \
+            tools/r9_worker_patch_runner.py
 
-      - name: Publish successful candidate locator
-        if: ${{ success() }}
+          expected="$(mktemp)"
+          actual="$(mktemp)"
+          cat >"$expected" <<'EOF'
+          .github/workflows/r9-candidate-v2.yml
+          .github/workflows/r9-candidate.yml
+          crates/controller-api/src/input.rs
+          crates/controller-api/src/worker.rs
+          crates/remote-desktop-core/src/lib.rs
+          tools/r9_worker_patch.py
+          tools/r9_worker_patch_runner.py
+          EOF
+          git diff --cached --name-only | LC_ALL=C sort >"$actual"
+          LC_ALL=C sort -o "$expected" "$expected"
+          diff -u "$expected" "$actual"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Implement R9 worker text and clipboard state"
+
+          candidate_sha="$(git rev-parse HEAD)"
+          tag="r9-worker-candidate-${GITHUB_RUN_ID}"
+          git tag "$tag" "$candidate_sha"
+          git push origin "refs/tags/$tag"
+
+          printf 'candidate_sha=%s\n' "$candidate_sha" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish candidate commit locator
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.commit.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          gh issue comment 1 --body "<!-- r9-worker-candidate --> R9 worker candidate succeeded. Run: ${{ github.run_id }}. SHA: ${{ github.sha }}. Artifact: r9-worker-candidate-${{ github.run_id }}."
+          gh issue comment 1 --body "<!-- r9-worker-commit --> R9 worker commit ready. Run: ${{ github.run_id }}. Candidate: ${CANDIDATE_SHA}. Ref: refs/tags/${CANDIDATE_TAG}."
+
+      - name: Wait for master and remove temporary tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.commit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+              master_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/master --jq '.object.sha')"
+              if [[ "$master_sha" == "$CANDIDATE_SHA" ]]; then
+                  git push origin ":refs/tags/$CANDIDATE_TAG"
+                  gh issue comment 1 --body "<!-- r9-worker-cleanup --> R9 worker candidate ${CANDIDATE_SHA} reached master; temporary tag ${CANDIDATE_TAG} was removed."
+                  exit 0
+              fi
+              sleep 10
+          done
+          printf 'master did not advance to validated candidate %s before cleanup deadline\n' "$CANDIDATE_SHA" >&2
+          exit 1
 
       - name: Publish failed candidate locator
         if: ${{ failure() }}
@@ -105,4 +154,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh issue comment 1 --body "<!-- r9-worker-candidate --> R9 worker candidate failed. Run: ${{ github.run_id }}. SHA: ${{ github.sha }}."
+          gh issue comment 1 --body "<!-- r9-worker-candidate --> R9 worker atomic candidate failed. Run: ${{ github.run_id }}. SHA: ${{ github.sha }}."
