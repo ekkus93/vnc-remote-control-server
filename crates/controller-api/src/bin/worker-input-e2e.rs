@@ -111,16 +111,11 @@ fn execute(client: &WorkerClient, command: WorkerCommand) -> Result<(), Box<dyn 
     Ok(())
 }
 
-fn wait_for_complete_frame(
-    client: &WorkerClient,
-    timeout: Duration,
-) -> Result<(), Box<dyn Error>> {
+fn wait_for_complete_frame(client: &WorkerClient, timeout: Duration) -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         let snapshot = client.snapshot();
-        if snapshot.state == ConnectionState::Connected
-            && client.framebuffer_snapshot().is_ok()
-        {
+        if snapshot.state == ConnectionState::Connected && client.framebuffer_snapshot().is_ok() {
             return Ok(());
         }
         if matches!(
