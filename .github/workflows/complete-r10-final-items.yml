@@ -36,57 +36,67 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
 
-      - name: Apply, validate, and commit R10 directly to master
+      - name: Apply R10 implementation
         shell: bash
-        env:
-          FAILURE_REPORT: docs/R10_EXECUTOR_FAILURE.txt
         run: |
-          set -uo pipefail
-          log_file="$(mktemp)"
-          set +e
-          {
-            echo 'stage=apply'
-            python3 .github/complete_r10.py
-            echo 'stage=format'
-            cargo fmt --all
-            echo 'stage=tests-unlocked'
-            cargo test --workspace --all-features
-            echo 'stage=clippy'
-            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-            echo 'stage=tests-locked'
-            cargo test --locked --workspace --all-features
-            echo 'stage=rustdoc'
-            RUSTDOCFLAGS=-Dwarnings cargo doc --locked --workspace --all-features --no-deps
-            echo 'stage=shell-syntax'
-            bash -n tests/http-e2e/run.sh
-            echo 'stage=real-e2e'
-            bash tests/http-e2e/run.sh
-          } >"$log_file" 2>&1
-          status=$?
-          set -e
+          set -euo pipefail
+          python3 .github/complete_r10.py
 
-          git config user.name "ekkus93"
-          git config user.email "1386709+ekkus93@users.noreply.github.com"
+      - name: Format Rust sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
 
-          if (( status != 0 )); then
-            git reset --hard HEAD
-            {
-              printf 'R10 direct-master executor failed with status %s.\n\n' "$status"
-              tail -n 500 "$log_file"
-            } | sed \
-              -e 's/http-e2e-api-token/[REDACTED]/g' \
-              -e 's/http-e2e-vnc-password/[REDACTED]/g' \
-              > "$FAILURE_REPORT"
-            git add "$FAILURE_REPORT"
-            git diff --cached --check
-            git commit -m "Record sanitized R10 executor failure"
-            git push origin HEAD:master
-            exit "$status"
-          fi
+      - name: Run workspace tests before lock enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --workspace --all-features
 
-          rm -f "$FAILURE_REPORT"
+      - name: Run Clippy with warnings denied
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run locked workspace tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --workspace --all-features
+
+      - name: Build rustdoc with warnings denied
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUSTDOCFLAGS=-Dwarnings cargo doc --locked --workspace --all-features --no-deps
+
+      - name: Check HTTP E2E shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n tests/http-e2e/run.sh
+
+      - name: Run real authenticated HTTP and WebSocket TigerVNC E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/http-e2e/run.sh
+
+      - name: Commit validated R10 completion directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f docs/R10_EXECUTOR_FAILURE.txt
           rm -f .github/workflows/complete-r10-final-items.yml .github/complete_r10.py
           git add -A
           git diff --cached --check
+          git diff --cached --quiet && {
+            echo "R10 executor produced no changes" >&2
+            exit 1
+          }
+          git config user.name "ekkus93"
+          git config user.email "1386709+ekkus93@users.noreply.github.com"
           git commit -m "Complete R10 WebSocket authentication and log redaction"
           git push origin HEAD:master
