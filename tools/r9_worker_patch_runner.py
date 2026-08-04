@@ -9,6 +9,7 @@ _ORIGINAL = candidate.replace_once
 
 
 def replace_once(path: Path, old: str, new: str) -> None:
+    """Allow only the known duplicated mock-framebuffer insertion target."""
     text = path.read_text(encoding="utf-8")
     count = text.count(old)
     duplicated_mock_framebuffer = (
