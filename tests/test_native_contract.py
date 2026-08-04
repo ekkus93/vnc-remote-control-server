@@ -29,6 +29,7 @@ class NativeContractTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("libvncserver-dev"), 2)
         self.assertGreaterEqual(text.count("pkg-config"), 2)
         self.assertIn("tests/native/run.sh", text)
+        self.assertIn("test -x tests/native/run.sh", text)
         self.assertIn("cargo clippy --locked --workspace --all-targets --all-features -- -D warnings", text)
 
     def test_native_boundary_is_opaque_and_has_one_destroy_function(self):
@@ -40,6 +41,14 @@ class NativeContractTests(unittest.TestCase):
         self.assertEqual(source.count("void vrc_client_destroy(vrc_client *client)"), 1)
         self.assertIn("impl Drop for NativeClient", adapter)
         self.assertNotIn("pub fn raw", adapter)
+
+    def test_native_initialization_keeps_one_cleanup_owner(self):
+        source = SHIM_SOURCE.read_text(encoding="utf-8")
+        self.assertNotIn("rfbInitClient(", source)
+        self.assertIn("ConnectToRFBServer(", source)
+        self.assertIn("InitialiseRFBConnection(", source)
+        self.assertIn("SetFormatAndEncodings(", source)
+        self.assertEqual(source.count("rfbClientCleanup("), 1)
 
     def test_native_smoke_is_bounded_and_uses_file_mounted_password(self):
         text = NATIVE_SMOKE.read_text(encoding="utf-8")
@@ -61,6 +70,8 @@ class NativeContractTests(unittest.TestCase):
             "no callback from C into Rust",
             "project-owned desktop container",
             "version is captured in CI evidence",
+            "does not call `rfbInitClient`",
+            "one cleanup owner",
         ):
             self.assertIn(phrase, text)
 
