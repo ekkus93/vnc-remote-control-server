@@ -2,7 +2,7 @@
 
 ## Scope
 
-This evidence record covers the authenticated mutating HTTP router slice of R10. It does not claim completion of the TCP listener, request-header/body deadlines, graceful process shutdown, or real public HTTP-to-TigerVNC end-to-end testing.
+This evidence record covers the authenticated HTTP router and the completed R10 runtime slice: the configured TCP listener, bounded header and body reads, signal-driven graceful shutdown, shutdown-time command rejection, and the real authenticated HTTP-to-worker-to-LibVNCClient-to-TigerVNC path.
 
 ## Implementation commit
 
@@ -123,18 +123,9 @@ The ordinary `master` workflow passed formatting, warning-denied Clippy, all Rus
 
 This evidence update is documentation-only and triggers one final ordinary CI run so the repository can close the slice on a SHA containing the completed evidence record.
 
-## Remaining R10 work
+## Runtime completion implementation
 
-- bind and serve the router on the configured TCP listener;
-- implement bounded request-header and request-body deadlines;
-- implement signal-driven graceful shutdown and stop accepting control requests;
-- run authenticated public HTTP-to-worker-to-LibVNCClient-to-TigerVNC end-to-end tests;
-- add slow-request tests;
-- reconcile the authoritative R10 checklist after the remaining HTTP runtime slice is complete.
-
-## Runtime completion candidate
-
-Branch `codex/r10-runtime` closes the remaining R10 runtime slice by adding:
+The runtime completion branch adds:
 
 - a real TCP listener bound to `ControllerConfig::listen_address`;
 - bounded HTTP/1 header reads (`VRC_HTTP_HEADER_TIMEOUT_MS`);
@@ -144,4 +135,35 @@ Branch `codex/r10-runtime` closes the remaining R10 runtime slice by adding:
 - slow-header, slow-body, and oversized-body runtime tests;
 - a real authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC E2E test.
 
-Exact branch CI run, job IDs, and validated commit SHA remain pending until the ordinary pull-request workflow completes.
+## Pull-request validation
+
+```text
+Pull request: #6
+Validated head SHA: f0c7d8ee4a95a1cb154b83c87c3cbe8d84b9d494
+CI run: 30945615936
+Repository quality job: 92114729003
+Desktop/native/E2E job: 92114729086
+Result: success
+```
+
+The exact validated head passed:
+
+- formatting;
+- workspace Clippy for all targets and features with warnings denied;
+- all Rust workspace tests, including the slow-header and slow-body runtime tests;
+- warning-denied rustdoc;
+- Python and shell contract gates;
+- secured desktop image smoke;
+- live native-adapter smoke;
+- WorkerHandle input E2E;
+- WorkerHandle failure-diagnostic redaction self-test;
+- WorkerHandle text/clipboard E2E;
+- authenticated HTTP -> worker -> LibVNCClient -> TigerVNC pointer mutation E2E;
+- SIGTERM-driven bounded controller shutdown with secret-log checks.
+
+## R10 boundary after this slice
+
+The requested R10 runtime work is complete. Two checklist entries remain intentionally open because they belong to the later WebSocket/observability slice rather than this HTTP runtime slice:
+
+- authenticate WebSocket upgrades;
+- ensure future access logs redact the authorization header.

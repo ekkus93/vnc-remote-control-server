@@ -667,7 +667,11 @@ Auth tests: router unit tests plus real missing-token/correct-token HTTP E2E
 Error tests: stable JSON envelope and domain mapping unit tests
 Limit tests: body size, header deadline, body deadline, acknowledgement deadline, shutdown rejection
 Runtime E2E: authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC deterministic pointer observation
-CI run: pending branch validation
+Validated head SHA: f0c7d8ee4a95a1cb154b83c87c3cbe8d84b9d494
+Pull request: #6
+CI run: 30945615936
+Quality job: 92114729003 (success)
+Desktop/native/HTTP E2E job: 92114729086 (success)
 ```
 
 ---
