@@ -10,12 +10,9 @@
 //! configured byte limit but rejects embedded NUL bytes before enqueue.
 
 use remote_desktop_core::{
-    DesktopError, FramebufferRect, FramebufferSnapshot, KeyAction, KeyboardKey, MAX_CLIPBOARD_BYTES,
-    MAX_TEXT_BYTES, validate_chord, validate_clipboard, validate_text,
+    DesktopError, KeyAction, KeyboardKey, validate_chord, validate_clipboard, validate_text,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
-use std::sync::Arc;
-use std::time::SystemTime;
 
 /// One stable public keyboard key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -152,7 +149,12 @@ impl ClipboardRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remote_desktop_core::{DisplayInfo, MAX_CHORD_KEYS};
+    use remote_desktop_core::{
+        DisplayInfo, FramebufferRect, FramebufferSnapshot, MAX_CHORD_KEYS, MAX_CLIPBOARD_BYTES,
+        MAX_TEXT_BYTES,
+    };
+    use std::sync::Arc;
+    use std::time::SystemTime;
 
     const SYMBOLIC_KEYS: [(&str, KeyboardKey); 29] = [
         ("CTRL_LEFT", KeyboardKey::CtrlLeft),
@@ -232,7 +234,7 @@ mod tests {
         let supported = TextRequest {
             text: "\t\r\n !Az~".to_owned(),
         };
-        assert_eq!(supported.validate().expect("supported text"), 9);
+        assert_eq!(supported.validate().expect("supported text"), 8);
 
         for unsupported in ["\u{001f}", "\u{007f}", "é", "☃"] {
             let request = TextRequest {
