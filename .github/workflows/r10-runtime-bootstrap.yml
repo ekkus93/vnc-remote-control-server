@@ -38,8 +38,12 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
 
-      - name: Apply runtime patch
-        run: python3 tools/r10_runtime_patch.py
+      - name: Apply runtime patch and compile repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/r10_runtime_patch.py
+          python3 tools/r10_runtime_repair.py
 
       - name: Format generated Rust
         run: cargo fmt --all
