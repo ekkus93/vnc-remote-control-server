@@ -36,6 +36,38 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
 
+      - name: Correct patch target indentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_FIX_R10'
+          from pathlib import Path
+
+          path = Path('.github/complete_r10.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    dedent(
+                  """\\
+                          .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
+                          .layer(middleware::from_fn_with_state(
+                  """
+              ),
+              dedent(
+                  """\\
+                          .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
+                          .layer(middleware::from_fn(access_log))
+                          .layer(middleware::from_fn_with_state(
+                  """
+              ),'''
+          new = '''    "        .layer(DefaultBodyLimit::max(state.maximum_json_bytes))\\n"
+              "        .layer(middleware::from_fn_with_state(\\n",
+              "        .layer(DefaultBodyLimit::max(state.maximum_json_bytes))\\n"
+              "        .layer(middleware::from_fn(access_log))\\n"
+              "        .layer(middleware::from_fn_with_state(\\n",'''
+          if text.count(old) != 1:
+              raise SystemExit(f'indentation target: expected one match, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY_FIX_R10
+
       - name: Apply remaining R10 implementation
         run: python3 .github/complete_r10.py
 
