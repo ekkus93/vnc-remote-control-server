@@ -48,6 +48,18 @@ jobs:
           python3 -m py_compile /tmp/r11_apply.py
           python3 /tmp/r11_apply.py
           sed -i '/use tracing_subscriber::util::SubscriberInitExt;/d' crates/controller-api/src/observability.rs
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/controller-api/src/runtime.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '    let connection = builder.serve_connection(io, service);\n'
+          new = '    let connection = builder.serve_connection(io, service).with_upgrades();\n'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'upgrade runtime patch expected one match, found {count}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
 
       - name: Format Rust sources
         run: cargo fmt --all
