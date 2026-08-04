@@ -9,7 +9,6 @@ description = "Narrow LibVNCClient adapter for the VNC remote control server"
 
 [dependencies]
 remote-desktop-core = { path = "../remote-desktop-core" }
-thiserror.workspace = true
 
 [lints]
 workspace = true
