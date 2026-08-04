@@ -9,6 +9,9 @@ description = "Authenticated HTTP and WebSocket controller for one VNC desktop"
 
 [dependencies]
 axum.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 libvnc-adapter = { path = "../libvnc-adapter" }
 png.workspace = true
 remote-desktop-core = { path = "../remote-desktop-core" }
@@ -16,9 +19,9 @@ serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
 tokio.workspace = true
+tower.workspace = true
 
 [dev-dependencies]
-tower.workspace = true
 tempfile = "3.27.0"
 
 [lints]

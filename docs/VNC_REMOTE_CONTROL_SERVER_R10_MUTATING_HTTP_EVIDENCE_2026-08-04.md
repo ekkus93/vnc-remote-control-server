@@ -1,21 +1,16 @@
-# R10 Authenticated Mutating HTTP Route Evidence — 2026-08-04
+# R10 Authenticated HTTP and Runtime Evidence — 2026-08-04
 
 ## Scope
 
-This evidence record covers the authenticated mutating HTTP router slice of R10. It does not claim completion of the TCP listener, request-header/body deadlines, graceful process shutdown, or real public HTTP-to-TigerVNC end-to-end testing.
+This evidence record covers the authenticated HTTP router and the completed R10 runtime slice: the configured TCP listener, bounded header and body reads, signal-driven graceful shutdown, shutdown-time command rejection, and the real authenticated HTTP-to-worker-to-LibVNCClient-to-TigerVNC path.
 
-## Implementation commit
+## Router implementation commit
 
 ```text
 de92b71e9160e5f6319ea08029f7919f3660c2e9
 ```
 
-The implementation commit was produced by a fail-closed isolated workflow and then fast-forwarded onto `master`. Its product diff changes only:
-
-- `crates/controller-api/src/api_contract.rs`
-- `crates/controller-api/src/http.rs`
-
-The temporary generator and candidate workflow were deleted in the same commit. The temporary candidate tag was deleted after `master` reached the validated commit.
+The router implementation commit introduced the authenticated mutating route surface and its fail-closed validation and error behavior.
 
 ## Routes implemented
 
@@ -76,7 +71,7 @@ The router maps domain failures to payload-free stable error codes, including:
 
 Native error strings, bearer tokens, typed text, and clipboard payloads are not included in error envelopes.
 
-## Tests
+## Router tests
 
 The router and API-contract tests cover:
 
@@ -90,7 +85,7 @@ The router and API-contract tests cover:
 - oversized JSON rejection before worker execution;
 - configuration rejection for a zero acknowledgement timeout.
 
-## Isolated validation
+## Router validation
 
 ```text
 Workflow run: 30939727683
@@ -107,7 +102,7 @@ Validated gates:
 - rustdoc for all workspace features with warnings denied;
 - all Python contract tests.
 
-## Authoritative master validation
+## Router evidence validation on master
 
 ```text
 Evidence SHA: 33c8aa36a1da4f29729ac7d91e5bcced472192f9
@@ -119,15 +114,51 @@ Artifact ID: 8904759812
 Result: success
 ```
 
-The ordinary `master` workflow passed formatting, warning-denied Clippy, all Rust tests, warning-denied rustdoc, Python and shell contract gates, desktop image smoke, live native-adapter smoke, WorkerHandle input E2E, failure-diagnostic redaction self-test, and WorkerHandle text/clipboard E2E.
+That ordinary `master` workflow passed formatting, warning-denied Clippy, all Rust tests, warning-denied rustdoc, Python and shell contract gates, desktop image smoke, live native-adapter smoke, WorkerHandle input E2E, failure-diagnostic redaction self-test, and WorkerHandle text/clipboard E2E.
 
-This evidence update is documentation-only and triggers one final ordinary CI run so the repository can close the slice on a SHA containing the completed evidence record.
+## Runtime completion implementation
 
-## Remaining R10 work
+The runtime completion branch adds:
 
-- bind and serve the router on the configured TCP listener;
-- implement bounded request-header and request-body deadlines;
-- implement signal-driven graceful shutdown and stop accepting control requests;
-- run authenticated public HTTP-to-worker-to-LibVNCClient-to-TigerVNC end-to-end tests;
-- add slow-request tests;
-- reconcile the authoritative R10 checklist after the remaining HTTP runtime slice is complete.
+- a real TCP listener bound to `ControllerConfig::listen_address`;
+- bounded HTTP/1 header reads (`VRC_HTTP_HEADER_TIMEOUT_MS`);
+- bounded, length-limited request-body collection (`VRC_HTTP_BODY_TIMEOUT_MS`);
+- SIGINT/SIGTERM-driven shutdown that marks `HttpState` as shutting down before the listener stops accepting sockets;
+- bounded active-connection draining (`VRC_SHUTDOWN_GRACE_MS`) followed by worker shutdown and join;
+- slow-header, slow-body, and oversized-body runtime tests;
+- a real authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC E2E test.
+
+## Runtime pull-request validation
+
+```text
+Pull request: #6
+Validated head SHA: f0c7d8ee4a95a1cb154b83c87c3cbe8d84b9d494
+CI run: 30945615936
+Repository quality job: 92114729003
+Desktop/native/E2E job: 92114729086
+Result: success
+```
+
+The exact validated head passed:
+
+- formatting;
+- workspace Clippy for all targets and features with warnings denied;
+- all Rust workspace tests, including the slow-header and slow-body runtime tests;
+- warning-denied rustdoc;
+- Python and shell contract gates;
+- secured desktop image smoke;
+- live native-adapter smoke;
+- WorkerHandle input E2E;
+- WorkerHandle failure-diagnostic redaction self-test;
+- WorkerHandle text/clipboard E2E;
+- authenticated HTTP -> worker -> LibVNCClient -> TigerVNC pointer mutation E2E;
+- SIGTERM-driven bounded controller shutdown with secret-log checks.
+
+The documentation-only successor containing this reconciled record must also pass ordinary pull-request CI before the branch is considered ready to merge.
+
+## R10 boundary after this slice
+
+The requested R10 runtime work is complete. Two checklist entries remain intentionally open because they belong to the later WebSocket/observability slice rather than this HTTP runtime slice:
+
+- authenticate WebSocket upgrades;
+- ensure future access logs redact the authorization header.

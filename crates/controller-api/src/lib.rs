@@ -6,5 +6,6 @@ pub mod config;
 pub mod framebuffer;
 pub mod http;
 pub mod input;
+pub mod runtime;
 pub mod screenshot;
 pub mod worker;
