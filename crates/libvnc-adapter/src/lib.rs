@@ -311,7 +311,7 @@ impl NativeClient {
         let mut width = 0_u32;
         let mut height = 0_u32;
         let mut revision = 0_u64;
-        let mut complete = 0_c_int;
+        let mut complete: c_int = 0;
         // SAFETY: output pointers are valid and the opaque handle is live.
         let status = unsafe {
             vrc_client_dimensions(
