@@ -54,9 +54,9 @@ No request ID, URL, key name, payload, clipboard text, typed text, pixel data, t
 
 ## Validation
 
-The implementation workflow runs:
+The implementation workflow ran:
 
-- `cargo fmt --all --check`;
+- `cargo fmt --all`;
 - `cargo test --workspace --all-features` to update and validate the lockfile;
 - locked warning-denied Clippy for all targets and features;
 - locked workspace tests;
@@ -65,4 +65,11 @@ The implementation workflow runs:
 - first-party shell syntax checks;
 - the real authenticated HTTP/WebSocket-to-TigerVNC E2E test.
 
-Exact implementation SHA and ordinary `master` CI evidence are appended after validation completes.
+```text
+Implementation SHA: 10bbcbd4a51ffde59f55e80e5466679854c8ec63
+R11 executor run: 30959596499
+R11 executor job: 92160353617
+Executor result: success
+```
+
+The exact current `master` CI result is maintained by the machine-readable status bridge in GitHub issue #1. R11 is accepted only when that issue reports `completed` / `success`, zero abnormal jobs, and the exact current `master` SHA.
