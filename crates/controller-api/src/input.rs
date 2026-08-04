@@ -24,11 +24,7 @@ const WHEEL_DOWN_MASK: u8 = 1 << 4;
 
 /// Narrow native event surface required by the input controller.
 pub(crate) trait InputSink {
-    fn send_pointer(
-        &mut self,
-        coordinate: Coordinate,
-        button_mask: u8,
-    ) -> Result<(), NativeError>;
+    fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError>;
 
     fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError>;
 }
@@ -180,7 +176,11 @@ impl InputController {
         sink.send_key(key, pressed)?;
         if pressed {
             self.pressed_keys.push(key);
-        } else if let Some(index) = self.pressed_keys.iter().position(|candidate| *candidate == key) {
+        } else if let Some(index) = self
+            .pressed_keys
+            .iter()
+            .position(|candidate| *candidate == key)
+        {
             self.pressed_keys.remove(index);
         }
         Ok(())
@@ -517,7 +517,11 @@ mod tests {
             .expect("scroll down");
         assert_eq!(
             sink.events,
-            vec![Event::Pointer(point, 1), Event::Pointer(point, 17), Event::Pointer(point, 1)]
+            vec![
+                Event::Pointer(point, 1),
+                Event::Pointer(point, 17),
+                Event::Pointer(point, 1)
+            ]
         );
         sink.events.clear();
         assert!(
@@ -571,10 +575,7 @@ mod tests {
         controller
             .set_key(&mut sink, KeyboardKey::CtrlLeft, false)
             .expect("control up");
-        assert_eq!(
-            sink.events,
-            vec![Event::Key(KeyboardKey::CtrlLeft, false)]
-        );
+        assert_eq!(sink.events, vec![Event::Key(KeyboardKey::CtrlLeft, false)]);
     }
 
     #[test]
@@ -583,10 +584,7 @@ mod tests {
         let mut sink = RecordingSink::fail_on(2);
         assert!(
             controller
-                .chord(
-                    &mut sink,
-                    &[KeyboardKey::CtrlLeft, KeyboardKey::AltLeft],
-                )
+                .chord(&mut sink, &[KeyboardKey::CtrlLeft, KeyboardKey::AltLeft],)
                 .is_err()
         );
         assert_eq!(
