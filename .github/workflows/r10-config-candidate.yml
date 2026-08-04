@@ -71,6 +71,92 @@ jobs:
           lib.write_text(text.replace(target, target + "pub mod config;\n", 1), encoding="utf-8")
           PY
 
+      - name: Generate direct test dependency lock entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.before-r10-config"
+          cargo check --workspace --all-targets --all-features
+
+      - name: Verify lockfile changed only for controller-api direct tempfile dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import tomllib
+
+          before = tomllib.loads(
+              Path("${{ runner.temp }}/Cargo.lock.before-r10-config").read_text(encoding="utf-8")
+          )
+          after = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
+
+          if before.get("version") != after.get("version"):
+              raise SystemExit("Cargo.lock format version changed")
+          if before.get("metadata") != after.get("metadata"):
+              raise SystemExit("Cargo.lock metadata changed")
+
+          def keyed(document):
+              result = {}
+              for package in document.get("package", []):
+                  key = (
+                      package.get("name"),
+                      package.get("version"),
+                      package.get("source"),
+                  )
+                  if key in result:
+                      raise SystemExit(f"duplicate Cargo.lock package key: {key}")
+                  result[key] = package
+              return result
+
+          before_packages = keyed(before)
+          after_packages = keyed(after)
+          if before_packages.keys() != after_packages.keys():
+              added = sorted(after_packages.keys() - before_packages.keys())
+              removed = sorted(before_packages.keys() - after_packages.keys())
+              raise SystemExit(
+                  f"Cargo.lock package set changed; added={added!r} removed={removed!r}"
+              )
+
+          controller_keys = [
+              key for key in before_packages if key[0] == "controller-api" and key[2] is None
+          ]
+          if len(controller_keys) != 1:
+              raise SystemExit(
+                  f"expected one local controller-api lock package, found {controller_keys!r}"
+              )
+          controller_key = controller_keys[0]
+
+          for key, before_package in before_packages.items():
+              after_package = after_packages[key]
+              if key == controller_key:
+                  before_without_dependencies = {
+                      field: value
+                      for field, value in before_package.items()
+                      if field != "dependencies"
+                  }
+                  after_without_dependencies = {
+                      field: value
+                      for field, value in after_package.items()
+                      if field != "dependencies"
+                  }
+                  if before_without_dependencies != after_without_dependencies:
+                      raise SystemExit("controller-api lock metadata changed unexpectedly")
+
+                  before_dependencies = set(before_package.get("dependencies", []))
+                  after_dependencies = set(after_package.get("dependencies", []))
+                  if "tempfile" in before_dependencies:
+                      raise SystemExit("tempfile was already a direct controller-api dependency")
+                  if after_dependencies != before_dependencies | {"tempfile"}:
+                      raise SystemExit(
+                          "controller-api lock dependencies changed by more than tempfile: "
+                          f"before={sorted(before_dependencies)!r} "
+                          f"after={sorted(after_dependencies)!r}"
+                      )
+              elif before_package != after_package:
+                  raise SystemExit(f"third-party lock package changed unexpectedly: {key}")
+          PY
+
       - name: Format candidate
         run: cargo fmt --all
 
@@ -103,6 +189,7 @@ jobs:
           rm -f -- .github/workflows/r10-config-candidate.yml
           git add -A -- \
             .github/workflows/r10-config-candidate.yml \
+            Cargo.lock \
             crates/controller-api/src/config.rs \
             crates/controller-api/src/lib.rs
 
@@ -110,6 +197,7 @@ jobs:
           actual="$(mktemp)"
           cat >"$expected" <<'EOF'
           .github/workflows/r10-config-candidate.yml
+          Cargo.lock
           crates/controller-api/src/config.rs
           crates/controller-api/src/lib.rs
           EOF
