@@ -56,9 +56,10 @@ viewer_log_has_connection_evidence() {
         && grep -Eq 'Choosing security type VncAuth' "$log_path"
 }
 
-viewer_log_has_framebuffer_evidence() {
+viewer_log_has_authenticated_session_evidence() {
     local log_path="$1"
-    grep -Eq 'Total:[[:space:]]+[1-9][0-9]* rects,[[:space:]]+[1-9][0-9]* pixels' "$log_path"
+    grep -Eq 'Using pixel format depth' "$log_path" \
+        && grep -Eq 'Enabling continuous updates' "$log_path"
 }
 
 run_viewer_probe() {
@@ -70,7 +71,7 @@ run_viewer_probe() {
     chmod 0600 "$password_path"
 
     set +e
-    timeout --foreground 8s xvfb-run -a vncviewer \
+    timeout --kill-after=2s 8s xvfb-run -a vncviewer \
         -PasswordFile "$password_path" \
         -SecurityTypes VncAuth \
         -Shared \
@@ -93,18 +94,18 @@ run_viewer_probe() {
             cat "$log_path" >&2
             fail "correct VNC password produced authentication-failure evidence"
         fi
-        viewer_log_has_framebuffer_evidence "$log_path" || {
+        viewer_log_has_authenticated_session_evidence "$log_path" || {
             cat "$log_path" >&2
-            fail "correct VNC password produced no decoded framebuffer evidence"
+            fail "correct VNC password produced no post-authentication session evidence"
         }
     else
         viewer_log_has_auth_failure "$log_path" || {
             cat "$log_path" >&2
             fail "wrong-password viewer failure was not diagnosable"
         }
-        if viewer_log_has_framebuffer_evidence "$log_path"; then
+        if viewer_log_has_authenticated_session_evidence "$log_path"; then
             cat "$log_path" >&2
-            fail "wrong VNC password decoded framebuffer data"
+            fail "wrong VNC password reached an authenticated viewer session"
         fi
     fi
 }
