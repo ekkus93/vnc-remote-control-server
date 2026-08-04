@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - .github/workflows/r10-config-candidate.yml
+      - crates/controller-api/Cargo.toml
   workflow_dispatch:
 
 permissions:
