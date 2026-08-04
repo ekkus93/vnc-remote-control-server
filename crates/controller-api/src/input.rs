@@ -8,7 +8,7 @@
 use libvnc_adapter::NativeError;
 use remote_desktop_core::{
     Coordinate, DesktopError, DisplayInfo, KeyboardKey, MouseButton, validate_chord,
-    validate_scroll,
+    validate_scroll, validate_text,
 };
 use std::collections::HashSet;
 use std::thread;
@@ -227,6 +227,28 @@ impl InputController {
             }
         }
         first_error.map_or(Ok(()), |error| Err(error.into()))
+    }
+
+    /// Enters one completely preflighted v0.1 text value.
+    pub(crate) fn type_text<S: InputSink>(
+        &mut self,
+        sink: &mut S,
+        text: &str,
+    ) -> Result<usize, DesktopError> {
+        let character_count = validate_text(text)?;
+        for character in text.chars() {
+            let key = match character {
+                '\n' | '\r' => KeyboardKey::Enter,
+                '\t' => KeyboardKey::Tab,
+                value => KeyboardKey::Printable(value),
+            };
+            self.set_key(sink, key, true)?;
+            if let Err(error) = self.set_key(sink, key, false) {
+                let _ = self.set_key(sink, key, false);
+                return Err(error);
+            }
+        }
+        Ok(character_count)
     }
 
     /// Best-effort releases every locally tracked input and clears local state.
@@ -592,6 +614,49 @@ mod tests {
             vec![
                 Event::Key(KeyboardKey::CtrlLeft, true),
                 Event::Key(KeyboardKey::CtrlLeft, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn text_is_fully_preflighted_and_sent_in_order() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+        assert_eq!(
+            controller
+                .type_text(&mut sink, "A\n\t!")
+                .expect("supported text"),
+            4
+        );
+        assert_eq!(
+            sink.events,
+            vec![
+                Event::Key(KeyboardKey::Printable('A'), true),
+                Event::Key(KeyboardKey::Printable('A'), false),
+                Event::Key(KeyboardKey::Enter, true),
+                Event::Key(KeyboardKey::Enter, false),
+                Event::Key(KeyboardKey::Tab, true),
+                Event::Key(KeyboardKey::Tab, false),
+                Event::Key(KeyboardKey::Printable('!'), true),
+                Event::Key(KeyboardKey::Printable('!'), false),
+            ]
+        );
+
+        sink.events.clear();
+        assert!(controller.type_text(&mut sink, "ok☃").is_err());
+        assert!(sink.events.is_empty());
+    }
+
+    #[test]
+    fn text_release_failure_is_retried_and_reported() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on(2);
+        assert!(controller.type_text(&mut sink, "A").is_err());
+        assert_eq!(
+            sink.events,
+            vec![
+                Event::Key(KeyboardKey::Printable('A'), true),
+                Event::Key(KeyboardKey::Printable('A'), false),
             ]
         );
     }

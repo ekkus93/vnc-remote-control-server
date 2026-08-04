@@ -11,12 +11,12 @@ use crate::framebuffer::{
 use crate::input::{InputController, InputSink};
 use crate::screenshot::{ScreenshotError, ScreenshotService};
 use libvnc_adapter::{
-    NativeClient, NativeClientConfig, NativeDisplayInfo, NativeError, NativeFramebuffer,
-    PollOutcome,
+    NativeClient, NativeClientConfig, NativeClipboard, NativeDisplayInfo, NativeError,
+    NativeFramebuffer, PollOutcome,
 };
 use remote_desktop_core::{
-    ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo, KeyboardKey,
-    MAX_FRAMEBUFFER_BYTES, WorkerCommand,
+    ClipboardSnapshot, ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo,
+    KeyboardKey, MAX_FRAMEBUFFER_BYTES, WorkerCommand, validate_clipboard,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{
@@ -192,6 +192,7 @@ pub struct WorkerClient {
     commands: SyncSender<CommandEnvelope>,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
     framebuffer: FramebufferStore,
+    clipboard: Arc<Mutex<Option<ClipboardSnapshot>>>,
     next_command_id: Arc<AtomicU64>,
 }
 
@@ -236,6 +237,13 @@ impl WorkerClient {
     /// Returns one immutable complete current framebuffer snapshot.
     pub fn framebuffer_snapshot(&self) -> Result<FramebufferSnapshot, FramebufferError> {
         self.framebuffer.current_snapshot()
+    }
+
+    /// Returns the last valid inbound clipboard snapshot.
+    pub fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {
+        lock_unpoisoned(&self.clipboard)
+            .clone()
+            .ok_or(DesktopError::ClipboardUnavailable)
     }
 
     /// Creates a bounded screenshot service over the worker-owned framebuffer.
@@ -306,6 +314,8 @@ impl DesktopWorker {
         let startup_timeout = settings.startup_timeout;
         let framebuffer = FramebufferStore::new(settings.maximum_framebuffer_bytes)?;
         let thread_framebuffer = framebuffer.clone();
+        let clipboard = Arc::new(Mutex::new(None));
+        let thread_clipboard = Arc::clone(&clipboard);
         let (command_tx, command_rx) = sync_channel(settings.command_capacity);
         let (event_tx, event_rx) = sync_channel(settings.event_capacity);
         let (startup_tx, startup_rx) = sync_channel(1);
@@ -328,11 +338,14 @@ impl DesktopWorker {
                 run_worker(
                     settings,
                     factory,
-                    command_rx,
-                    event_tx,
-                    startup_tx,
+                    WorkerChannels {
+                        commands: command_rx,
+                        events: event_tx,
+                        startup: startup_tx,
+                    },
                     thread_snapshot,
                     thread_framebuffer,
+                    thread_clipboard,
                 );
             })
             .map_err(|error| {
@@ -345,6 +358,7 @@ impl DesktopWorker {
                     commands: command_tx,
                     snapshot,
                     framebuffer,
+                    clipboard,
                     next_command_id: Arc::new(AtomicU64::new(1)),
                 },
                 events: WorkerEvents { receiver: event_rx },
@@ -402,6 +416,7 @@ trait WorkerSession {
     fn request_full_refresh(&mut self) -> Result<(), NativeError>;
     fn display_info(&self) -> Result<NativeDisplayInfo, NativeError>;
     fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError>;
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError>;
     fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError>;
     fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError>;
     fn send_clipboard(&mut self, text: &str) -> Result<(), NativeError>;
@@ -422,6 +437,10 @@ impl WorkerSession for NativeClient {
 
     fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
         NativeClient::framebuffer(self)
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        NativeClient::clipboard(self)
     }
 
     fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError> {
@@ -452,9 +471,13 @@ struct LoopState<'a, S> {
     snapshot: &'a Arc<Mutex<WorkerSnapshot>>,
     events: &'a SyncSender<WorkerEvent>,
     framebuffer: FramebufferStore,
+    clipboard: &'a Arc<Mutex<Option<ClipboardSnapshot>>>,
     event_sequence: u64,
     session: Option<S>,
     last_native_revision: Option<u64>,
+    last_native_clipboard_revision: Option<u64>,
+    clipboard_revision: u64,
+    clipboard_decode_failed: bool,
     input: InputController,
     next_connect: Option<Instant>,
     reconnect_attempt: u32,
@@ -542,6 +565,8 @@ impl<S: WorkerSession> LoopState<'_, S> {
             current.last_failure = None;
             self.connected_since = Some(Instant::now());
         }
+        self.refresh_clipboard()?;
+
         if self.connected_since.is_some_and(|since| {
             Instant::now().saturating_duration_since(since) >= self.settings.stable_connection_reset
         }) {
@@ -549,6 +574,48 @@ impl<S: WorkerSession> LoopState<'_, S> {
             lock_unpoisoned(self.snapshot).reconnect_attempts = 0;
         }
         Ok(())
+    }
+
+    fn refresh_clipboard(&mut self) -> Result<(), DesktopError> {
+        let clipboard = self
+            .session
+            .as_ref()
+            .ok_or(DesktopError::WorkerUnavailable)?
+            .clipboard();
+        match clipboard {
+            Ok(native) if self.last_native_clipboard_revision == Some(native.revision) => Ok(()),
+            Ok(native) => {
+                self.last_native_clipboard_revision = Some(native.revision);
+                self.clipboard_decode_failed = false;
+                if validate_clipboard(&native.text).is_err() {
+                    self.record_failure(WorkerFailureKind::Protocol);
+                    self.publish(DesktopEventKind::ProtocolError);
+                    return Ok(());
+                }
+                let revision = self
+                    .clipboard_revision
+                    .checked_add(1)
+                    .ok_or(DesktopError::Protocol)?;
+                self.clipboard_revision = revision;
+                *lock_unpoisoned(self.clipboard) = Some(ClipboardSnapshot {
+                    text: Arc::from(native.text),
+                    revision,
+                    updated_at: SystemTime::now(),
+                });
+                self.publish(DesktopEventKind::ClipboardRevision { revision });
+                Ok(())
+            }
+            Err(NativeError::ClipboardUnavailable) => Ok(()),
+            Err(NativeError::ClipboardNotUtf8) => {
+                if !self.clipboard_decode_failed {
+                    self.clipboard_decode_failed = true;
+                    self.record_failure(WorkerFailureKind::Protocol);
+                    self.publish(DesktopEventKind::ProtocolError);
+                }
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn release_input(&mut self) {
@@ -563,6 +630,8 @@ impl<S: WorkerSession> LoopState<'_, S> {
         self.release_input();
         self.session = None;
         self.last_native_revision = None;
+        self.last_native_clipboard_revision = None;
+        self.clipboard_decode_failed = false;
         let store_changed = self.framebuffer.invalidate();
         let had_frame = lock_unpoisoned(self.snapshot)
             .framebuffer_revision
@@ -687,21 +756,27 @@ impl<S: WorkerSession> LoopState<'_, S> {
                     .ok_or(DesktopError::WorkerUnavailable)?;
                 self.input.chord(session, &keys)
             }
-            WorkerCommand::SetClipboard { text } => self
-                .session
-                .as_mut()
-                .ok_or(DesktopError::WorkerUnavailable)?
-                .send_clipboard(&text)
-                .map_err(DesktopError::from),
+            WorkerCommand::SetClipboard { text } => {
+                validate_clipboard(&text)?;
+                self.session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?
+                    .send_clipboard(&text)
+                    .map_err(DesktopError::from)
+            }
             WorkerCommand::RequestFullRefresh => self
                 .session
                 .as_mut()
                 .ok_or(DesktopError::WorkerUnavailable)?
                 .request_full_refresh()
                 .map_err(DesktopError::from),
-            WorkerCommand::TypeText { .. } => Err(DesktopError::Configuration(
-                "text input is not enabled until the text milestone".to_owned(),
-            )),
+            WorkerCommand::TypeText { text } => {
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input.type_text(session, &text).map(|_| ())
+            }
             WorkerCommand::Reconnect | WorkerCommand::Shutdown => Err(DesktopError::Protocol),
         }
     }
@@ -755,27 +830,41 @@ impl<S: WorkerSession> LoopState<'_, S> {
     }
 }
 
-fn run_worker<F, S>(
-    settings: WorkerSettings,
-    mut factory: F,
+struct WorkerChannels {
     commands: Receiver<CommandEnvelope>,
     events: SyncSender<WorkerEvent>,
     startup: SyncSender<()>,
+}
+
+fn run_worker<F, S>(
+    settings: WorkerSettings,
+    mut factory: F,
+    channels: WorkerChannels,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
     framebuffer: FramebufferStore,
+    clipboard: Arc<Mutex<Option<ClipboardSnapshot>>>,
 ) where
     F: FnMut() -> Result<S, NativeError>,
     S: WorkerSession,
 {
+    let WorkerChannels {
+        commands,
+        events,
+        startup,
+    } = channels;
     let _ = startup.send(());
     let mut state = LoopState {
         settings: &settings,
         snapshot: &snapshot,
         events: &events,
         framebuffer,
+        clipboard: &clipboard,
         event_sequence: 0,
         session: None,
         last_native_revision: None,
+        last_native_clipboard_revision: None,
+        clipboard_revision: 0,
+        clipboard_decode_failed: false,
         input: InputController::default(),
         next_connect: Some(Instant::now()),
         reconnect_attempt: 0,
@@ -960,6 +1049,10 @@ mod tests {
             })
         }
 
+        fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+            Err(NativeError::ClipboardUnavailable)
+        }
+
         fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
             Ok(NativeFramebuffer {
                 width: 2,
@@ -986,16 +1079,18 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     enum InputEvent {
         Pointer(Coordinate, u8),
         Key(KeyboardKey, bool),
+        Clipboard(String),
     }
 
     struct RecordingSession {
         events: Arc<Mutex<Vec<InputEvent>>>,
         input_calls: usize,
         fail_on_input_call: Option<usize>,
+        clipboard: Option<NativeClipboard>,
     }
 
     impl RecordingSession {
@@ -1004,6 +1099,19 @@ mod tests {
                 events,
                 input_calls: 0,
                 fail_on_input_call,
+                clipboard: None,
+            }
+        }
+
+        fn with_clipboard(events: Arc<Mutex<Vec<InputEvent>>>, text: &str, revision: u64) -> Self {
+            Self {
+                events,
+                input_calls: 0,
+                fail_on_input_call: None,
+                clipboard: Some(NativeClipboard {
+                    text: text.to_owned(),
+                    revision,
+                }),
             }
         }
 
@@ -1047,6 +1155,12 @@ mod tests {
             })
         }
 
+        fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+            self.clipboard
+                .clone()
+                .ok_or(NativeError::ClipboardUnavailable)
+        }
+
         fn send_pointer(
             &mut self,
             coordinate: Coordinate,
@@ -1059,8 +1173,8 @@ mod tests {
             self.record(InputEvent::Key(key, pressed))
         }
 
-        fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
-            Ok(())
+        fn send_clipboard(&mut self, text: &str) -> Result<(), NativeError> {
+            self.record(InputEvent::Clipboard(text.to_owned()))
         }
     }
 
@@ -1216,6 +1330,109 @@ mod tests {
                 InputEvent::Pointer(point, 0),
             ]
         );
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+    }
+
+    #[test]
+    fn worker_routes_preflighted_text_and_clipboard_without_payload_loss() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+
+        client
+            .submit(WorkerCommand::TypeText {
+                text: "A\n".to_owned(),
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect("text executed");
+        client
+            .submit(WorkerCommand::SetClipboard {
+                text: "clipboard value".to_owned(),
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect("clipboard sent");
+
+        assert_eq!(
+            *lock_unpoisoned(&events),
+            vec![
+                InputEvent::Key(KeyboardKey::Printable('A'), true),
+                InputEvent::Key(KeyboardKey::Printable('A'), false),
+                InputEvent::Key(KeyboardKey::Enter, true),
+                InputEvent::Key(KeyboardKey::Enter, false),
+                InputEvent::Clipboard("clipboard value".to_owned()),
+            ]
+        );
+
+        lock_unpoisoned(&events).clear();
+        client
+            .submit(WorkerCommand::TypeText {
+                text: "ok☃".to_owned(),
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect_err("unsupported text rejected");
+        client
+            .submit(WorkerCommand::SetClipboard {
+                text: "a\0b".to_owned(),
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect_err("NUL clipboard rejected");
+        assert!(lock_unpoisoned(&events).is_empty());
+
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+    }
+
+    #[test]
+    fn worker_publishes_last_valid_inbound_clipboard_snapshot() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::with_clipboard(
+                Arc::clone(&factory_events),
+                "from desktop",
+                7,
+            ))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let clipboard = loop {
+            match client.clipboard_snapshot() {
+                Ok(snapshot) => break snapshot,
+                Err(DesktopError::ClipboardUnavailable) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                other => panic!("clipboard snapshot unavailable: {other:?}"),
+            }
+        };
+        assert_eq!(clipboard.text.as_ref(), "from desktop");
+        assert_eq!(clipboard.revision, 1);
+
+        let mut saw_revision = false;
+        while let Ok(event) = worker.events().recv_timeout(Duration::from_millis(20)) {
+            if matches!(
+                event.kind,
+                DesktopEventKind::ClipboardRevision { revision: 1 }
+            ) {
+                saw_revision = true;
+                break;
+            }
+        }
+        assert!(saw_revision);
         worker
             .shutdown(Duration::from_secs(1))
             .expect("worker joins");
@@ -1430,6 +1647,10 @@ mod tests {
                     revision: 4,
                     bytes: vec![0; 16],
                 })
+            }
+
+            fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+                Err(NativeError::ClipboardUnavailable)
             }
 
             fn send_pointer(

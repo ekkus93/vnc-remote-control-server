@@ -549,7 +549,7 @@ pub struct ClipboardSnapshot {
 }
 
 /// Input and lifecycle commands accepted by the worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum WorkerCommand {
     /// Move the pointer while preserving the current button mask.
     MovePointer { coordinate: Coordinate },
@@ -606,6 +606,69 @@ pub enum WorkerCommand {
     Reconnect,
     /// Stop the worker.
     Shutdown,
+}
+
+impl fmt::Debug for WorkerCommand {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MovePointer { coordinate } => formatter
+                .debug_struct("MovePointer")
+                .field("coordinate", coordinate)
+                .finish(),
+            Self::SetButton {
+                coordinate,
+                button,
+                pressed,
+            } => formatter
+                .debug_struct("SetButton")
+                .field("coordinate", coordinate)
+                .field("button", button)
+                .field("pressed", pressed)
+                .finish(),
+            Self::Click { coordinate, button } => formatter
+                .debug_struct("Click")
+                .field("coordinate", coordinate)
+                .field("button", button)
+                .finish(),
+            Self::DoubleClick {
+                coordinate,
+                button,
+                interval_ms,
+            } => formatter
+                .debug_struct("DoubleClick")
+                .field("coordinate", coordinate)
+                .field("button", button)
+                .field("interval_ms", interval_ms)
+                .finish(),
+            Self::Scroll {
+                coordinate,
+                delta_x,
+                delta_y,
+            } => formatter
+                .debug_struct("Scroll")
+                .field("coordinate", coordinate)
+                .field("delta_x", delta_x)
+                .field("delta_y", delta_y)
+                .finish(),
+            Self::SetKey { key, pressed } => formatter
+                .debug_struct("SetKey")
+                .field("key", key)
+                .field("pressed", pressed)
+                .finish(),
+            Self::Chord { keys } => formatter.debug_struct("Chord").field("keys", keys).finish(),
+            Self::TypeText { text } => formatter
+                .debug_struct("TypeText")
+                .field("text_bytes", &text.len())
+                .finish(),
+            Self::SetClipboard { text } => formatter
+                .debug_struct("SetClipboard")
+                .field("text_bytes", &text.len())
+                .finish(),
+            Self::RequestFullRefresh => formatter.write_str("RequestFullRefresh"),
+            Self::Reconnect => formatter.write_str("Reconnect"),
+            Self::Shutdown => formatter.write_str("Shutdown"),
+        }
+    }
 }
 
 /// Public event kinds. Payload text and pixels are intentionally absent.
@@ -743,6 +806,27 @@ mod tests {
         assert!(validate_clipboard("a\0b").is_err());
         assert!(validate_scroll(MAX_SCROLL_STEPS, -MAX_SCROLL_STEPS).is_ok());
         assert!(validate_scroll(MAX_SCROLL_STEPS + 1, 0).is_err());
+    }
+
+    #[test]
+    fn worker_command_debug_redacts_text_and_clipboard_payloads() {
+        let typed = format!(
+            "{:?}",
+            WorkerCommand::TypeText {
+                text: "typed secret".to_owned(),
+            }
+        );
+        assert!(!typed.contains("typed secret"));
+        assert!(typed.contains("text_bytes"));
+
+        let clipboard = format!(
+            "{:?}",
+            WorkerCommand::SetClipboard {
+                text: "clipboard secret".to_owned(),
+            }
+        );
+        assert!(!clipboard.contains("clipboard secret"));
+        assert!(clipboard.contains("text_bytes"));
     }
 
     #[test]
