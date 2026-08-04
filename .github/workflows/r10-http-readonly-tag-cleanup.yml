@@ -1,0 +1,34 @@
+name: R10 Read-Only HTTP Tag Cleanup
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r10-http-readonly-tag-cleanup.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Delete validated candidate tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='r10-http-readonly-30936100767'
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}"
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+              printf 'temporary candidate tag still exists: %s\n' "$tag" >&2
+              exit 1
+          fi
+          gh issue comment 1 --body "<!-- r10-http-readonly-cleanup --> Temporary tag ${tag} was removed after replay commit 151053b0d6dccf6422b4cd27b321d0904e46122c reached master."
