@@ -89,10 +89,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     while Instant::now() < event_deadline {
         match worker.events().recv_timeout(Duration::from_millis(50)) {
             Ok(event)
-                if event.kind
-                    == DesktopEventKind::ClipboardRevision {
-                        revision: clipboard.revision,
-                    } =>
+                if matches!(
+                    event.kind,
+                    DesktopEventKind::ClipboardRevision { revision }
+                        if revision == clipboard.revision
+                ) =>
             {
                 saw_revision_event = true;
                 break;
