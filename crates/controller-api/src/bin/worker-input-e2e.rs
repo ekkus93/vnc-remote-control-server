@@ -7,7 +7,7 @@ use std::env;
 use std::error::Error;
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -152,7 +152,7 @@ fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
     })
 }
 
-fn read_secret(path: &PathBuf) -> Result<String, Box<dyn Error>> {
+fn read_secret(path: &Path) -> Result<String, Box<dyn Error>> {
     let mut value = fs::read_to_string(path)?;
     while value.ends_with('\n') || value.ends_with('\r') {
         value.pop();
