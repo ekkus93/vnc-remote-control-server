@@ -1,0 +1,575 @@
+name: R8 worker integration
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/r8-worker-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libvncserver-dev pkg-config
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+
+      - name: Wire atomic input controller into worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/controller-api/src/worker.rs")
+          text = path.read_text()
+
+          old = """use crate::framebuffer::{
+              FramebufferError, FramebufferMetadata, FramebufferSnapshot, FramebufferStore,
+          };
+          use crate::screenshot::{ScreenshotError, ScreenshotService};
+          """
+          new = """use crate::framebuffer::{
+              FramebufferError, FramebufferMetadata, FramebufferSnapshot, FramebufferStore,
+          };
+          use crate::input::{InputController, InputSink};
+          use crate::screenshot::{ScreenshotError, ScreenshotService};
+          """
+          if old not in text:
+              raise SystemExit("worker import anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = """use remote_desktop_core::{
+              ConnectionState, Coordinate, DesktopError, DesktopEventKind, KeyboardKey,
+              MAX_FRAMEBUFFER_BYTES, WorkerCommand,
+          };
+          use std::collections::HashSet;
+          """
+          new = """use remote_desktop_core::{
+              ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo, KeyboardKey,
+              MAX_FRAMEBUFFER_BYTES, WorkerCommand,
+          };
+          """
+          if old not in text:
+              raise SystemExit("worker core import anchor not found")
+          text = text.replace(old, new, 1)
+
+          anchor = """}
+
+          struct LoopState<'a, S> {
+          """
+          insertion = """}
+
+          impl<T: WorkerSession> InputSink for T {
+              fn send_pointer(
+                  &mut self,
+                  coordinate: Coordinate,
+                  button_mask: u8,
+              ) -> Result<(), NativeError> {
+                  WorkerSession::send_pointer(self, coordinate, button_mask)
+              }
+
+              fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
+                  WorkerSession::send_key(self, key, pressed)
+              }
+          }
+
+          struct LoopState<'a, S> {
+          """
+          if anchor not in text:
+              raise SystemExit("WorkerSession implementation anchor not found")
+          text = text.replace(anchor, insertion, 1)
+
+          old = """    session: Option<S>,
+              last_native_revision: Option<u64>,
+              button_mask: u8,
+              last_coordinate: Option<Coordinate>,
+              pressed_keys: HashSet<KeyboardKey>,
+              next_connect: Option<Instant>,
+          """
+          new = """    session: Option<S>,
+              last_native_revision: Option<u64>,
+              input: InputController,
+              next_connect: Option<Instant>,
+          """
+          if old not in text:
+              raise SystemExit("LoopState input fields anchor not found")
+          text = text.replace(old, new, 1)
+
+          start = text.index("    fn release_input(&mut self) {")
+          end = text.index("\n    fn invalidate(&mut self) {", start)
+          replacement = """    fn release_input(&mut self) {
+              if let Some(session) = self.session.as_mut() {
+                  self.input.release_all(session);
+              } else {
+                  self.input.clear();
+              }
+          }
+          """
+          text = text[:start] + replacement + text[end:]
+
+          execute_start = text.index("    fn execute(&mut self, command: WorkerCommand) -> Result<(), DesktopError> {")
+          execute_end = text.index("\n    fn poll(&mut self)", execute_start)
+          execute = """    fn current_display(&self) -> Result<DisplayInfo, DesktopError> {
+              if self.session.is_none() {
+                  return Err(DesktopError::WorkerUnavailable);
+              }
+              Ok(self.framebuffer.current_snapshot()?.display_info())
+          }
+
+              fn execute(&mut self, command: WorkerCommand) -> Result<(), DesktopError> {
+                  match command {
+                      WorkerCommand::MovePointer { coordinate } => {
+                          let display = self.current_display()?;
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input.move_pointer(session, coordinate, display)
+                      }
+                      WorkerCommand::SetButton {
+                          coordinate,
+                          button,
+                          pressed,
+                      } => {
+                          let display = self.current_display()?;
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input
+                              .set_button(session, coordinate, display, button, pressed)
+                      }
+                      WorkerCommand::Click { coordinate, button } => {
+                          let display = self.current_display()?;
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input.click(session, coordinate, display, button)
+                      }
+                      WorkerCommand::DoubleClick {
+                          coordinate,
+                          button,
+                          interval_ms,
+                      } => {
+                          let display = self.current_display()?;
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input.double_click(
+                              session,
+                              coordinate,
+                              display,
+                              button,
+                              interval_ms,
+                          )
+                      }
+                      WorkerCommand::Scroll {
+                          coordinate,
+                          delta_x,
+                          delta_y,
+                      } => {
+                          let display = self.current_display()?;
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input
+                              .scroll(session, coordinate, display, delta_x, delta_y)
+                      }
+                      WorkerCommand::SetKey { key, pressed } => {
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input.set_key(session, key, pressed)
+                      }
+                      WorkerCommand::Chord { keys } => {
+                          let session = self
+                              .session
+                              .as_mut()
+                              .ok_or(DesktopError::WorkerUnavailable)?;
+                          self.input.chord(session, &keys)
+                      }
+                      WorkerCommand::SetClipboard { text } => self
+                          .session
+                          .as_mut()
+                          .ok_or(DesktopError::WorkerUnavailable)?
+                          .send_clipboard(&text)
+                          .map_err(DesktopError::from),
+                      WorkerCommand::RequestFullRefresh => self
+                          .session
+                          .as_mut()
+                          .ok_or(DesktopError::WorkerUnavailable)?
+                          .request_full_refresh()
+                          .map_err(DesktopError::from),
+                      WorkerCommand::TypeText { .. } => Err(DesktopError::Configuration(
+                          "text input is not enabled until the text milestone".to_owned(),
+                      )),
+                      WorkerCommand::Reconnect | WorkerCommand::Shutdown => Err(DesktopError::Protocol),
+                  }
+              }
+          """
+          text = text[:execute_start] + execute + text[execute_end:]
+
+          old = """        session: None,
+                  last_native_revision: None,
+                  button_mask: 0,
+                  last_coordinate: None,
+                  pressed_keys: HashSet::new(),
+                  next_connect: Some(Instant::now()),
+          """
+          new = """        session: None,
+                  last_native_revision: None,
+                  input: InputController::default(),
+                  next_connect: Some(Instant::now()),
+          """
+          if old not in text:
+              raise SystemExit("LoopState initializer anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = "use remote_desktop_core::DisplayInfo;"
+          new = "use remote_desktop_core::{DisplayInfo, MouseButton};"
+          if old not in text:
+              raise SystemExit("test import anchor not found")
+          text = text.replace(old, new, 1)
+
+          insert_before = "    fn settings() -> WorkerSettings {"
+          recording = """    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+              enum InputEvent {
+                  Pointer(Coordinate, u8),
+                  Key(KeyboardKey, bool),
+              }
+
+              struct RecordingSession {
+                  events: Arc<Mutex<Vec<InputEvent>>>,
+                  input_calls: usize,
+                  fail_on_input_call: Option<usize>,
+              }
+
+              impl RecordingSession {
+                  fn new(
+                      events: Arc<Mutex<Vec<InputEvent>>>,
+                      fail_on_input_call: Option<usize>,
+                  ) -> Self {
+                      Self {
+                          events,
+                          input_calls: 0,
+                          fail_on_input_call,
+                      }
+                  }
+
+                  fn record(&mut self, event: InputEvent) -> Result<(), NativeError> {
+                      self.input_calls += 1;
+                      if self.fail_on_input_call == Some(self.input_calls) {
+                          return Err(NativeError::NativeFailure {
+                              message: "test-only worker input failure".to_owned(),
+                          });
+                      }
+                      lock_unpoisoned(&self.events).push(event);
+                      Ok(())
+                  }
+              }
+
+              impl WorkerSession for RecordingSession {
+                  fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
+                      thread::sleep(timeout);
+                      Ok(PollOutcome::MessageProcessed)
+                  }
+
+                  fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+                      Ok(())
+                  }
+
+                  fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+                      Ok(NativeDisplayInfo {
+                          width: 2,
+                          height: 2,
+                          revision: 1,
+                          complete: true,
+                      })
+                  }
+
+                  fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+                      Ok(NativeFramebuffer {
+                          width: 2,
+                          height: 2,
+                          revision: 1,
+                          bytes: vec![
+                              1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0,
+                          ],
+                      })
+                  }
+
+                  fn send_pointer(
+                      &mut self,
+                      coordinate: Coordinate,
+                      button_mask: u8,
+                  ) -> Result<(), NativeError> {
+                      self.record(InputEvent::Pointer(coordinate, button_mask))
+                  }
+
+                  fn send_key(
+                      &mut self,
+                      key: KeyboardKey,
+                      pressed: bool,
+                  ) -> Result<(), NativeError> {
+                      self.record(InputEvent::Key(key, pressed))
+                  }
+
+                  fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+                      Ok(())
+                  }
+              }
+
+          """
+          if insert_before not in text:
+              raise SystemExit("test helper insertion anchor not found")
+          text = text.replace(insert_before, recording + insert_before, 1)
+
+          old = """        let display = DisplayInfo::new(1_280, 800, 24, 1, true).expect("display");
+                  let coordinate = Coordinate::new(10, 10, display).expect("coordinate");
+          """
+          new = """        let display = snapshot.display_info();
+                  let coordinate = Coordinate::new(1, 1, display).expect("coordinate");
+          """
+          if old not in text:
+              raise SystemExit("existing pointer test anchor not found")
+          text = text.replace(old, new, 1)
+
+          insert_before = "    #[test]\n    fn transport_failure_reconnects_with_bounded_backoff() {"
+          tests = """    #[test]
+              fn worker_routes_atomic_input_through_single_owned_session() {
+                  let events = Arc::new(Mutex::new(Vec::new()));
+                  let factory_events = Arc::clone(&events);
+                  let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+                      Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+                  })
+                  .expect("worker spawns");
+                  let client = worker.client();
+                  wait_for_state(&client, ConnectionState::Connected);
+                  let display = client
+                      .framebuffer_snapshot()
+                      .expect("current frame")
+                      .display_info();
+                  let point = Coordinate::new(1, 1, display).expect("coordinate");
+
+                  for command in [
+                      WorkerCommand::SetButton {
+                          coordinate: point,
+                          button: MouseButton::Right,
+                          pressed: true,
+                      },
+                      WorkerCommand::Click {
+                          coordinate: point,
+                          button: MouseButton::Left,
+                      },
+                      WorkerCommand::Scroll {
+                          coordinate: point,
+                          delta_x: 0,
+                          delta_y: 1,
+                      },
+                      WorkerCommand::Chord {
+                          keys: vec![
+                              KeyboardKey::CtrlLeft,
+                              KeyboardKey::AltLeft,
+                              KeyboardKey::Printable('T'),
+                          ],
+                      },
+                      WorkerCommand::SetButton {
+                          coordinate: point,
+                          button: MouseButton::Right,
+                          pressed: false,
+                      },
+                  ] {
+                      client
+                          .submit(command)
+                          .expect("accepted")
+                          .wait(Duration::from_secs(1))
+                          .expect("executed");
+                  }
+
+                  assert_eq!(
+                      *lock_unpoisoned(&events),
+                      vec![
+                          InputEvent::Pointer(point, 4),
+                          InputEvent::Pointer(point, 4),
+                          InputEvent::Pointer(point, 5),
+                          InputEvent::Pointer(point, 4),
+                          InputEvent::Pointer(point, 4),
+                          InputEvent::Pointer(point, 12),
+                          InputEvent::Pointer(point, 4),
+                          InputEvent::Key(KeyboardKey::CtrlLeft, true),
+                          InputEvent::Key(KeyboardKey::AltLeft, true),
+                          InputEvent::Key(KeyboardKey::Printable('T'), true),
+                          InputEvent::Key(KeyboardKey::Printable('T'), false),
+                          InputEvent::Key(KeyboardKey::AltLeft, false),
+                          InputEvent::Key(KeyboardKey::CtrlLeft, false),
+                          InputEvent::Pointer(point, 0),
+                      ]
+                  );
+                  worker
+                      .shutdown(Duration::from_secs(1))
+                      .expect("worker joins");
+              }
+
+              #[test]
+              fn worker_rejects_invalid_coordinate_before_native_mutation() {
+                  let events = Arc::new(Mutex::new(Vec::new()));
+                  let factory_events = Arc::clone(&events);
+                  let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+                      Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+                  })
+                  .expect("worker spawns");
+                  let client = worker.client();
+                  wait_for_state(&client, ConnectionState::Connected);
+
+                  let error = client
+                      .submit(WorkerCommand::MovePointer {
+                          coordinate: Coordinate { x: 2, y: 1 },
+                      })
+                      .expect("accepted")
+                      .wait(Duration::from_secs(1))
+                      .expect_err("out-of-range coordinate must fail");
+                  assert!(matches!(error, DesktopError::CoordinateOutOfRange { .. }));
+                  assert!(lock_unpoisoned(&events).is_empty());
+
+                  worker
+                      .shutdown(Duration::from_secs(1))
+                      .expect("worker joins");
+              }
+
+              #[test]
+              fn worker_returns_partial_input_failure_after_release_retry() {
+                  let events = Arc::new(Mutex::new(Vec::new()));
+                  let factory_events = Arc::clone(&events);
+                  let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+                      Ok(RecordingSession::new(
+                          Arc::clone(&factory_events),
+                          Some(3),
+                      ))
+                  })
+                  .expect("worker spawns");
+                  let client = worker.client();
+                  wait_for_state(&client, ConnectionState::Connected);
+                  let point = Coordinate { x: 1, y: 1 };
+
+                  client
+                      .submit(WorkerCommand::Click {
+                          coordinate: point,
+                          button: MouseButton::Left,
+                      })
+                      .expect("accepted")
+                      .wait(Duration::from_secs(1))
+                      .expect_err("native release failure must reach caller");
+                  assert_eq!(
+                      *lock_unpoisoned(&events),
+                      vec![
+                          InputEvent::Pointer(point, 0),
+                          InputEvent::Pointer(point, 1),
+                          InputEvent::Pointer(point, 0),
+                      ]
+                  );
+
+                  worker
+                      .shutdown(Duration::from_secs(1))
+                      .expect("worker joins");
+              }
+
+              #[test]
+              fn shutdown_releases_tracked_buttons_and_keys() {
+                  let events = Arc::new(Mutex::new(Vec::new()));
+                  let factory_events = Arc::clone(&events);
+                  let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+                      Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+                  })
+                  .expect("worker spawns");
+                  let client = worker.client();
+                  wait_for_state(&client, ConnectionState::Connected);
+                  let point = Coordinate { x: 1, y: 1 };
+
+                  client
+                      .submit(WorkerCommand::SetButton {
+                          coordinate: point,
+                          button: MouseButton::Left,
+                          pressed: true,
+                      })
+                      .expect("accepted")
+                      .wait(Duration::from_secs(1))
+                      .expect("button down");
+                  client
+                      .submit(WorkerCommand::SetKey {
+                          key: KeyboardKey::CtrlLeft,
+                          pressed: true,
+                      })
+                      .expect("accepted")
+                      .wait(Duration::from_secs(1))
+                      .expect("key down");
+                  worker
+                      .shutdown(Duration::from_secs(1))
+                      .expect("worker joins");
+
+                  assert_eq!(
+                      *lock_unpoisoned(&events),
+                      vec![
+                          InputEvent::Pointer(point, 1),
+                          InputEvent::Key(KeyboardKey::CtrlLeft, true),
+                          InputEvent::Pointer(point, 0),
+                          InputEvent::Key(KeyboardKey::CtrlLeft, false),
+                      ]
+                  );
+              }
+
+          """
+          if insert_before not in text:
+              raise SystemExit("worker test insertion anchor not found")
+          text = text.replace(insert_before, tests + insert_before, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Format and validate exact R8 integration
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets --all-features
+          cargo doc --locked --workspace --all-features --no-deps
+
+      - name: Commit direct master integration and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r8-worker-integration.yml
+          git add crates/controller-api/src/worker.rs
+          test "$(git diff --cached --name-only | sort)" = $'.github/workflows/r8-worker-integration.yml\ncrates/controller-api/src/worker.rs'
+          git commit -m "Wire atomic input controller into worker"
+          git push origin HEAD:master
