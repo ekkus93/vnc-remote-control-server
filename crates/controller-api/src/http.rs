@@ -21,8 +21,8 @@ use remote_desktop_core::ConnectionState;
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
@@ -145,10 +145,7 @@ impl HttpState {
 
     fn next_request_id(&self) -> RequestId {
         let sequence = self.request_sequence.fetch_add(1, Ordering::Relaxed);
-        RequestId(Arc::from(format!(
-            "{}-{sequence}",
-            self.process_instance
-        )))
+        RequestId(Arc::from(format!("{}-{sequence}", self.process_instance)))
     }
 }
 
@@ -343,11 +340,7 @@ async fn assign_request_id(
     response
 }
 
-async fn require_bearer(
-    State(state): State<HttpState>,
-    request: Request,
-    next: Next,
-) -> Response {
+async fn require_bearer(State(state): State<HttpState>, request: Request, next: Next) -> Response {
     let request_id = request_id(&request);
     let authorized = request
         .headers()
@@ -430,12 +423,11 @@ async fn screenshot(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let backend = Arc::clone(&state.backend);
-    let result = tokio::task::spawn_blocking(move || {
-        backend.capture_screenshot(if_none_match.as_deref())
-    })
-    .await
-    .map_err(|_| ApiError::internal(request_id.clone()))?
-    .map_err(|error| screenshot_error(error, request_id.clone()))?;
+    let result =
+        tokio::task::spawn_blocking(move || backend.capture_screenshot(if_none_match.as_deref()))
+            .await
+            .map_err(|_| ApiError::internal(request_id.clone()))?
+            .map_err(|error| screenshot_error(error, request_id.clone()))?;
 
     match result {
         ScreenshotOutcome::NotModified { headers } => {
@@ -460,9 +452,10 @@ fn insert_screenshot_headers(
 ) -> Result<(), ApiError> {
     let etag = HeaderValue::from_str(&headers.etag).map_err(|_| ApiError::internal(request_id))?;
     response.headers_mut().insert(ETAG, etag);
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static(headers.cache_control));
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(headers.cache_control),
+    );
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static(headers.content_type));
@@ -612,7 +605,10 @@ mod tests {
             &self,
             _if_none_match: Option<&str>,
         ) -> Result<ScreenshotOutcome, ScreenshotError> {
-            let screenshot = *self.screenshot.lock().unwrap_or_else(|error| error.into_inner());
+            let screenshot = *self
+                .screenshot
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             let headers = crate::screenshot::ScreenshotHeaders {
                 etag: "\"test-7\"".to_owned(),
                 content_type: "image/png",
@@ -693,7 +689,11 @@ mod tests {
 
         let response = app
             .clone()
-            .oneshot(request("/health/live").body(Body::empty()).expect("request"))
+            .oneshot(
+                request("/health/live")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
@@ -701,7 +701,11 @@ mod tests {
 
         let response = app
             .clone()
-            .oneshot(request("/health/ready").body(Body::empty()).expect("request"))
+            .oneshot(
+                request("/health/ready")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -710,14 +714,22 @@ mod tests {
 
         let ready = router(test_state(true, MockScreenshot::Png));
         let response = ready
-            .oneshot(request("/health/ready").body(Body::empty()).expect("request"))
+            .oneshot(
+                request("/health/ready")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
 
         state.begin_shutdown();
         let response = app
-            .oneshot(request("/health/ready").body(Body::empty()).expect("request"))
+            .oneshot(
+                request("/health/ready")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -856,8 +868,14 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.headers().get(ETAG), Some(&HeaderValue::from_static("\"test-7\"")));
-        assert_eq!(response.headers().get(CONTENT_TYPE), Some(&HeaderValue::from_static("image/png")));
+        assert_eq!(
+            response.headers().get(ETAG),
+            Some(&HeaderValue::from_static("\"test-7\""))
+        );
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE),
+            Some(&HeaderValue::from_static("image/png"))
+        );
         let bytes = to_bytes(response.into_body(), 1024)
             .await
             .expect("PNG body");
@@ -875,7 +893,10 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
-        assert_eq!(response.headers().get(ETAG), Some(&HeaderValue::from_static("\"test-7\"")));
+        assert_eq!(
+            response.headers().get(ETAG),
+            Some(&HeaderValue::from_static("\"test-7\""))
+        );
     }
 
     #[tokio::test]
@@ -905,13 +926,7 @@ mod tests {
             screenshot: Mutex::new(MockScreenshot::Png),
         });
         assert!(
-            HttpState::new(
-                Arc::clone(&backend),
-                Arc::from(""),
-                Arc::from("process"),
-                1,
-            )
-            .is_err()
+            HttpState::new(Arc::clone(&backend), Arc::from(""), Arc::from("process"), 1,).is_err()
         );
         assert!(
             HttpState::new(
@@ -922,9 +937,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            HttpState::new(backend, Arc::from("token"), Arc::from("process"), 0).is_err()
-        );
+        assert!(HttpState::new(backend, Arc::from("token"), Arc::from("process"), 0).is_err());
         assert!(bearer_matches(b"Bearer token", b"token"));
         assert!(!bearer_matches(b"Bearer Token", b"token"));
         assert!(!bearer_matches(b"Basic token", b"token"));
