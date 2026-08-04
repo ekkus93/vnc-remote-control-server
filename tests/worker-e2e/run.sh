@@ -4,7 +4,9 @@ set -euo pipefail
 readonly image_name="vnc-remote-control-desktop:native-test"
 readonly container_name="vnc-remote-control-worker-e2e-${GITHUB_RUN_ID:-local}-$$"
 readonly password='worker-e2e-vnc-password'
+readonly failure_artifact_directory="${WORKER_E2E_FAILURE_ARTIFACT_DIR:-}"
 temporary_directory=""
+worker_log=""
 
 log() {
     printf '[worker-e2e] %s\n' "$*" >&2
@@ -15,13 +17,90 @@ fail() {
     exit 1
 }
 
+sanitize_file() {
+    local path="$1"
+    [[ -f "$path" ]] || return 0
+
+    WORKER_E2E_SECRET="$password" python3 - "$path" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+secret = os.environ["WORKER_E2E_SECRET"]
+data = path.read_text(encoding="utf-8", errors="replace")
+path.write_text(data.replace(secret, "[REDACTED]"), encoding="utf-8")
+PY
+}
+
+capture_failure_artifacts() {
+    local exit_status="$1"
+    local artifact
+
+    [[ -n "$failure_artifact_directory" ]] || return 0
+    mkdir -p "$failure_artifact_directory"
+
+    if [[ -n "$worker_log" && -f "$worker_log" ]]; then
+        cp -- "$worker_log" "$failure_artifact_directory/worker-input-e2e.log"
+    else
+        printf 'worker log was not created\n' > "$failure_artifact_directory/worker-input-e2e.log"
+    fi
+
+    if docker inspect "$container_name" >/dev/null 2>&1; then
+        docker logs "$container_name" > "$failure_artifact_directory/desktop.log" 2>&1 || true
+        docker inspect --format '{{json .State}}' "$container_name" \
+            > "$failure_artifact_directory/container-state.json" 2>&1 || true
+        docker exec "$container_name" cat /tmp/vnc-test-app-state.json \
+            > "$failure_artifact_directory/desktop-state.json" 2> "$failure_artifact_directory/desktop-state-error.log" || true
+    else
+        printf 'desktop container was not created\n' > "$failure_artifact_directory/desktop.log"
+        printf '{}\n' > "$failure_artifact_directory/container-state.json"
+        printf '{}\n' > "$failure_artifact_directory/desktop-state.json"
+        printf 'desktop container unavailable\n' > "$failure_artifact_directory/desktop-state-error.log"
+    fi
+
+    python3 - "$failure_artifact_directory/failure-manifest.json" "$exit_status" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+manifest = {
+    "schema_version": 1,
+    "test": "WorkerHandle TigerVNC input E2E",
+    "exit_status": int(sys.argv[2]),
+    "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+    "github_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT"),
+    "github_sha": os.environ.get("GITHUB_SHA"),
+}
+path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+
+    for artifact in "$failure_artifact_directory"/*; do
+        sanitize_file "$artifact"
+    done
+
+    log "captured sanitized failure artifacts in $failure_artifact_directory"
+}
+
 cleanup() {
     docker rm --force "$container_name" >/dev/null 2>&1 || true
     if [[ -n "$temporary_directory" ]]; then
         rm -rf -- "$temporary_directory"
     fi
 }
-trap cleanup EXIT
+
+on_exit() {
+    local exit_status=$?
+    trap - EXIT
+    if (( exit_status != 0 )); then
+        capture_failure_artifacts "$exit_status"
+    fi
+    cleanup
+    exit "$exit_status"
+}
+trap on_exit EXIT
 
 wait_for_health() {
     local deadline=$((SECONDS + 90))
