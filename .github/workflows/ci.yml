@@ -178,3 +178,60 @@ jobs:
           path: artifacts/worker-e2e-failure
           if-no-files-found: error
           retention-days: 14
+
+      - name: Verify WorkerHandle E2E failure diagnostics
+        shell: bash
+        env:
+          WORKER_E2E_FAILURE_ARTIFACT_DIR: artifacts/worker-e2e-self-test
+          WORKER_E2E_FORCE_FAILURE_AFTER_INPUT: "1"
+          WORKER_E2E_REDACTION_SELF_TEST: "1"
+        run: |
+          set -euo pipefail
+          rm -rf -- "$WORKER_E2E_FAILURE_ARTIFACT_DIR"
+
+          set +e
+          bash tests/worker-e2e/run.sh
+          status=$?
+          set -e
+
+          [[ "$status" -ne 0 ]] || {
+              printf 'forced WorkerHandle E2E failure unexpectedly succeeded\n' >&2
+              exit 1
+          }
+
+          for path in \
+              worker-input-e2e.log \
+              desktop.log \
+              desktop-state.json \
+              container-state.json \
+              failure-manifest.json \
+              redaction-self-test.log; do
+              [[ -s "$WORKER_E2E_FAILURE_ARTIFACT_DIR/$path" ]] || {
+                  printf 'missing WorkerHandle E2E diagnostic: %s\n' "$path" >&2
+                  exit 1
+              }
+          done
+
+          grep -Fq '"exit_status": 1' \
+              "$WORKER_E2E_FAILURE_ARTIFACT_DIR/failure-manifest.json"
+          grep -Fxq '[REDACTED]' \
+              "$WORKER_E2E_FAILURE_ARTIFACT_DIR/redaction-self-test.log"
+
+          if grep -R -Fq 'worker-e2e-vnc-password' "$WORKER_E2E_FAILURE_ARTIFACT_DIR"; then
+              printf 'WorkerHandle E2E diagnostics retained the VNC password\n' >&2
+              exit 1
+          fi
+
+          python3 - "$WORKER_E2E_FAILURE_ARTIFACT_DIR/desktop-state.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          if state.get("schema_version") != 1:
+              raise SystemExit("captured desktop state has an unexpected schema")
+          if not state.get("events"):
+              raise SystemExit("captured desktop state contains no input events")
+          PY
+
+          rm -rf -- "$WORKER_E2E_FAILURE_ARTIFACT_DIR"
