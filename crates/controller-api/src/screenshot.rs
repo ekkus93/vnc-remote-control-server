@@ -263,9 +263,9 @@ pub fn if_none_match_matches(header: &str, current_etag: &str) -> bool {
 fn valid_process_instance(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_INSTANCE_ID_BYTES
-        && value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-        })
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn etag_for(process_instance: &str, revision: u64) -> String {
@@ -337,10 +337,7 @@ mod tests {
         assert_eq!(info.height, 1);
         assert_eq!(info.color_type, png::ColorType::Rgba);
         assert_eq!(info.bit_depth, png::BitDepth::Eight);
-        assert_eq!(
-            &output[..info.buffer_size()],
-            &[1, 2, 3, 255, 4, 5, 6, 128]
-        );
+        assert_eq!(&output[..info.buffer_size()], &[1, 2, 3, 255, 4, 5, 6, 128]);
     }
 
     #[test]
@@ -359,7 +356,10 @@ mod tests {
             .expect("conditional capture");
         assert!(matches!(second, ScreenshotOutcome::NotModified { .. }));
         assert_eq!(second.headers().content_type, "image/png");
-        assert_eq!(second.headers().cache_control, "private, no-cache, max-age=0");
+        assert_eq!(
+            second.headers().cache_control,
+            "private, no-cache, max-age=0"
+        );
     }
 
     struct SlowFirstEncoder {
@@ -428,45 +428,30 @@ mod tests {
     #[test]
     fn etags_change_with_process_instance_and_revision() {
         let store = store_with_pixels();
-        let first = ScreenshotService::new(
-            store.clone(),
-            "process-a",
-            1,
-            Duration::from_secs(1),
-        )
-        .expect("service")
-        .capture(None)
-        .expect("capture")
-        .headers()
-        .etag
-        .clone();
+        let first = ScreenshotService::new(store.clone(), "process-a", 1, Duration::from_secs(1))
+            .expect("service")
+            .capture(None)
+            .expect("capture")
+            .headers()
+            .etag
+            .clone();
         store
             .replace_rgba(2, 1, vec![6, 5, 4, 255, 3, 2, 1, 255])
             .expect("next frame");
-        let second = ScreenshotService::new(
-            store.clone(),
-            "process-a",
-            1,
-            Duration::from_secs(1),
-        )
-        .expect("service")
-        .capture(None)
-        .expect("capture")
-        .headers()
-        .etag
-        .clone();
-        let restarted = ScreenshotService::new(
-            store,
-            "process-b",
-            1,
-            Duration::from_secs(1),
-        )
-        .expect("service")
-        .capture(None)
-        .expect("capture")
-        .headers()
-        .etag
-        .clone();
+        let second = ScreenshotService::new(store.clone(), "process-a", 1, Duration::from_secs(1))
+            .expect("service")
+            .capture(None)
+            .expect("capture")
+            .headers()
+            .etag
+            .clone();
+        let restarted = ScreenshotService::new(store, "process-b", 1, Duration::from_secs(1))
+            .expect("service")
+            .capture(None)
+            .expect("capture")
+            .headers()
+            .etag
+            .clone();
         assert_ne!(first, second);
         assert_ne!(second, restarted);
     }
