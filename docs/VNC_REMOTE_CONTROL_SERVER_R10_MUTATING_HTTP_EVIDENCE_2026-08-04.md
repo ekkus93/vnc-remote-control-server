@@ -109,7 +109,19 @@ Validated gates:
 
 ## Authoritative master validation
 
-This evidence-file commit triggers the ordinary `CI` workflow on the cleaned `master` tree. The exact run and job identifiers will be appended after that workflow completes successfully.
+```text
+Evidence SHA: 33c8aa36a1da4f29729ac7d91e5bcced472192f9
+CI run: 30940021044
+Repository quality job: 92095798187
+Desktop/native/E2E job: 92095798173
+Artifact: ci-evidence-30940021044
+Artifact ID: 8904759812
+Result: success
+```
+
+The ordinary `master` workflow passed formatting, warning-denied Clippy, all Rust tests, warning-denied rustdoc, Python and shell contract gates, desktop image smoke, live native-adapter smoke, WorkerHandle input E2E, failure-diagnostic redaction self-test, and WorkerHandle text/clipboard E2E.
+
+This evidence update is documentation-only and triggers one final ordinary CI run so the repository can close the slice on a SHA containing the completed evidence record.
 
 ## Remaining R10 work
 
