@@ -80,7 +80,8 @@ jobs:
             desktop/xstartup \
             tests/desktop/run.sh \
             tests/native/run.sh \
-            tests/worker-e2e/run.sh
+            tests/worker-e2e/run.sh \
+            tests/worker-text-clipboard-e2e/run.sh
 
       - name: Build CI evidence
         env:
@@ -235,3 +236,6 @@ jobs:
           PY
 
           rm -rf -- "$WORKER_E2E_FAILURE_ARTIFACT_DIR"
+
+      - name: Run WorkerHandle TigerVNC text and clipboard E2E test
+        run: bash tests/worker-text-clipboard-e2e/run.sh
