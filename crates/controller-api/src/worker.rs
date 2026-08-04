@@ -8,16 +8,16 @@
 use crate::framebuffer::{
     FramebufferError, FramebufferMetadata, FramebufferSnapshot, FramebufferStore,
 };
+use crate::input::{InputController, InputSink};
 use crate::screenshot::{ScreenshotError, ScreenshotService};
 use libvnc_adapter::{
     NativeClient, NativeClientConfig, NativeDisplayInfo, NativeError, NativeFramebuffer,
     PollOutcome,
 };
 use remote_desktop_core::{
-    ConnectionState, Coordinate, DesktopError, DesktopEventKind, KeyboardKey,
+    ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo, KeyboardKey,
     MAX_FRAMEBUFFER_BYTES, WorkerCommand,
 };
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{
     Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
@@ -437,6 +437,16 @@ impl WorkerSession for NativeClient {
     }
 }
 
+impl<T: WorkerSession> InputSink for T {
+    fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError> {
+        WorkerSession::send_pointer(self, coordinate, button_mask)
+    }
+
+    fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
+        WorkerSession::send_key(self, key, pressed)
+    }
+}
+
 struct LoopState<'a, S> {
     settings: &'a WorkerSettings,
     snapshot: &'a Arc<Mutex<WorkerSnapshot>>,
@@ -445,9 +455,7 @@ struct LoopState<'a, S> {
     event_sequence: u64,
     session: Option<S>,
     last_native_revision: Option<u64>,
-    button_mask: u8,
-    last_coordinate: Option<Coordinate>,
-    pressed_keys: HashSet<KeyboardKey>,
+    input: InputController,
     next_connect: Option<Instant>,
     reconnect_attempt: u32,
     connected_since: Option<Instant>,
@@ -544,26 +552,11 @@ impl<S: WorkerSession> LoopState<'_, S> {
     }
 
     fn release_input(&mut self) {
-        let Some(session) = self.session.as_mut() else {
-            self.clear_input();
-            return;
-        };
-        if let Some(coordinate) = self.last_coordinate
-            && self.button_mask != 0
-        {
-            let _ = session.send_pointer(coordinate, 0);
+        if let Some(session) = self.session.as_mut() {
+            self.input.release_all(session);
+        } else {
+            self.input.clear();
         }
-        for key in self.pressed_keys.drain() {
-            let _ = session.send_key(key, false);
-        }
-        self.button_mask = 0;
-        self.last_coordinate = None;
-    }
-
-    fn clear_input(&mut self) {
-        self.button_mask = 0;
-        self.last_coordinate = None;
-        self.pressed_keys.clear();
     }
 
     fn invalidate(&mut self) {
@@ -616,53 +609,98 @@ impl<S: WorkerSession> LoopState<'_, S> {
         Ok(())
     }
 
+    fn current_display(&self) -> Result<DisplayInfo, DesktopError> {
+        if self.session.is_none() {
+            return Err(DesktopError::WorkerUnavailable);
+        }
+        Ok(self.framebuffer.current_snapshot()?.display_info())
+    }
+
     fn execute(&mut self, command: WorkerCommand) -> Result<(), DesktopError> {
-        let session = self
-            .session
-            .as_mut()
-            .ok_or(DesktopError::WorkerUnavailable)?;
         match command {
             WorkerCommand::MovePointer { coordinate } => {
-                session.send_pointer(coordinate, self.button_mask)?;
-                self.last_coordinate = Some(coordinate);
-                Ok(())
+                let display = self.current_display()?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input.move_pointer(session, coordinate, display)
             }
             WorkerCommand::SetButton {
                 coordinate,
                 button,
                 pressed,
             } => {
-                let next_mask = if pressed {
-                    self.button_mask | button.rfb_mask()
-                } else {
-                    self.button_mask & !button.rfb_mask()
-                };
-                session.send_pointer(coordinate, next_mask)?;
-                self.button_mask = next_mask;
-                self.last_coordinate = Some(coordinate);
-                Ok(())
+                let display = self.current_display()?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input
+                    .set_button(session, coordinate, display, button, pressed)
+            }
+            WorkerCommand::Click { coordinate, button } => {
+                let display = self.current_display()?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input.click(session, coordinate, display, button)
+            }
+            WorkerCommand::DoubleClick {
+                coordinate,
+                button,
+                interval_ms,
+            } => {
+                let display = self.current_display()?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input
+                    .double_click(session, coordinate, display, button, interval_ms)
+            }
+            WorkerCommand::Scroll {
+                coordinate,
+                delta_x,
+                delta_y,
+            } => {
+                let display = self.current_display()?;
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input
+                    .scroll(session, coordinate, display, delta_x, delta_y)
             }
             WorkerCommand::SetKey { key, pressed } => {
-                session.send_key(key, pressed)?;
-                if pressed {
-                    self.pressed_keys.insert(key);
-                } else {
-                    self.pressed_keys.remove(&key);
-                }
-                Ok(())
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input.set_key(session, key, pressed)
             }
-            WorkerCommand::SetClipboard { text } => {
-                session.send_clipboard(&text).map_err(DesktopError::from)
+            WorkerCommand::Chord { keys } => {
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input.chord(session, &keys)
             }
-            WorkerCommand::RequestFullRefresh => {
-                session.request_full_refresh().map_err(DesktopError::from)
-            }
-            WorkerCommand::Click { .. }
-            | WorkerCommand::DoubleClick { .. }
-            | WorkerCommand::Scroll { .. }
-            | WorkerCommand::Chord { .. }
-            | WorkerCommand::TypeText { .. } => Err(DesktopError::Configuration(
-                "compound input command is not enabled until the input milestone".to_owned(),
+            WorkerCommand::SetClipboard { text } => self
+                .session
+                .as_mut()
+                .ok_or(DesktopError::WorkerUnavailable)?
+                .send_clipboard(&text)
+                .map_err(DesktopError::from),
+            WorkerCommand::RequestFullRefresh => self
+                .session
+                .as_mut()
+                .ok_or(DesktopError::WorkerUnavailable)?
+                .request_full_refresh()
+                .map_err(DesktopError::from),
+            WorkerCommand::TypeText { .. } => Err(DesktopError::Configuration(
+                "text input is not enabled until the text milestone".to_owned(),
             )),
             WorkerCommand::Reconnect | WorkerCommand::Shutdown => Err(DesktopError::Protocol),
         }
@@ -738,9 +776,7 @@ fn run_worker<F, S>(
         event_sequence: 0,
         session: None,
         last_native_revision: None,
-        button_mask: 0,
-        last_coordinate: None,
-        pressed_keys: HashSet::new(),
+        input: InputController::default(),
         next_connect: Some(Instant::now()),
         reconnect_attempt: 0,
         connected_since: None,
@@ -884,7 +920,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remote_desktop_core::DisplayInfo;
+    use remote_desktop_core::{DisplayInfo, MouseButton};
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -943,6 +979,84 @@ mod tests {
 
         fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
             Ok(())
+        }
+
+        fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum InputEvent {
+        Pointer(Coordinate, u8),
+        Key(KeyboardKey, bool),
+    }
+
+    struct RecordingSession {
+        events: Arc<Mutex<Vec<InputEvent>>>,
+        input_calls: usize,
+        fail_on_input_call: Option<usize>,
+    }
+
+    impl RecordingSession {
+        fn new(events: Arc<Mutex<Vec<InputEvent>>>, fail_on_input_call: Option<usize>) -> Self {
+            Self {
+                events,
+                input_calls: 0,
+                fail_on_input_call,
+            }
+        }
+
+        fn record(&mut self, event: InputEvent) -> Result<(), NativeError> {
+            self.input_calls += 1;
+            if self.fail_on_input_call == Some(self.input_calls) {
+                return Err(NativeError::NativeFailure {
+                    message: "test-only worker input failure".to_owned(),
+                });
+            }
+            lock_unpoisoned(&self.events).push(event);
+            Ok(())
+        }
+    }
+
+    impl WorkerSession for RecordingSession {
+        fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
+            thread::sleep(timeout);
+            Ok(PollOutcome::MessageProcessed)
+        }
+
+        fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+            Ok(())
+        }
+
+        fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+            Ok(NativeDisplayInfo {
+                width: 2,
+                height: 2,
+                revision: 1,
+                complete: true,
+            })
+        }
+
+        fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+            Ok(NativeFramebuffer {
+                width: 2,
+                height: 2,
+                revision: 1,
+                bytes: vec![1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0],
+            })
+        }
+
+        fn send_pointer(
+            &mut self,
+            coordinate: Coordinate,
+            button_mask: u8,
+        ) -> Result<(), NativeError> {
+            self.record(InputEvent::Pointer(coordinate, button_mask))
+        }
+
+        fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
+            self.record(InputEvent::Key(key, pressed))
         }
 
         fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
@@ -1019,8 +1133,8 @@ mod tests {
         assert_eq!(snapshot.revision(), 1);
         assert_eq!(&snapshot.rgba()[0..4], &[1, 2, 3, 255]);
 
-        let display = DisplayInfo::new(1_280, 800, 24, 1, true).expect("display");
-        let coordinate = Coordinate::new(10, 10, display).expect("coordinate");
+        let display = snapshot.display_info();
+        let coordinate = Coordinate::new(1, 1, display).expect("coordinate");
         client
             .submit(WorkerCommand::MovePointer { coordinate })
             .expect("accepted")
@@ -1033,6 +1147,179 @@ mod tests {
         assert_eq!(
             client.framebuffer_snapshot().err(),
             Some(FramebufferError::Stale)
+        );
+    }
+
+    #[test]
+    fn worker_routes_atomic_input_through_single_owned_session() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+        let point = Coordinate { x: 1, y: 1 };
+
+        for command in [
+            WorkerCommand::SetButton {
+                coordinate: point,
+                button: MouseButton::Right,
+                pressed: true,
+            },
+            WorkerCommand::Click {
+                coordinate: point,
+                button: MouseButton::Left,
+            },
+            WorkerCommand::Scroll {
+                coordinate: point,
+                delta_x: 0,
+                delta_y: 1,
+            },
+            WorkerCommand::Chord {
+                keys: vec![
+                    KeyboardKey::CtrlLeft,
+                    KeyboardKey::AltLeft,
+                    KeyboardKey::Printable('T'),
+                ],
+            },
+            WorkerCommand::SetButton {
+                coordinate: point,
+                button: MouseButton::Right,
+                pressed: false,
+            },
+        ] {
+            client
+                .submit(command)
+                .expect("accepted")
+                .wait(Duration::from_secs(1))
+                .expect("executed");
+        }
+
+        assert_eq!(
+            *lock_unpoisoned(&events),
+            vec![
+                InputEvent::Pointer(point, 4),
+                InputEvent::Pointer(point, 4),
+                InputEvent::Pointer(point, 5),
+                InputEvent::Pointer(point, 4),
+                InputEvent::Pointer(point, 4),
+                InputEvent::Pointer(point, 12),
+                InputEvent::Pointer(point, 4),
+                InputEvent::Key(KeyboardKey::CtrlLeft, true),
+                InputEvent::Key(KeyboardKey::AltLeft, true),
+                InputEvent::Key(KeyboardKey::Printable('T'), true),
+                InputEvent::Key(KeyboardKey::Printable('T'), false),
+                InputEvent::Key(KeyboardKey::AltLeft, false),
+                InputEvent::Key(KeyboardKey::CtrlLeft, false),
+                InputEvent::Pointer(point, 0),
+            ]
+        );
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+    }
+
+    #[test]
+    fn worker_rejects_invalid_coordinate_before_native_mutation() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+
+        let error = client
+            .submit(WorkerCommand::MovePointer {
+                coordinate: Coordinate { x: 2, y: 1 },
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect_err("out-of-range coordinate must fail");
+        assert!(matches!(error, DesktopError::CoordinateOutOfRange { .. }));
+        assert!(lock_unpoisoned(&events).is_empty());
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+    }
+
+    #[test]
+    fn worker_returns_partial_input_failure_after_release_retry() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), Some(3)))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+        let point = Coordinate { x: 1, y: 1 };
+
+        client
+            .submit(WorkerCommand::Click {
+                coordinate: point,
+                button: MouseButton::Left,
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect_err("native release failure must reach caller");
+        assert_eq!(
+            *lock_unpoisoned(&events),
+            vec![
+                InputEvent::Pointer(point, 0),
+                InputEvent::Pointer(point, 1),
+                InputEvent::Pointer(point, 0),
+            ]
+        );
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+    }
+
+    #[test]
+    fn shutdown_releases_tracked_buttons_and_keys() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+        let point = Coordinate { x: 1, y: 1 };
+
+        client
+            .submit(WorkerCommand::SetButton {
+                coordinate: point,
+                button: MouseButton::Left,
+                pressed: true,
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect("button down");
+        client
+            .submit(WorkerCommand::SetKey {
+                key: KeyboardKey::CtrlLeft,
+                pressed: true,
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect("key down");
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+
+        assert_eq!(
+            *lock_unpoisoned(&events),
+            vec![
+                InputEvent::Pointer(point, 1),
+                InputEvent::Key(KeyboardKey::CtrlLeft, true),
+                InputEvent::Pointer(point, 0),
+                InputEvent::Key(KeyboardKey::CtrlLeft, false),
+            ]
         );
     }
 
