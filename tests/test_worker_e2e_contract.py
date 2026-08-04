@@ -37,10 +37,38 @@ class WorkerInputE2EContractTests(unittest.TestCase):
         self.assertIn("keys_down", text)
         self.assertIn("worker_input_e2e_complete=1", text)
 
+    def test_harness_captures_redacted_failure_diagnostics(self):
+        text = HARNESS.read_text(encoding="utf-8")
+        self.assertIn("WORKER_E2E_FAILURE_ARTIFACT_DIR", text)
+        self.assertIn("capture_failure_artifacts", text)
+        self.assertIn("worker-input-e2e.log", text)
+        self.assertIn("desktop.log", text)
+        self.assertIn("desktop-state.json", text)
+        self.assertIn("container-state.json", text)
+        self.assertIn("failure-manifest.json", text)
+        self.assertIn("[REDACTED]", text)
+        self.assertIn("if (( exit_status != 0 ))", text)
+
     def test_authoritative_ci_runs_the_worker_e2e(self):
         text = CI.read_text(encoding="utf-8")
         self.assertIn("tests/worker-e2e/run.sh", text)
         self.assertIn("Run WorkerHandle TigerVNC input E2E test", text)
+
+    def test_authoritative_ci_uploads_failure_only_diagnostics(self):
+        text = CI.read_text(encoding="utf-8")
+        self.assertIn("id: worker_e2e", text)
+        self.assertIn(
+            "WORKER_E2E_FAILURE_ARTIFACT_DIR: artifacts/worker-e2e-failure",
+            text,
+        )
+        self.assertIn("Upload WorkerHandle E2E failure artifacts", text)
+        self.assertIn(
+            "failure() && steps.worker_e2e.outcome == 'failure'",
+            text,
+        )
+        self.assertIn("name: worker-e2e-failure-${{ github.run_id }}", text)
+        self.assertIn("path: artifacts/worker-e2e-failure", text)
+        self.assertIn("if-no-files-found: error", text)
 
 
 if __name__ == "__main__":
