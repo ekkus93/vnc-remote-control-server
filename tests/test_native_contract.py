@@ -52,9 +52,12 @@ class NativeContractTests(unittest.TestCase):
 
     def test_native_smoke_is_bounded_and_uses_file_mounted_password(self):
         text = NATIVE_SMOKE.read_text(encoding="utf-8")
-        self.assertIn("timeout --kill-after=2s 30s", text)
+        self.assertIn("timeout --kill-after=2s 35s", text)
         self.assertIn("VRC_VNC_PASSWORD_FILE", text)
         self.assertNotIn("VRC_VNC_PASSWORD=", text)
+        self.assertIn("VRC_PROOF_HOLD_SECONDS=15", text)
+        self.assertIn("proof_ready=1", text)
+        self.assertIn("while connected", text)
         self.assertIn("docker exec -i", text)
         self.assertIn("native-clipboard-proof", text)
 
