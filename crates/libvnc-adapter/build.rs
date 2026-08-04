@@ -43,8 +43,8 @@ fn main() {
         &["--cflags", "libvncclient"],
         "LibVNCClient compiler flag discovery",
     );
-    let cflags = String::from_utf8(cflags_output.stdout)
-        .expect("pkg-config compiler flags must be UTF-8");
+    let cflags =
+        String::from_utf8(cflags_output.stdout).expect("pkg-config compiler flags must be UTF-8");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"));
     let object = out_dir.join("vnc_shim.o");
@@ -79,8 +79,8 @@ fn main() {
         &["--libs-only-L", "libvncclient"],
         "LibVNCClient link path discovery",
     );
-    let link_paths = String::from_utf8(link_output.stdout)
-        .expect("pkg-config link paths must be UTF-8");
+    let link_paths =
+        String::from_utf8(link_output.stdout).expect("pkg-config link paths must be UTF-8");
     for flag in link_paths.split_whitespace() {
         if let Some(path) = flag.strip_prefix("-L") {
             println!("cargo:rustc-link-search=native={path}");
