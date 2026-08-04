@@ -50,6 +50,7 @@ dependencies = [
  "remote-desktop-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

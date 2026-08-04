@@ -7,12 +7,10 @@
 use crate::worker::WorkerSettings;
 use libvnc_adapter::NativeClientConfig;
 use remote_desktop_core::{DesktopError, MAX_FRAMEBUFFER_BYTES};
-use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -165,11 +163,7 @@ impl ControllerConfig {
                     "VRC_VNC_CONNECT_TIMEOUT_MS",
                     10_000,
                 )?,
-                read_timeout: parse_duration_ms(
-                    environment,
-                    "VRC_VNC_READ_TIMEOUT_MS",
-                    10_000,
-                )?,
+                read_timeout: parse_duration_ms(environment, "VRC_VNC_READ_TIMEOUT_MS", 10_000)?,
             },
             command_capacity: parse_bounded_usize(
                 environment,
@@ -274,7 +268,11 @@ impl fmt::Display for ConfigError {
         match self {
             Self::InvalidValue(name) => write!(formatter, "invalid configuration value: {name}"),
             Self::SecretFile { path, reason } => {
-                write!(formatter, "invalid secret file {}: {reason}", path.display())
+                write!(
+                    formatter,
+                    "invalid secret file {}: {reason}",
+                    path.display()
+                )
             }
             Self::Worker(error) => write!(formatter, "invalid worker configuration: {error}"),
         }
@@ -348,10 +346,7 @@ impl SecretReader for SystemSecretReader {
 }
 
 #[cfg(unix)]
-fn validate_secret_permissions(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ConfigError> {
+fn validate_secret_permissions(path: &Path, metadata: &fs::Metadata) -> Result<(), ConfigError> {
     use std::os::unix::fs::PermissionsExt;
 
     let mode = metadata.permissions().mode();
@@ -365,10 +360,7 @@ fn validate_secret_permissions(
 }
 
 #[cfg(not(unix))]
-fn validate_secret_permissions(
-    _path: &Path,
-    _metadata: &fs::Metadata,
-) -> Result<(), ConfigError> {
+fn validate_secret_permissions(_path: &Path, _metadata: &fs::Metadata) -> Result<(), ConfigError> {
     Ok(())
 }
 
@@ -448,6 +440,8 @@ fn default_process_instance() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::io;
 
     #[derive(Default)]
     struct MapEnvironment(HashMap<String, String>);
@@ -474,7 +468,10 @@ mod tests {
 
     fn secrets() -> MapSecrets {
         MapSecrets(HashMap::from([
-            (PathBuf::from(DEFAULT_API_TOKEN_FILE), Arc::from("api-token")),
+            (
+                PathBuf::from(DEFAULT_API_TOKEN_FILE),
+                Arc::from("api-token"),
+            ),
             (
                 PathBuf::from(DEFAULT_VNC_PASSWORD_FILE),
                 Arc::from("vnc-password"),
@@ -502,15 +499,15 @@ mod tests {
         let environment = MapEnvironment(HashMap::from([
             ("VRC_LISTEN_ADDR".to_owned(), "0.0.0.0:9090".to_owned()),
             ("VRC_API_TOKEN_FILE".to_owned(), "/tmp/api".to_owned()),
-            (
-                "VRC_VNC_PASSWORD_FILE".to_owned(),
-                "/tmp/vnc".to_owned(),
-            ),
+            ("VRC_VNC_PASSWORD_FILE".to_owned(), "/tmp/vnc".to_owned()),
             ("VRC_VNC_HOST".to_owned(), "desktop.internal".to_owned()),
             ("VRC_VNC_PORT".to_owned(), "5999".to_owned()),
             ("VRC_COMMAND_CAPACITY".to_owned(), "8".to_owned()),
             ("VRC_EVENT_CAPACITY".to_owned(), "9".to_owned()),
-            ("VRC_PROCESS_INSTANCE".to_owned(), "test-instance".to_owned()),
+            (
+                "VRC_PROCESS_INSTANCE".to_owned(),
+                "test-instance".to_owned(),
+            ),
         ]));
         let secrets = MapSecrets(HashMap::from([
             (PathBuf::from("/tmp/api"), Arc::from("selected-api")),
@@ -545,7 +542,10 @@ mod tests {
     fn secret_values_cannot_be_supplied_directly_by_environment() {
         let environment = MapEnvironment(HashMap::from([
             ("VRC_API_TOKEN".to_owned(), "ignored-api-value".to_owned()),
-            ("VRC_VNC_PASSWORD".to_owned(), "ignored-vnc-value".to_owned()),
+            (
+                "VRC_VNC_PASSWORD".to_owned(),
+                "ignored-vnc-value".to_owned(),
+            ),
         ]));
         let config = ControllerConfig::load_from(&environment, &secrets()).expect("config loads");
         assert_eq!(config.api_token.as_ref(), "api-token");

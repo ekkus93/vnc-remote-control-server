@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod api_contract;
+pub mod config;
 pub mod framebuffer;
 pub mod input;
 pub mod screenshot;
