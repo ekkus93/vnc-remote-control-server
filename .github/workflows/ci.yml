@@ -165,4 +165,16 @@ jobs:
         run: bash tests/native/run.sh
 
       - name: Run WorkerHandle TigerVNC input E2E test
+        id: worker_e2e
+        env:
+          WORKER_E2E_FAILURE_ARTIFACT_DIR: artifacts/worker-e2e-failure
         run: bash tests/worker-e2e/run.sh
+
+      - name: Upload WorkerHandle E2E failure artifacts
+        if: ${{ failure() && steps.worker_e2e.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: worker-e2e-failure-${{ github.run_id }}
+          path: artifacts/worker-e2e-failure
+          if-no-files-found: error
+          retention-days: 14
