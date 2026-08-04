@@ -76,6 +76,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             client.send_key(KeyboardKey::F5, true)?;
             client.send_key(KeyboardKey::F5, false)?;
             client.send_clipboard(CLIPBOARD_PROOF)?;
+            for _ in 0..4 {
+                client.poll(POLL_INTERVAL)?;
+            }
 
             println!(
                 "libvncclient_version={} protocol_major={} dimensions={}x{} revision={} bytes={}",
