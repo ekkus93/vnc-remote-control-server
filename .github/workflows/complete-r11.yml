@@ -51,14 +51,38 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('crates/controller-api/src/runtime.rs')
-          text = path.read_text(encoding='utf-8')
-          old = '    let connection = builder.serve_connection(io, service);\n'
-          new = '    let connection = builder.serve_connection(io, service).with_upgrades();\n'
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'upgrade runtime patch expected one match, found {count}')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          runtime_path = Path('crates/controller-api/src/runtime.rs')
+          runtime_text = runtime_path.read_text(encoding='utf-8')
+          runtime_old = '    let connection = builder.serve_connection(io, service);\n'
+          runtime_new = '    let connection = builder.serve_connection(io, service).with_upgrades();\n'
+          runtime_count = runtime_text.count(runtime_old)
+          if runtime_count != 1:
+              raise SystemExit(
+                  f'upgrade runtime patch expected one match, found {runtime_count}'
+              )
+          runtime_path.write_text(
+              runtime_text.replace(runtime_old, runtime_new, 1),
+              encoding='utf-8',
+          )
+
+          e2e_path = Path('tests/http-e2e/run.sh')
+          e2e_text = e2e_path.read_text(encoding='utf-8')
+          e2e_old = 'PY\n\nlog "sending authenticated input and payload-redaction probes"'
+          e2e_new = (
+              'PY\n\n'
+              'log "waiting for controller readiness after reconnect"\n'
+              'wait_for_controller\n\n'
+              'log "sending authenticated input and payload-redaction probes"'
+          )
+          e2e_count = e2e_text.count(e2e_old)
+          if e2e_count != 1:
+              raise SystemExit(
+                  f'reconnect readiness patch expected one match, found {e2e_count}'
+              )
+          e2e_path.write_text(
+              e2e_text.replace(e2e_old, e2e_new, 1),
+              encoding='utf-8',
+          )
           PY
 
       - name: Format Rust sources
