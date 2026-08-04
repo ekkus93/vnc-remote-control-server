@@ -33,7 +33,6 @@ struct vrc_client {
 };
 
 static int vrc_context_tag;
-static char vrc_program_name[] = "vrc-client";
 
 static void vrc_set_error(vrc_client *client, const char *message) {
     if (client == NULL) {
@@ -217,40 +216,16 @@ vrc_client *vrc_client_create(
 }
 
 vrc_status vrc_client_connect(vrc_client *client) {
-    size_t endpoint_capacity;
-    char *endpoint;
-    char *arguments[3];
-    int argument_count = 2;
-    int written;
-
     if (client == NULL || client->native != NULL) {
-        return VRC_STATUS_INVALID_ARGUMENT;
-    }
-    if (strlen(client->host) > SIZE_MAX - 32U) {
-        vrc_set_error(client, "VNC endpoint is too long");
-        return VRC_STATUS_INVALID_ARGUMENT;
-    }
-    endpoint_capacity = strlen(client->host) + 32U;
-    endpoint = malloc(endpoint_capacity);
-    if (endpoint == NULL) {
-        vrc_set_error(client, "VNC endpoint allocation failed");
-        return VRC_STATUS_ALLOCATION_FAILED;
-    }
-    written = snprintf(endpoint, endpoint_capacity, "%s::%d", client->host, client->port);
-    if (written < 0 || (size_t)written >= endpoint_capacity) {
-        free(endpoint);
-        vrc_set_error(client, "VNC endpoint formatting failed");
         return VRC_STATUS_INVALID_ARGUMENT;
     }
 
     client->native = rfbGetClient(8, 3, 4);
     if (client->native == NULL) {
-        free(endpoint);
         vrc_set_error(client, "rfbGetClient failed");
         return VRC_STATUS_ALLOCATION_FAILED;
     }
 
-    client->native->programName = vrc_program_name;
     client->native->GetPassword = vrc_get_password;
     client->native->MallocFrameBuffer = vrc_allocate_framebuffer;
     client->native->FinishedFrameBufferUpdate = vrc_finished_framebuffer_update;
@@ -260,16 +235,36 @@ vrc_status vrc_client_connect(vrc_client *client) {
     client->native->appData.shareDesktop = TRUE;
     rfbClientSetClientData(client->native, &vrc_context_tag, client);
 
-    arguments[0] = vrc_program_name;
-    arguments[1] = endpoint;
-    arguments[2] = NULL;
-    if (!rfbInitClient(client->native, &argument_count, arguments)) {
-        free(endpoint);
-        vrc_set_error(client, "rfbInitClient failed");
+    if (!ConnectToRFBServer(client->native, client->host, client->port)) {
+        vrc_set_error(client, "VNC transport connection failed");
+        return VRC_STATUS_NATIVE_FAILURE;
+    }
+    if (!InitialiseRFBConnection(client->native)) {
+        vrc_set_error(client, "VNC protocol initialization failed");
         return VRC_STATUS_NATIVE_FAILURE;
     }
 
-    free(endpoint);
+    client->native->width = client->native->si.framebufferWidth;
+    client->native->height = client->native->si.framebufferHeight;
+    if (!client->native->MallocFrameBuffer(client->native)) {
+        vrc_set_error(client, "VNC framebuffer initialization failed");
+        return VRC_STATUS_NATIVE_FAILURE;
+    }
+    if (!SetFormatAndEncodings(client->native)) {
+        vrc_set_error(client, "VNC format negotiation failed");
+        return VRC_STATUS_NATIVE_FAILURE;
+    }
+    if (!SendFramebufferUpdateRequest(
+            client->native,
+            0,
+            0,
+            client->native->width,
+            client->native->height,
+            FALSE)) {
+        vrc_set_error(client, "initial framebuffer request failed");
+        return VRC_STATUS_NATIVE_FAILURE;
+    }
+
     client->connected = 1;
     vrc_set_error(client, NULL);
     return VRC_STATUS_OK;
