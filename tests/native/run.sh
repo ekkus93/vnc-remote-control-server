@@ -48,6 +48,44 @@ wait_for_health() {
     fail "desktop health deadline exceeded"
 }
 
+run_expected_connection_failure() {
+    local label="$1"
+    local port="$2"
+    local password_file="$3"
+    local forbidden_secret="$4"
+    local failure_log="$temporary_directory/${label}.log"
+    local status
+
+    log "verifying bounded native failure: $label"
+    set +e
+    timeout --kill-after=2s 10s env \
+        VRC_VNC_HOST=127.0.0.1 \
+        VRC_VNC_PORT="$port" \
+        VRC_VNC_PASSWORD_FILE="$password_file" \
+        VRC_PROOF_HOLD_SECONDS=0 \
+        cargo run --locked --quiet -p libvnc-adapter --bin native-spike \
+        >"$failure_log" 2>&1
+    status=$?
+    set -e
+
+    [[ "$status" -eq 1 ]] || {
+        cat "$failure_log" >&2
+        fail "$label exited with status $status instead of a clean application failure"
+    }
+    grep -Fq 'native spike failed:' "$failure_log" || {
+        cat "$failure_log" >&2
+        fail "$label did not produce the bounded native error envelope"
+    }
+    if grep -Fq 'proof_ready=1' "$failure_log"; then
+        cat "$failure_log" >&2
+        fail "$label unexpectedly reached an authenticated proof state"
+    fi
+    if grep -Fq "$forbidden_secret" "$failure_log"; then
+        cat "$failure_log" >&2
+        fail "$label exposed its VNC password in output"
+    fi
+}
+
 temporary_directory="$(mktemp -d)"
 printf '%s\n' "$password" > "$temporary_directory/vnc_password"
 chmod 0444 "$temporary_directory/vnc_password"
@@ -151,6 +189,20 @@ native_pid=""
     fail "native adapter exited with status $native_status after proof verification"
 }
 cat "$spike_log"
+
+wrong_password='definitely-wrong-native-password'
+printf '%s\n' "$wrong_password" > "$temporary_directory/wrong_vnc_password"
+chmod 0444 "$temporary_directory/wrong_vnc_password"
+run_expected_connection_failure \
+    wrong-password \
+    5901 \
+    "$temporary_directory/wrong_vnc_password" \
+    "$wrong_password"
+run_expected_connection_failure \
+    unreachable-port \
+    1 \
+    "$temporary_directory/vnc_password" \
+    "$password"
 
 if docker logs "$container_name" 2>&1 | grep -Fq "$password"; then
     fail "runtime password appeared in desktop logs"
