@@ -475,8 +475,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
             }
         }
         if self.connected_since.is_some_and(|since| {
-            Instant::now().saturating_duration_since(since)
-                >= self.settings.stable_connection_reset
+            Instant::now().saturating_duration_since(since) >= self.settings.stable_connection_reset
         }) {
             self.reconnect_attempt = 0;
             lock_unpoisoned(self.snapshot).reconnect_attempts = 0;
@@ -528,9 +527,8 @@ impl<S: WorkerSession> LoopState<'_, S> {
             let _ = self.transition(ConnectionState::Disconnected);
         }
         let _ = self.transition(ConnectionState::Reconnecting);
-        self.next_connect = Some(
-            Instant::now() + reconnect_delay(self.settings, self.reconnect_attempt),
-        );
+        self.next_connect =
+            Some(Instant::now() + reconnect_delay(self.settings, self.reconnect_attempt));
     }
 
     fn manual_reconnect(&mut self) -> Result<(), DesktopError> {
@@ -541,7 +539,10 @@ impl<S: WorkerSession> LoopState<'_, S> {
             return Err(DesktopError::ReconnectRateLimited);
         }
         let state = lock_unpoisoned(self.snapshot).state;
-        if matches!(state, ConnectionState::Starting | ConnectionState::Connecting) {
+        if matches!(
+            state,
+            ConnectionState::Starting | ConnectionState::Connecting
+        ) {
             return Err(DesktopError::WorkerUnavailable);
         }
         self.last_manual_reconnect = Some(now);
@@ -591,9 +592,9 @@ impl<S: WorkerSession> LoopState<'_, S> {
             WorkerCommand::SetClipboard { text } => {
                 session.send_clipboard(&text).map_err(DesktopError::from)
             }
-            WorkerCommand::RequestFullRefresh => session
-                .request_full_refresh()
-                .map_err(DesktopError::from),
+            WorkerCommand::RequestFullRefresh => {
+                session.request_full_refresh().map_err(DesktopError::from)
+            }
             WorkerCommand::Click { .. }
             | WorkerCommand::DoubleClick { .. }
             | WorkerCommand::Scroll { .. }
@@ -762,14 +763,12 @@ fn reconnect_delay(settings: &WorkerSettings, attempt: u32) -> Duration {
     let minimum_ms = settings.reconnect_min_delay.as_millis();
     let maximum_ms = settings.reconnect_max_delay.as_millis();
     let base_ms = minimum_ms.saturating_mul(multiplier).min(maximum_ms);
-    let jitter_bound = base_ms
-        .saturating_mul(u128::from(settings.reconnect_jitter_per_mille))
-        / 1_000;
+    let jitter_bound =
+        base_ms.saturating_mul(u128::from(settings.reconnect_jitter_per_mille)) / 1_000;
     let jitter = if jitter_bound == 0 {
         0
     } else {
-        u128::from(attempt.wrapping_mul(1_103_515_245).wrapping_add(12_345))
-            % (jitter_bound + 1)
+        u128::from(attempt.wrapping_mul(1_103_515_245).wrapping_add(12_345)) % (jitter_bound + 1)
     };
     let delay_ms = base_ms.saturating_add(jitter).min(maximum_ms);
     Duration::from_millis(u64::try_from(delay_ms).unwrap_or(u64::MAX))
@@ -794,7 +793,9 @@ fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(test)]
