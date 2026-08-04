@@ -64,7 +64,6 @@ text = replace_once(
 
 access_log_code = dedent(
     r'''
-    #[derive(Debug)]
     struct AccessLogContext {
         method: Method,
         path: String,
