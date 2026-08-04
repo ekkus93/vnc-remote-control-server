@@ -32,3 +32,16 @@ def replace_once(path: Path, old: str, new: str) -> None:
 
 candidate.replace_once = replace_once
 candidate.main()
+
+worker = candidate.ROOT / "crates/controller-api/src/worker.rs"
+text = worker.read_text(encoding="utf-8")
+old = "            if event.kind == DesktopEventKind::ClipboardRevision { revision: 1 } {\n"
+new = (
+    "            if matches!(\n"
+    "                event.kind,\n"
+    "                DesktopEventKind::ClipboardRevision { revision: 1 }\n"
+    "            ) {\n"
+)
+if text.count(old) != 1:
+    raise SystemExit("worker.rs: expected one clipboard event assertion")
+worker.write_text(text.replace(old, new, 1), encoding="utf-8")
