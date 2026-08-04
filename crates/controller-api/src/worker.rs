@@ -1,14 +1,21 @@
 //! Single-session desktop worker lifecycle.
 //!
-//! The worker owns the native adapter on exactly one dedicated thread. API and
-//! asynchronous runtime tasks interact only through bounded channels and shared
-//! status snapshots.
+//! The worker owns the native adapter and canonical framebuffer writer on
+//! exactly one dedicated thread. API and asynchronous runtime tasks interact
+//! only through bounded channels, shared status snapshots, immutable
+//! framebuffer snapshots, and bounded screenshot services.
 
+use crate::framebuffer::{
+    FramebufferError, FramebufferMetadata, FramebufferSnapshot, FramebufferStore,
+};
+use crate::screenshot::{ScreenshotError, ScreenshotService};
 use libvnc_adapter::{
-    NativeClient, NativeClientConfig, NativeDisplayInfo, NativeError, PollOutcome,
+    NativeClient, NativeClientConfig, NativeDisplayInfo, NativeError, NativeFramebuffer,
+    PollOutcome,
 };
 use remote_desktop_core::{
-    ConnectionState, Coordinate, DesktopError, DesktopEventKind, KeyboardKey, WorkerCommand,
+    ConnectionState, Coordinate, DesktopError, DesktopEventKind, KeyboardKey,
+    MAX_FRAMEBUFFER_BYTES, WorkerCommand,
 };
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,6 +38,8 @@ pub struct WorkerSettings {
     pub command_capacity: usize,
     /// Maximum events waiting for the event consumer.
     pub event_capacity: usize,
+    /// Maximum canonical RGBA framebuffer allocation.
+    pub maximum_framebuffer_bytes: usize,
     /// Maximum native poll duration before command processing resumes.
     pub poll_interval: Duration,
     /// Maximum wait for thread startup acknowledgement.
@@ -63,6 +72,13 @@ impl WorkerSettings {
         if self.command_capacity == 0 || self.event_capacity == 0 {
             return Err(DesktopError::Configuration(
                 "worker channel capacities must be nonzero".to_owned(),
+            ));
+        }
+        if self.maximum_framebuffer_bytes == 0
+            || self.maximum_framebuffer_bytes > MAX_FRAMEBUFFER_BYTES
+        {
+            return Err(DesktopError::Configuration(
+                "worker framebuffer limit is invalid".to_owned(),
             ));
         }
         for (name, value) in [
@@ -127,7 +143,7 @@ pub struct WorkerSnapshot {
     pub reconnect_attempts: u32,
     /// Last bounded failure category.
     pub last_failure: Option<WorkerFailureKind>,
-    /// Current complete framebuffer revision, when available.
+    /// Current coherent process-local framebuffer revision, when available.
     pub framebuffer_revision: Option<u64>,
     /// Commands rejected because the bounded queue was full.
     pub rejected_commands: u64,
@@ -170,11 +186,12 @@ impl CommandTicket {
     }
 }
 
-/// Cloneable bounded command and status handle.
+/// Cloneable bounded command, status, and framebuffer-read handle.
 #[derive(Clone)]
 pub struct WorkerClient {
     commands: SyncSender<CommandEnvelope>,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
+    framebuffer: FramebufferStore,
     next_command_id: Arc<AtomicU64>,
 }
 
@@ -209,6 +226,31 @@ impl WorkerClient {
     /// Returns one coherent status snapshot.
     pub fn snapshot(&self) -> WorkerSnapshot {
         lock_unpoisoned(&self.snapshot).clone()
+    }
+
+    /// Returns coherent framebuffer metadata without copying pixels.
+    pub fn framebuffer_metadata(&self) -> FramebufferMetadata {
+        self.framebuffer.metadata()
+    }
+
+    /// Returns one immutable complete current framebuffer snapshot.
+    pub fn framebuffer_snapshot(&self) -> Result<FramebufferSnapshot, FramebufferError> {
+        self.framebuffer.current_snapshot()
+    }
+
+    /// Creates a bounded screenshot service over the worker-owned framebuffer.
+    pub fn screenshot_service(
+        &self,
+        process_instance: &str,
+        maximum_concurrent_encodes: usize,
+        encode_timeout: Duration,
+    ) -> Result<ScreenshotService, ScreenshotError> {
+        ScreenshotService::new(
+            self.framebuffer.clone(),
+            process_instance,
+            maximum_concurrent_encodes,
+            encode_timeout,
+        )
     }
 }
 
@@ -262,6 +304,8 @@ impl DesktopWorker {
     {
         settings.validate()?;
         let startup_timeout = settings.startup_timeout;
+        let framebuffer = FramebufferStore::new(settings.maximum_framebuffer_bytes)?;
+        let thread_framebuffer = framebuffer.clone();
         let (command_tx, command_rx) = sync_channel(settings.command_capacity);
         let (event_tx, event_rx) = sync_channel(settings.event_capacity);
         let (startup_tx, startup_rx) = sync_channel(1);
@@ -288,6 +332,7 @@ impl DesktopWorker {
                     event_tx,
                     startup_tx,
                     thread_snapshot,
+                    thread_framebuffer,
                 );
             })
             .map_err(|error| {
@@ -299,6 +344,7 @@ impl DesktopWorker {
                 client: WorkerClient {
                     commands: command_tx,
                     snapshot,
+                    framebuffer,
                     next_command_id: Arc::new(AtomicU64::new(1)),
                 },
                 events: WorkerEvents { receiver: event_rx },
@@ -355,6 +401,7 @@ trait WorkerSession {
     fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError>;
     fn request_full_refresh(&mut self) -> Result<(), NativeError>;
     fn display_info(&self) -> Result<NativeDisplayInfo, NativeError>;
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError>;
     fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError>;
     fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError>;
     fn send_clipboard(&mut self, text: &str) -> Result<(), NativeError>;
@@ -371,6 +418,10 @@ impl WorkerSession for NativeClient {
 
     fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
         NativeClient::display_info(self)
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        NativeClient::framebuffer(self)
     }
 
     fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError> {
@@ -390,8 +441,10 @@ struct LoopState<'a, S> {
     settings: &'a WorkerSettings,
     snapshot: &'a Arc<Mutex<WorkerSnapshot>>,
     events: &'a SyncSender<WorkerEvent>,
+    framebuffer: FramebufferStore,
     event_sequence: u64,
     session: Option<S>,
+    last_native_revision: Option<u64>,
     button_mask: u8,
     last_coordinate: Option<Coordinate>,
     pressed_keys: HashSet<KeyboardKey>,
@@ -454,24 +507,32 @@ impl<S: WorkerSession> LoopState<'_, S> {
     fn connected_message(&mut self, display: NativeDisplayInfo) -> Result<(), DesktopError> {
         self.last_message = Instant::now();
         self.probe_sent = None;
-        let prior_revision = {
-            let mut current = lock_unpoisoned(self.snapshot);
-            current.last_message_at = Some(SystemTime::now());
-            current.framebuffer_revision
-        };
-        if display.complete {
+        lock_unpoisoned(self.snapshot).last_message_at = Some(SystemTime::now());
+
+        if display.complete && self.last_native_revision != Some(display.revision) {
+            let native = self
+                .session
+                .as_ref()
+                .ok_or(DesktopError::WorkerUnavailable)?
+                .framebuffer()?;
+            validate_native_frame(display, &native)?;
+            let revision = self.framebuffer.replace_native_rgbx(
+                native.width,
+                native.height,
+                &native.bytes,
+            )?;
+            self.last_native_revision = Some(native.revision);
+            lock_unpoisoned(self.snapshot).framebuffer_revision = Some(revision);
+            self.publish(DesktopEventKind::FramebufferRevision { revision });
+        }
+
+        if display.complete && self.last_native_revision == Some(display.revision) {
             if lock_unpoisoned(self.snapshot).state != ConnectionState::Connected {
                 self.transition(ConnectionState::Connected)?;
                 let mut current = lock_unpoisoned(self.snapshot);
                 current.connected_at = Some(SystemTime::now());
                 current.last_failure = None;
                 self.connected_since = Some(Instant::now());
-            }
-            if prior_revision != Some(display.revision) {
-                lock_unpoisoned(self.snapshot).framebuffer_revision = Some(display.revision);
-                self.publish(DesktopEventKind::FramebufferRevision {
-                    revision: display.revision,
-                });
             }
         }
         if self.connected_since.is_some_and(|since| {
@@ -509,11 +570,13 @@ impl<S: WorkerSession> LoopState<'_, S> {
     fn invalidate(&mut self) {
         self.release_input();
         self.session = None;
+        self.last_native_revision = None;
+        let store_changed = self.framebuffer.invalidate();
         let had_frame = lock_unpoisoned(self.snapshot)
             .framebuffer_revision
             .take()
             .is_some();
-        if had_frame {
+        if store_changed || had_frame {
             self.publish(DesktopEventKind::FramebufferInvalidated);
         }
         self.connected_since = None;
@@ -619,7 +682,12 @@ impl<S: WorkerSession> LoopState<'_, S> {
                     .as_ref()
                     .ok_or(DesktopError::WorkerUnavailable)?
                     .display_info()?;
-                self.connected_message(display)
+                if self.connected_message(display).is_err() {
+                    self.record_failure(WorkerFailureKind::Protocol);
+                    self.invalidate();
+                    self.schedule_reconnect();
+                }
+                Ok(())
             }
             Ok(PollOutcome::TimedOut) => {
                 let now = Instant::now();
@@ -657,6 +725,7 @@ fn run_worker<F, S>(
     events: SyncSender<WorkerEvent>,
     startup: SyncSender<()>,
     snapshot: Arc<Mutex<WorkerSnapshot>>,
+    framebuffer: FramebufferStore,
 ) where
     F: FnMut() -> Result<S, NativeError>,
     S: WorkerSession,
@@ -666,8 +735,10 @@ fn run_worker<F, S>(
         settings: &settings,
         snapshot: &snapshot,
         events: &events,
+        framebuffer,
         event_sequence: 0,
         session: None,
+        last_native_revision: None,
         button_mask: 0,
         last_coordinate: None,
         pressed_keys: HashSet::new(),
@@ -749,12 +820,25 @@ fn run_worker<F, S>(
         }
     }
 
-    state.release_input();
-    state.session = None;
+    state.invalidate();
     let _ = state.transition(ConnectionState::Stopped);
     if !orderly_shutdown {
         lock_unpoisoned(&snapshot).fatal_exit = true;
     }
+}
+
+fn validate_native_frame(
+    display: NativeDisplayInfo,
+    native: &NativeFramebuffer,
+) -> Result<(), DesktopError> {
+    if !display.complete
+        || native.width != display.width
+        || native.height != display.height
+        || native.revision != display.revision
+    {
+        return Err(DesktopError::Protocol);
+    }
+    Ok(())
 }
 
 fn reconnect_delay(settings: &WorkerSettings, attempt: u32) -> Duration {
@@ -834,10 +918,19 @@ mod tests {
 
         fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
             Ok(NativeDisplayInfo {
-                width: 1_280,
-                height: 800,
+                width: 2,
+                height: 2,
                 revision: 1,
                 complete: true,
+            })
+        }
+
+        fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+            Ok(NativeFramebuffer {
+                width: 2,
+                height: 2,
+                revision: 1,
+                bytes: vec![1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0],
             })
         }
 
@@ -869,6 +962,7 @@ mod tests {
             },
             command_capacity: 4,
             event_capacity: 16,
+            maximum_framebuffer_bytes: MAX_FRAMEBUFFER_BYTES,
             poll_interval: Duration::from_millis(1),
             startup_timeout: Duration::from_secs(1),
             reconnect_min_delay: Duration::from_millis(2),
@@ -899,9 +993,13 @@ mod tests {
     }
 
     #[test]
-    fn settings_reject_zero_capacities_and_invalid_delay_order() {
+    fn settings_reject_zero_capacities_invalid_frame_limit_and_delay_order() {
         let mut candidate = settings();
         candidate.command_capacity = 0;
+        assert!(candidate.validate().is_err());
+
+        let mut candidate = settings();
+        candidate.maximum_framebuffer_bytes = 0;
         assert!(candidate.validate().is_err());
 
         let mut candidate = settings();
@@ -911,11 +1009,17 @@ mod tests {
     }
 
     #[test]
-    fn worker_connects_accepts_commands_and_joins_shutdown() {
+    fn worker_commits_frame_accepts_commands_and_joins_shutdown() {
         let worker = DesktopWorker::spawn_with_factory(settings(), || Ok(healthy_session()))
             .expect("worker spawns");
         let client = worker.client();
         wait_for_state(&client, ConnectionState::Connected);
+        let snapshot = client.framebuffer_snapshot().expect("current frame");
+        assert_eq!(snapshot.width(), 2);
+        assert_eq!(snapshot.height(), 2);
+        assert_eq!(snapshot.revision(), 1);
+        assert_eq!(&snapshot.rgba()[0..4], &[1, 2, 3, 255]);
+
         let display = DisplayInfo::new(1_280, 800, 24, 1, true).expect("display");
         let coordinate = Coordinate::new(10, 10, display).expect("coordinate");
         client
@@ -927,6 +1031,10 @@ mod tests {
             .shutdown(Duration::from_secs(1))
             .expect("worker joins");
         assert_eq!(client.snapshot().state, ConnectionState::Stopped);
+        assert_eq!(
+            client.framebuffer_snapshot().err(),
+            Some(FramebufferError::Stale)
+        );
     }
 
     #[test]
@@ -944,6 +1052,7 @@ mod tests {
         let client = worker.client();
         wait_for_state(&client, ConnectionState::Connected);
         assert!(calls.load(Ordering::SeqCst) >= 2);
+        assert_eq!(client.framebuffer_snapshot().expect("frame").revision(), 1);
         worker
             .shutdown(Duration::from_secs(1))
             .expect("worker joins");
@@ -964,13 +1073,17 @@ mod tests {
         wait_for_state(&client, ConnectionState::AuthenticationFailed);
         thread::sleep(Duration::from_millis(30));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            client.framebuffer_snapshot().err(),
+            Some(FramebufferError::Unavailable)
+        );
         worker
             .shutdown(Duration::from_secs(1))
             .expect("worker joins");
     }
 
     #[test]
-    fn confirmed_stall_invalidates_and_reconnects() {
+    fn confirmed_stall_invalidates_reconnects_and_advances_revision() {
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_factory = Arc::clone(&calls);
         let modes = Arc::new(Mutex::new(VecDeque::from([
@@ -995,6 +1108,70 @@ mod tests {
         }
         assert!(calls.load(Ordering::SeqCst) >= 2);
         wait_for_state(&client, ConnectionState::Connected);
+        assert_eq!(client.framebuffer_snapshot().expect("frame").revision(), 2);
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
+    }
+
+    #[test]
+    fn mismatched_native_frame_never_reaches_connected() {
+        struct MismatchedSession;
+
+        impl WorkerSession for MismatchedSession {
+            fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
+                thread::sleep(timeout);
+                Ok(PollOutcome::MessageProcessed)
+            }
+
+            fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+                Ok(())
+            }
+
+            fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+                Ok(NativeDisplayInfo {
+                    width: 2,
+                    height: 2,
+                    revision: 5,
+                    complete: true,
+                })
+            }
+
+            fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+                Ok(NativeFramebuffer {
+                    width: 2,
+                    height: 2,
+                    revision: 4,
+                    bytes: vec![0; 16],
+                })
+            }
+
+            fn send_pointer(
+                &mut self,
+                _coordinate: Coordinate,
+                _button_mask: u8,
+            ) -> Result<(), NativeError> {
+                Ok(())
+            }
+
+            fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+                Ok(())
+            }
+
+            fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+                Ok(())
+            }
+        }
+
+        let worker = DesktopWorker::spawn_with_factory(settings(), || Ok(MismatchedSession))
+            .expect("worker spawns");
+        let client = worker.client();
+        thread::sleep(Duration::from_millis(30));
+        assert_ne!(client.snapshot().state, ConnectionState::Connected);
+        assert_eq!(
+            client.framebuffer_snapshot().err(),
+            Some(FramebufferError::Unavailable)
+        );
         worker
             .shutdown(Duration::from_secs(1))
             .expect("worker joins");
