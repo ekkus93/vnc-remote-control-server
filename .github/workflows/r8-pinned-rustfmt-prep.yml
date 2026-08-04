@@ -1,0 +1,47 @@
+name: R8 pinned rustfmt preparation
+
+on:
+  push:
+    branches:
+      - r8-pinned-rustfmt-prep-20260804
+
+permissions:
+  contents: write
+
+jobs:
+  format-input:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out preparation branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+
+      - name: Apply exact workspace formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --all
+          mapfile -t changed < <(git diff --name-only)
+          if [[ ${#changed[@]} -ne 1 || "${changed[0]}" != "crates/controller-api/src/input.rs" ]]; then
+            printf 'Unexpected formatter diff:\n' >&2
+            printf '  %s\n' "${changed[@]}" >&2
+            exit 1
+          fi
+
+      - name: Commit formatting and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r8-pinned-rustfmt-prep.yml
+          git add crates/controller-api/src/input.rs
+          git commit -m "Apply pinned formatting to R8 input controller"
+          git push origin HEAD:r8-pinned-rustfmt-prep-20260804
