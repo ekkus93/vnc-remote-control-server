@@ -41,6 +41,39 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
 
+      - name: Narrow generator state-field target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tools/r10_http_mutating.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    text = replace_once(
+                  text,
+                  "    maximum_json_bytes: usize,\\n",
+                  "    maximum_json_bytes: usize,\\n    command_ack_timeout: Duration,\\n",
+                  "HTTP state acknowledgement field",
+              )
+          '''
+          new = '''    text = replace_once(
+                  text,
+                  "    shutting_down: Arc<AtomicBool>,\\n"
+                  "    maximum_json_bytes: usize,\\n"
+                  "}\\n",
+                  "    shutting_down: Arc<AtomicBool>,\\n"
+                  "    maximum_json_bytes: usize,\\n"
+                  "    command_ack_timeout: Duration,\\n"
+                  "}\\n",
+                  "HTTP state acknowledgement field",
+              )
+          '''
+          if text.count(old) != 1:
+              raise SystemExit("generator state-field patch target is not unique")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+
       - name: Generate mutating HTTP candidate
         run: python3 tools/r10_http_mutating.py
 
@@ -143,5 +176,3 @@ jobs:
         run: |
           set -euo pipefail
           gh issue comment 1 --body "<!-- r10-http-mutating-candidate --> R10 mutating HTTP candidate failed. Run: ${{ github.run_id }}. SHA: ${{ github.sha }}."
-
-# Triggered after the workflow became available on master.
