@@ -19,7 +19,7 @@ A narrow shim provides these properties:
 - one allocation and cleanup path;
 - callback context owned for the full native-client lifetime;
 - checked framebuffer allocation before assigning `client->frameBuffer`;
-- no callback from C into Rust;
+- No callback from C into Rust;
 - no Rust panic can cross a C callback boundary;
 - explicit error codes without passwords, clipboard values, typed text, or pixels;
 - a stable Rust-facing ABI independent of unrelated `rfbClient` fields.
