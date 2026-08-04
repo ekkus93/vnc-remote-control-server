@@ -5,9 +5,10 @@ Date: 2026-08-04
 ## Implementation
 
 - Implementation commit: `6997362414336b8ef727c1a5cbabdbb1bc1c4b94`
+- Clippy/test-contract repair: `df911e883bff6e52a78b4ddbf00d9d73067ffcf1`
 - Branch policy: direct `master`; no implementation branch or pull request
-- Temporary validation ref: removed after `master` fast-forward
-- Temporary workflow and transformation script: absent from final tree
+- Temporary validation refs: removed after `master` fast-forward
+- Temporary workflows and transformation scripts: absent from final tree
 
 ## Implemented contract
 
@@ -22,7 +23,7 @@ Date: 2026-08-04
 
 ## Pre-publication validation
 
-The candidate commit was produced only after all of the following succeeded with Rust `1.97.1`:
+Both validated candidates were produced only after all of the following succeeded with Rust `1.97.1`:
 
 ```text
 cargo fmt --all --check
@@ -39,6 +40,11 @@ Worker-level tests cover:
 - propagation of partial native input failure after release retry;
 - release of tracked mouse and keyboard state during orderly shutdown.
 
-## Authoritative CI
+## Authoritative CI history
 
-This evidence commit intentionally triggers the ordinary `CI` workflow. Exact run and job identifiers are pending completion and must be recorded before R8 worker integration is considered closed.
+Run `30893582994` on SHA `7748ec0acb97763aba315b66126608a031bffa80` proved the unchanged live desktop/native path remained green, but the quality job correctly failed on two test-contract defects:
+
+- an unused test-only `DisplayInfo` import;
+- an assertion using nonexistent `DesktopError::CoordinateOutOfRange` instead of the actual `DesktopError::InvalidCoordinate` contract.
+
+The defects were fixed at their source without warning suppression. This evidence update intentionally triggers a new ordinary `CI` run. Exact final run and job identifiers are pending completion and must be recorded before R8 worker integration is considered closed.
