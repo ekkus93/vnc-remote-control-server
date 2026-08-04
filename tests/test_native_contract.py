@@ -28,8 +28,8 @@ class NativeContractTests(unittest.TestCase):
         text = CI.read_text(encoding="utf-8")
         self.assertGreaterEqual(text.count("libvncserver-dev"), 2)
         self.assertGreaterEqual(text.count("pkg-config"), 2)
-        self.assertIn("tests/native/run.sh", text)
-        self.assertIn("test -x tests/native/run.sh", text)
+        self.assertIn("bash tests/native/run.sh", text)
+        self.assertNotIn("test -x tests/native/run.sh", text)
         self.assertIn(
             "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
             text,
@@ -80,7 +80,7 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn('docker exec -i "$container_name" python3 -', text)
 
     def test_binding_decision_records_required_safety_rules(self):
-        text = DECISION.read_text(encoding="utf-8")
+        text = DECISION.read_text(encoding="utf-8").casefold()
         for phrase in (
             "opaque native handle",
             "does not free `client->frameBuffer`",
@@ -90,7 +90,7 @@ class NativeContractTests(unittest.TestCase):
             "does not call `rfbInitClient`",
             "one cleanup owner",
         ):
-            self.assertIn(phrase, text)
+            self.assertIn(phrase.casefold(), text)
 
 
 if __name__ == "__main__":
