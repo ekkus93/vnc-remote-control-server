@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - .github/workflows/complete-r10-final-items.yml
+      - .github/complete_r10.py
 
 permissions:
   contents: write
