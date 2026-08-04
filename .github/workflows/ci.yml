@@ -79,7 +79,8 @@ jobs:
             desktop/healthcheck.sh \
             desktop/xstartup \
             tests/desktop/run.sh \
-            tests/native/run.sh
+            tests/native/run.sh \
+            tests/worker-e2e/run.sh
 
       - name: Build CI evidence
         env:
@@ -162,3 +163,6 @@ jobs:
 
       - name: Run native adapter smoke test
         run: bash tests/native/run.sh
+
+      - name: Run WorkerHandle TigerVNC input E2E test
+        run: bash tests/worker-e2e/run.sh
