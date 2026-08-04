@@ -54,19 +54,11 @@ text = replace_once(
 )
 text = replace_once(
     text,
-    dedent(
-        """\
-                .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
-                .layer(middleware::from_fn_with_state(
-        """
-    ),
-    dedent(
-        """\
-                .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
-                .layer(middleware::from_fn(access_log))
-                .layer(middleware::from_fn_with_state(
-        """
-    ),
+    "        .layer(DefaultBodyLimit::max(state.maximum_json_bytes))\n"
+    "        .layer(middleware::from_fn_with_state(\n",
+    "        .layer(DefaultBodyLimit::max(state.maximum_json_bytes))\n"
+    "        .layer(middleware::from_fn(access_log))\n"
+    "        .layer(middleware::from_fn_with_state(\n",
     "access log layer",
 )
 
