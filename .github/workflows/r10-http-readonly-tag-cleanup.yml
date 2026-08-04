@@ -32,3 +32,5 @@ jobs:
               exit 1
           fi
           gh issue comment 1 --body "<!-- r10-http-readonly-cleanup --> Temporary tag ${tag} was removed after replay commit 151053b0d6dccf6422b4cd27b321d0904e46122c reached master."
+
+# Triggered after the cleanup workflow became available on master.
