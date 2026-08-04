@@ -11,17 +11,36 @@ The v0.1 architecture uses:
 
 ## Status
 
-Implementation is in progress under [`docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md`](docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md). The repository currently contains the engineering baseline and core domain model. Later milestones add the desktop image, native adapter, controller API, Compose deployment, and real end-to-end validation.
+Implementation is in progress on `master` under the authoritative rebased plan:
 
-The authoritative `master` quality result is published to GitHub issue `#1` by the repository's ChatGPT-readable CI status bridge.
+- [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md)
+- [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md)
+
+Implemented and validated so far:
+
+- pinned Rust workspace and committed lockfile;
+- warning-denied `remote-desktop-core` domain model and tests;
+- digest-pinned Debian 13 XFCE/TigerVNC desktop image;
+- non-root desktop runtime with file-mounted VNC secret;
+- deterministic graphical test application;
+- real correct-password, wrong-password, missing-secret, health, and shutdown desktop smoke checks;
+- ChatGPT-readable CI status publishing through GitHub issue `#1`.
+
+Explicit placeholders remain:
+
+- `libvnc-adapter` does not yet contain the production LibVNCClient binding or worker;
+- `controller-api` does not yet contain the production HTTP/WebSocket server;
+- production Compose, integration tests, and end-to-end API validation are not yet implemented.
+
+The original [`docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md`](docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md) is retained as historical planning context. The dated rebased TODO above is authoritative for current implementation work.
 
 ## Product boundary
 
-v0.1 provides pixel observation and remote desktop input primitives. OCR, Playwright, accessibility-tree automation, AI planning, multiple sessions, and a browser viewer are explicitly outside the v0.1 scope.
+v0.1 provides pixel observation and remote-desktop input primitives for exactly one project-owned Debian desktop. OCR, Playwright, accessibility-tree automation, AI planning, multiple sessions, arbitrary external VNC servers, and a browser viewer are outside the v0.1 scope.
 
 ## Quality policy
 
-Every first-party compiler warning, Clippy warning, test failure, shell-lint finding, and workflow-contract violation is treated as a defect. CI denies warnings; warnings are fixed rather than suppressed.
+Every first-party compiler warning, Clippy warning, lint finding, test failure, shell finding, Dockerfile finding, and workflow-contract violation is treated as a defect. Warnings are fixed at their source rather than suppressed, hidden, downgraded, or ignored.
 
 ## Development
 
@@ -34,11 +53,17 @@ make test
 make build
 ```
 
-Container and integration commands become active as their milestones land. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for prerequisites and the full command surface.
+Container and integration commands become authoritative only when their backing milestones and CI gates are implemented. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for prerequisites and the current command surface.
 
-## Security
+## Security and operator boundaries
 
-Do not expose VNC port `5901` publicly. Report suspected vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
+- Production must never publish raw VNC port `5901` to the host or public network.
+- Development-only raw VNC access must bind to loopback, for example `127.0.0.1:5901:5901`.
+- API and VNC credentials must come from secret files by default and must never be baked into images or committed to source control.
+- Typed text, clipboard contents, VNC passwords, bearer tokens, and framebuffer screenshots must never be written to application logs, metrics, or event payloads.
+- Terminate TLS at a trusted reverse proxy or another explicitly documented trusted network boundary before exposing the future controller API beyond localhost.
+
+Report suspected vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
 
 ## License
 
