@@ -524,14 +524,15 @@ impl<S: WorkerSession> LoopState<'_, S> {
             self.publish(DesktopEventKind::FramebufferRevision { revision });
         }
 
-        if display.complete && self.last_native_revision == Some(display.revision) {
-            if lock_unpoisoned(self.snapshot).state != ConnectionState::Connected {
-                self.transition(ConnectionState::Connected)?;
-                let mut current = lock_unpoisoned(self.snapshot);
-                current.connected_at = Some(SystemTime::now());
-                current.last_failure = None;
-                self.connected_since = Some(Instant::now());
-            }
+        if display.complete
+            && self.last_native_revision == Some(display.revision)
+            && lock_unpoisoned(self.snapshot).state != ConnectionState::Connected
+        {
+            self.transition(ConnectionState::Connected)?;
+            let mut current = lock_unpoisoned(self.snapshot);
+            current.connected_at = Some(SystemTime::now());
+            current.last_failure = None;
+            self.connected_since = Some(Instant::now());
         }
         if self.connected_since.is_some_and(|since| {
             Instant::now().saturating_duration_since(since) >= self.settings.stable_connection_reset
