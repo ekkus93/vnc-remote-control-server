@@ -5,6 +5,7 @@ readonly image_name="vnc-remote-control-desktop:native-test"
 readonly container_name="vnc-remote-control-native-test-${GITHUB_RUN_ID:-local}-$$"
 readonly password='vnc-test'
 temporary_directory=""
+native_pid=""
 
 log() {
     printf '[native-smoke] %s\n' "$*" >&2
@@ -16,6 +17,10 @@ fail() {
 }
 
 cleanup() {
+    if [[ -n "$native_pid" ]] && kill -0 "$native_pid" 2>/dev/null; then
+        kill -TERM "$native_pid" 2>/dev/null || true
+        wait "$native_pid" 2>/dev/null || true
+    fi
     docker rm --force "$container_name" >/dev/null 2>&1 || true
     if [[ -n "$temporary_directory" ]]; then
         rm -rf -- "$temporary_directory"
@@ -59,11 +64,38 @@ docker run --detach \
 wait_for_health
 
 log "connecting through the Rust LibVNCClient adapter"
-timeout --kill-after=2s 30s env \
+spike_log="$temporary_directory/native-spike.log"
+timeout --kill-after=2s 35s env \
     VRC_VNC_HOST=127.0.0.1 \
     VRC_VNC_PORT=5901 \
     VRC_VNC_PASSWORD_FILE="$temporary_directory/vnc_password" \
-    cargo run --locked --quiet -p libvnc-adapter --bin native-spike
+    VRC_PROOF_HOLD_SECONDS=15 \
+    cargo run --locked --quiet -p libvnc-adapter --bin native-spike \
+    >"$spike_log" 2>&1 &
+native_pid=$!
+
+proof_deadline=$((SECONDS + 25))
+proof_ready=0
+while (( SECONDS < proof_deadline )); do
+    if grep -Fq 'proof_ready=1' "$spike_log"; then
+        proof_ready=1
+        break
+    fi
+    if ! kill -0 "$native_pid" 2>/dev/null; then
+        set +e
+        wait "$native_pid"
+        native_status=$?
+        set -e
+        native_pid=""
+        cat "$spike_log" >&2
+        fail "native adapter exited before proof verification with status $native_status"
+    fi
+    sleep 0.1
+done
+[[ "$proof_ready" -eq 1 ]] || {
+    cat "$spike_log" >&2
+    fail "native adapter did not reach the proof-ready state"
+}
 
 log "verifying pointer and key observations"
 docker exec -i "$container_name" python3 - <<'PY'
@@ -86,7 +118,7 @@ else:
     raise AssertionError('deterministic test app did not observe native pointer and F5 input')
 PY
 
-log "verifying outbound clipboard observation"
+log "verifying outbound clipboard observation while connected"
 docker exec -i --env DISPLAY=:1 "$container_name" python3 - <<'PY'
 import time
 import tkinter as tk
@@ -105,9 +137,20 @@ while time.monotonic() < deadline:
     time.sleep(0.1)
 else:
     root.destroy()
-    raise AssertionError('desktop did not observe the native clipboard value')
+    raise AssertionError('desktop did not observe the native clipboard value while connected')
 root.destroy()
 PY
+
+set +e
+wait "$native_pid"
+native_status=$?
+set -e
+native_pid=""
+[[ "$native_status" -eq 0 ]] || {
+    cat "$spike_log" >&2
+    fail "native adapter exited with status $native_status after proof verification"
+}
+cat "$spike_log"
 
 if docker logs "$container_name" 2>&1 | grep -Fq "$password"; then
     fail "runtime password appeared in desktop logs"
