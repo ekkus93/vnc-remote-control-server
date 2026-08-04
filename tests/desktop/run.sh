@@ -44,6 +44,23 @@ wait_for_health() {
     fail "desktop health deadline exceeded"
 }
 
+viewer_log_has_auth_failure() {
+    local log_path="$1"
+    grep -Eiq 'authentication failure|authentication failed|password.*failed|security.*failed' "$log_path"
+}
+
+viewer_log_has_connection_evidence() {
+    local log_path="$1"
+    grep -Eq 'Connected to host 127\.0\.0\.1 port 5901' "$log_path" \
+        && grep -Eq 'Using RFB protocol version' "$log_path" \
+        && grep -Eq 'Choosing security type VncAuth' "$log_path"
+}
+
+viewer_log_has_framebuffer_evidence() {
+    local log_path="$1"
+    grep -Eq 'Total:[[:space:]]+[1-9][0-9]* rects,[[:space:]]+[1-9][0-9]* pixels' "$log_path"
+}
+
 run_viewer_probe() {
     local password_value="$1"
     local expected="$2"
@@ -53,7 +70,7 @@ run_viewer_probe() {
     chmod 0600 "$password_path"
 
     set +e
-    timeout 8s xvfb-run -a vncviewer \
+    timeout --foreground 8s xvfb-run -a vncviewer \
         -PasswordFile "$password_path" \
         -SecurityTypes VncAuth \
         -Shared \
@@ -62,20 +79,33 @@ run_viewer_probe() {
     local status=$?
     set -e
 
+    viewer_log_has_connection_evidence "$log_path" || {
+        cat "$log_path" >&2
+        fail "viewer probe did not reach the expected VNC protocol negotiation"
+    }
+
     if [[ "$expected" == "success" ]]; then
         [[ "$status" -eq 124 ]] || {
             cat "$log_path" >&2
-            fail "correct VNC password did not establish a persistent viewer session"
+            fail "correct VNC password did not keep an authenticated viewer session open"
+        }
+        if viewer_log_has_auth_failure "$log_path"; then
+            cat "$log_path" >&2
+            fail "correct VNC password produced authentication-failure evidence"
+        fi
+        viewer_log_has_framebuffer_evidence "$log_path" || {
+            cat "$log_path" >&2
+            fail "correct VNC password produced no decoded framebuffer evidence"
         }
     else
-        [[ "$status" -ne 124 ]] || {
-            cat "$log_path" >&2
-            fail "wrong VNC password established a viewer session"
-        }
-        grep -Eiq 'authentication|password|security|failed' "$log_path" || {
+        viewer_log_has_auth_failure "$log_path" || {
             cat "$log_path" >&2
             fail "wrong-password viewer failure was not diagnosable"
         }
+        if viewer_log_has_framebuffer_evidence "$log_path"; then
+            cat "$log_path" >&2
+            fail "wrong VNC password decoded framebuffer data"
+        fi
     fi
 }
 
