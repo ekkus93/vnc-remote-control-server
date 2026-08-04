@@ -9,8 +9,10 @@
 //! ASCII (`U+0020` through `U+007E`). Clipboard input accepts UTF-8 up to the
 //! configured byte limit but rejects embedded NUL bytes before enqueue.
 
+use crate::input::{MAX_DOUBLE_CLICK_INTERVAL_MS, MIN_DOUBLE_CLICK_INTERVAL_MS};
 use remote_desktop_core::{
-    DesktopError, KeyAction, KeyboardKey, validate_chord, validate_clipboard, validate_text,
+    DesktopError, DisplayInfo, KeyAction, KeyboardKey, MouseButton, WorkerCommand, validate_chord,
+    validate_clipboard, validate_scroll, validate_text,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
@@ -87,6 +89,123 @@ impl<'de> Deserialize<'de> for ApiKeyboardKey {
     }
 }
 
+/// Public pointer movement request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerMoveRequest {
+    /// Horizontal coordinate in the current display.
+    pub x: u32,
+    /// Vertical coordinate in the current display.
+    pub y: u32,
+}
+
+impl PointerMoveRequest {
+    /// Converts a completely validated request into a worker command.
+    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
+        Ok(WorkerCommand::MovePointer {
+            coordinate: display.validate_coordinate(self.x, self.y)?,
+        })
+    }
+}
+
+/// Public explicit mouse-button transition request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerButtonRequest {
+    /// Horizontal coordinate in the current display.
+    pub x: u32,
+    /// Vertical coordinate in the current display.
+    pub y: u32,
+    /// Mouse button to update.
+    pub button: MouseButton,
+    /// Whether the button must be held after the operation.
+    pub pressed: bool,
+}
+
+impl PointerButtonRequest {
+    /// Converts a completely validated request into a worker command.
+    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
+        Ok(WorkerCommand::SetButton {
+            coordinate: display.validate_coordinate(self.x, self.y)?,
+            button: self.button,
+            pressed: self.pressed,
+        })
+    }
+}
+
+/// Public single-click request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerClickRequest {
+    /// Horizontal coordinate in the current display.
+    pub x: u32,
+    /// Vertical coordinate in the current display.
+    pub y: u32,
+    /// Mouse button to click.
+    pub button: MouseButton,
+}
+
+impl PointerClickRequest {
+    /// Converts a completely validated request into a worker command.
+    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
+        Ok(WorkerCommand::Click {
+            coordinate: display.validate_coordinate(self.x, self.y)?,
+            button: self.button,
+        })
+    }
+}
+
+/// Public atomic double-click request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerDoubleClickRequest {
+    /// Horizontal coordinate in the current display.
+    pub x: u32,
+    /// Vertical coordinate in the current display.
+    pub y: u32,
+    /// Mouse button to click twice.
+    pub button: MouseButton,
+    /// Bounded delay between complete clicks.
+    pub interval_ms: u64,
+}
+
+impl PointerDoubleClickRequest {
+    /// Converts a completely validated request into a worker command.
+    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
+        if !(MIN_DOUBLE_CLICK_INTERVAL_MS..=MAX_DOUBLE_CLICK_INTERVAL_MS)
+            .contains(&self.interval_ms)
+        {
+            return Err(DesktopError::Configuration(
+                "double-click interval is outside the supported range".to_owned(),
+            ));
+        }
+        Ok(WorkerCommand::DoubleClick {
+            coordinate: display.validate_coordinate(self.x, self.y)?,
+            button: self.button,
+            interval_ms: self.interval_ms,
+        })
+    }
+}
+
+/// Public vertical wheel request. Horizontal scrolling is not part of v0.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PointerScrollRequest {
+    /// Horizontal coordinate in the current display.
+    pub x: u32,
+    /// Vertical coordinate in the current display.
+    pub y: u32,
+    /// Signed vertical wheel steps.
+    pub delta_y: i32,
+}
+
+impl PointerScrollRequest {
+    /// Converts a completely validated request into a worker command.
+    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
+        validate_scroll(0, self.delta_y)?;
+        Ok(WorkerCommand::Scroll {
+            coordinate: display.validate_coordinate(self.x, self.y)?,
+            delta_x: 0,
+            delta_y: self.delta_y,
+        })
+    }
+}
+
 /// Public key transition request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyRequest {
@@ -94,6 +213,16 @@ pub struct KeyRequest {
     pub key: ApiKeyboardKey,
     /// Requested transition.
     pub action: KeyAction,
+}
+
+impl KeyRequest {
+    /// Converts this validated public key request into a worker command.
+    pub fn into_command(self) -> WorkerCommand {
+        WorkerCommand::SetKey {
+            key: self.key.into_domain(),
+            pressed: self.action == KeyAction::Down,
+        }
+    }
 }
 
 /// Public chord request.
@@ -331,5 +460,70 @@ mod tests {
         assert!(FramebufferRect::new(0, u32::MAX, 1, 2, display).is_err());
         assert!(FramebufferRect::new(0, 0, 0, 1, display).is_err());
         assert!(FramebufferRect::new(0, 0, 1, 0, display).is_err());
+    }
+
+    #[test]
+    fn pointer_requests_preflight_complete_coordinates_and_bounds() {
+        let display = DisplayInfo::new(1_280, 800, 24, 1, true).expect("valid display");
+        assert_eq!(
+            PointerMoveRequest { x: 1, y: 2 }
+                .into_command(display)
+                .expect("valid move"),
+            WorkerCommand::MovePointer {
+                coordinate: display.validate_coordinate(1, 2).expect("known coordinate"),
+            }
+        );
+        assert!(matches!(
+            PointerClickRequest {
+                x: display.width,
+                y: 0,
+                button: MouseButton::Left,
+            }
+            .into_command(display),
+            Err(DesktopError::InvalidCoordinate { .. })
+        ));
+    }
+
+    #[test]
+    fn pointer_double_click_and_vertical_scroll_limits_are_explicit() {
+        let display = DisplayInfo::new(1_280, 800, 24, 1, true).expect("valid display");
+        assert!(
+            PointerDoubleClickRequest {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                interval_ms: MIN_DOUBLE_CLICK_INTERVAL_MS,
+            }
+            .into_command(display)
+            .is_ok()
+        );
+        assert!(
+            PointerDoubleClickRequest {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                interval_ms: MAX_DOUBLE_CLICK_INTERVAL_MS + 1,
+            }
+            .into_command(display)
+            .is_err()
+        );
+        assert!(
+            PointerScrollRequest {
+                x: 0,
+                y: 0,
+                delta_y: remote_desktop_core::MAX_SCROLL_STEPS,
+            }
+            .into_command(display)
+            .is_ok()
+        );
+        assert!(matches!(
+            PointerScrollRequest {
+                x: 0,
+                y: 0,
+                delta_y: remote_desktop_core::MAX_SCROLL_STEPS + 1,
+            }
+            .into_command(display),
+            Err(DesktopError::ScrollTooLarge { .. })
+        ));
     }
 }

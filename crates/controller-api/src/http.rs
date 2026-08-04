@@ -1,36 +1,43 @@
-//! Authenticated read-only HTTP routing for the controller service.
+//! Authenticated HTTP routing for the controller service.
 //!
 //! The router deliberately depends on a narrow backend trait. Production wraps
 //! `WorkerClient`; unit tests use deterministic in-memory fixtures without
 //! starting a native VNC thread. All `/v1/*` routes share one bearer-auth layer,
-//! while liveness and readiness remain public orchestration endpoints.
+//! complete request preflight, bounded worker acknowledgements, and payload-free
+//! error mapping. Liveness and readiness remain public orchestration endpoints.
 
+use crate::api_contract::{
+    ChordRequest, ClipboardRequest, KeyRequest, PointerButtonRequest, PointerClickRequest,
+    PointerDoubleClickRequest, PointerMoveRequest, PointerScrollRequest, TextRequest,
+};
 use crate::config::ControllerConfig;
 use crate::framebuffer::{FramebufferMetadata, FramebufferStatus};
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome, ScreenshotService};
 use crate::worker::{WorkerClient, WorkerFailureKind, WorkerSnapshot};
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::extract::{DefaultBodyLimit, Extension, Request, State, rejection::JsonRejection};
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use remote_desktop_core::ConnectionState;
+use remote_desktop_core::{
+    ClipboardSnapshot, ConnectionState, DesktopError, DisplayInfo, WorkerCommand,
+};
 use serde::Serialize;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_REQUEST_ID_BYTES: usize = 64;
 const DEFAULT_ERROR_MESSAGE: &str = "request could not be completed";
 
-/// Read-only backend required by the first HTTP milestone.
+/// Backend required by the authenticated HTTP surface.
 pub trait HttpBackend: Send + Sync + 'static {
     /// Returns one redacted worker lifecycle snapshot.
     fn snapshot(&self) -> WorkerSnapshot;
@@ -41,6 +48,14 @@ pub trait HttpBackend: Send + Sync + 'static {
         &self,
         if_none_match: Option<&str>,
     ) -> Result<ScreenshotOutcome, ScreenshotError>;
+    /// Executes one queued command and waits for bounded worker acknowledgement.
+    fn execute_command(
+        &self,
+        command: WorkerCommand,
+        timeout: Duration,
+    ) -> Result<u64, DesktopError>;
+    /// Returns the last valid inbound clipboard snapshot.
+    fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError>;
 }
 
 /// Production HTTP backend over one worker client and screenshot service.
@@ -79,6 +94,21 @@ impl HttpBackend for WorkerHttpBackend {
     ) -> Result<ScreenshotOutcome, ScreenshotError> {
         self.screenshots.capture(if_none_match)
     }
+
+    fn execute_command(
+        &self,
+        command: WorkerCommand,
+        timeout: Duration,
+    ) -> Result<u64, DesktopError> {
+        let ticket = self.client.submit(command)?;
+        let command_id = ticket.id();
+        ticket.wait(timeout)?;
+        Ok(command_id)
+    }
+
+    fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {
+        self.client.clipboard_snapshot()
+    }
 }
 
 /// Shared router state.
@@ -90,6 +120,7 @@ pub struct HttpState {
     request_sequence: Arc<AtomicU64>,
     shutting_down: Arc<AtomicBool>,
     maximum_json_bytes: usize,
+    command_ack_timeout: Duration,
 }
 
 impl HttpState {
@@ -99,12 +130,16 @@ impl HttpState {
         api_token: Arc<str>,
         process_instance: Arc<str>,
         maximum_json_bytes: usize,
+        command_ack_timeout: Duration,
     ) -> Result<Self, HttpBuildError> {
         if api_token.is_empty() {
             return Err(HttpBuildError::EmptyApiToken);
         }
         if maximum_json_bytes == 0 {
             return Err(HttpBuildError::InvalidBodyLimit);
+        }
+        if command_ack_timeout.is_zero() {
+            return Err(HttpBuildError::InvalidCommandAckTimeout);
         }
         if !valid_process_instance(&process_instance) {
             return Err(HttpBuildError::InvalidProcessInstance);
@@ -116,6 +151,7 @@ impl HttpState {
             request_sequence: Arc::new(AtomicU64::new(1)),
             shutting_down: Arc::new(AtomicBool::new(false)),
             maximum_json_bytes,
+            command_ack_timeout,
         })
     }
 
@@ -130,6 +166,7 @@ impl HttpState {
             Arc::clone(&config.api_token),
             Arc::clone(&config.process_instance),
             config.maximum_json_bytes,
+            config.command_ack_timeout,
         )
     }
 
@@ -158,6 +195,8 @@ pub enum HttpBuildError {
     InvalidProcessInstance,
     /// The configured global body limit is zero.
     InvalidBodyLimit,
+    /// The command acknowledgement timeout is zero.
+    InvalidCommandAckTimeout,
     /// The screenshot service could not be constructed.
     Screenshot(ScreenshotError),
 }
@@ -168,6 +207,7 @@ impl fmt::Display for HttpBuildError {
             Self::EmptyApiToken => "API token is empty",
             Self::InvalidProcessInstance => "process instance is invalid",
             Self::InvalidBodyLimit => "HTTP body limit is invalid",
+            Self::InvalidCommandAckTimeout => "command acknowledgement timeout is invalid",
             Self::Screenshot(_) => "screenshot service configuration is invalid",
         };
         formatter.write_str(message)
@@ -176,12 +216,22 @@ impl fmt::Display for HttpBuildError {
 
 impl Error for HttpBuildError {}
 
-/// Builds the read-only authenticated controller router.
+/// Builds the authenticated controller router.
 pub fn router(state: HttpState) -> Router {
     let protected = Router::new()
         .route("/status", get(status))
         .route("/display", get(display))
         .route("/screenshot.png", get(screenshot))
+        .route("/pointer/move", post(pointer_move))
+        .route("/pointer/button", post(pointer_button))
+        .route("/pointer/click", post(pointer_click))
+        .route("/pointer/double-click", post(pointer_double_click))
+        .route("/pointer/scroll", post(pointer_scroll))
+        .route("/keyboard/key", post(keyboard_key))
+        .route("/keyboard/chord", post(keyboard_chord))
+        .route("/keyboard/text", post(keyboard_text))
+        .route("/clipboard", get(clipboard).put(set_clipboard))
+        .route("/connection/reconnect", post(reconnect))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_bearer,
@@ -231,6 +281,19 @@ struct DisplayResponse {
     revision: u64,
     updated_at_unix_ms: u64,
     complete: bool,
+}
+
+#[derive(Serialize)]
+struct CommandAcceptedResponse {
+    command_id: u64,
+    status: &'static str,
+}
+
+#[derive(Serialize)]
+struct ClipboardResponse {
+    text: String,
+    revision: u64,
+    updated_at_unix_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -292,6 +355,33 @@ impl ApiError {
             "current framebuffer is unavailable",
             request_id,
         )
+    }
+
+    fn shutting_down(request_id: RequestId) -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "controller is shutting down",
+            request_id,
+        )
+    }
+
+    fn invalid_json(request_id: RequestId, payload_too_large: bool) -> Self {
+        if payload_too_large {
+            Self::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "payload_too_large",
+                "request body exceeds the configured limit",
+                request_id,
+            )
+        } else {
+            Self::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_json",
+                "request body is not valid JSON",
+                request_id,
+            )
+        }
     }
 
     fn internal(request_id: RequestId) -> Self {
@@ -358,9 +448,8 @@ async fn liveness() -> Json<HealthResponse> {
 
 async fn readiness(
     State(state): State<HttpState>,
-    request: Request,
+    Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<HealthResponse>, ApiError> {
-    let request_id = request_id(&request);
     let snapshot = state.backend.snapshot();
     let framebuffer = state.backend.framebuffer_metadata();
     if ready(&state, &snapshot, framebuffer) {
@@ -389,9 +478,8 @@ async fn status(State(state): State<HttpState>) -> Json<StatusResponse> {
 
 async fn display(
     State(state): State<HttpState>,
-    request: Request,
+    Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<DisplayResponse>, ApiError> {
-    let request_id = request_id(&request);
     let metadata = state.backend.framebuffer_metadata();
     if metadata.status != FramebufferStatus::Current {
         return Err(ApiError::framebuffer_unavailable(request_id));
@@ -415,9 +503,8 @@ async fn display(
 async fn screenshot(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    request: Request,
+    Extension(request_id): Extension<RequestId>,
 ) -> Result<Response, ApiError> {
-    let request_id = request_id(&request);
     let if_none_match = headers
         .get(IF_NONE_MATCH)
         .and_then(|value| value.to_str().ok())
@@ -443,6 +530,195 @@ async fn screenshot(
             Ok(response)
         }
     }
+}
+
+async fn pointer_move(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<PointerMoveRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    let display = current_display(&state, request_id.clone())?;
+    let command = payload
+        .into_command(display)
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(state, request_id, command).await
+}
+
+async fn pointer_button(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<PointerButtonRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    let display = current_display(&state, request_id.clone())?;
+    let command = payload
+        .into_command(display)
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(state, request_id, command).await
+}
+
+async fn pointer_click(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<PointerClickRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    let display = current_display(&state, request_id.clone())?;
+    let command = payload
+        .into_command(display)
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(state, request_id, command).await
+}
+
+async fn pointer_double_click(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<PointerDoubleClickRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    let display = current_display(&state, request_id.clone())?;
+    let command = payload
+        .into_command(display)
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(state, request_id, command).await
+}
+
+async fn pointer_scroll(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<PointerScrollRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    let display = current_display(&state, request_id.clone())?;
+    let command = payload
+        .into_command(display)
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(state, request_id, command).await
+}
+
+async fn keyboard_key(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<KeyRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    execute_command(state, request_id, payload.into_command()).await
+}
+
+async fn keyboard_chord(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<ChordRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    let keys = payload
+        .into_domain()
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(state, request_id, WorkerCommand::Chord { keys }).await
+}
+
+async fn keyboard_text(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<TextRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    payload
+        .validate()
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(
+        state,
+        request_id,
+        WorkerCommand::TypeText { text: payload.text },
+    )
+    .await
+}
+
+async fn clipboard(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Json<ClipboardResponse>, ApiError> {
+    let snapshot = state
+        .backend
+        .clipboard_snapshot()
+        .map_err(|error| domain_error(error, request_id))?;
+    Ok(Json(ClipboardResponse {
+        text: snapshot.text.to_string(),
+        revision: snapshot.revision,
+        updated_at_unix_ms: unix_milliseconds(snapshot.updated_at),
+    }))
+}
+
+async fn set_clipboard(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    payload: Result<Json<ClipboardRequest>, JsonRejection>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    let payload = json_payload(payload, request_id.clone())?;
+    payload
+        .validate()
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    execute_command(
+        state,
+        request_id,
+        WorkerCommand::SetClipboard { text: payload.text },
+    )
+    .await
+}
+
+async fn reconnect(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    execute_command(state, request_id, WorkerCommand::Reconnect).await
+}
+
+fn json_payload<T>(
+    payload: Result<Json<T>, JsonRejection>,
+    request_id: RequestId,
+) -> Result<T, ApiError> {
+    payload.map(|Json(value)| value).map_err(|rejection| {
+        ApiError::invalid_json(
+            request_id,
+            rejection.status() == StatusCode::PAYLOAD_TOO_LARGE,
+        )
+    })
+}
+
+fn current_display(state: &HttpState, request_id: RequestId) -> Result<DisplayInfo, ApiError> {
+    let metadata = state.backend.framebuffer_metadata();
+    if metadata.status != FramebufferStatus::Current {
+        return Err(ApiError::framebuffer_unavailable(request_id));
+    }
+    let (Some(width), Some(height)) = (metadata.width, metadata.height) else {
+        return Err(ApiError::framebuffer_unavailable(request_id));
+    };
+    DisplayInfo::new(width, height, 24, metadata.revision, true)
+        .map_err(|error| domain_error(error, request_id))
+}
+
+async fn execute_command(
+    state: HttpState,
+    request_id: RequestId,
+    command: WorkerCommand,
+) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+    if state.is_shutting_down() {
+        return Err(ApiError::shutting_down(request_id));
+    }
+    let backend = Arc::clone(&state.backend);
+    let timeout = state.command_ack_timeout;
+    let result = tokio::task::spawn_blocking(move || backend.execute_command(command, timeout))
+        .await
+        .map_err(|_| ApiError::internal(request_id.clone()))?
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(CommandAcceptedResponse {
+            command_id: result,
+            status: "accepted",
+        }),
+    ))
 }
 
 fn insert_screenshot_headers(
@@ -486,6 +762,109 @@ fn screenshot_error(error: ScreenshotError, request_id: RequestId) -> ApiError {
         | ScreenshotError::InvalidConfiguration
         | ScreenshotError::ThreadSpawn
         | ScreenshotError::Encoding => ApiError::internal(request_id),
+    }
+}
+
+fn domain_error(error: DesktopError, request_id: RequestId) -> ApiError {
+    match error {
+        DesktopError::InvalidCoordinate { .. } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_coordinate",
+            "coordinate is outside the current display",
+            request_id,
+        ),
+        DesktopError::DisplayUnavailable
+        | DesktopError::FramebufferUnavailable
+        | DesktopError::InvalidFramebufferDimensions => {
+            ApiError::framebuffer_unavailable(request_id)
+        }
+        DesktopError::InvalidRectangle => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_rectangle",
+            "framebuffer rectangle is invalid",
+            request_id,
+        ),
+        DesktopError::ChordTooLong { .. } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "chord_too_long",
+            "key chord exceeds the configured limit",
+            request_id,
+        ),
+        DesktopError::TextTooLarge { .. } => ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "text_too_large",
+            "text exceeds the configured limit",
+            request_id,
+        ),
+        DesktopError::ClipboardTooLarge { .. } => ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "clipboard_too_large",
+            "clipboard exceeds the configured limit",
+            request_id,
+        ),
+        DesktopError::UnsupportedTextCharacter { .. } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "unsupported_text",
+            "text contains an unsupported character",
+            request_id,
+        ),
+        DesktopError::ClipboardContainsNul => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_clipboard",
+            "clipboard contains a prohibited character",
+            request_id,
+        ),
+        DesktopError::ScrollTooLarge { .. } => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "scroll_too_large",
+            "scroll request exceeds the configured limit",
+            request_id,
+        ),
+        DesktopError::CommandQueueFull => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "command_queue_full",
+            "command capacity is exhausted",
+            request_id,
+        ),
+        DesktopError::WorkerUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "worker_unavailable",
+            "desktop worker is unavailable",
+            request_id,
+        ),
+        DesktopError::ClipboardUnavailable => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "clipboard_unavailable",
+            "clipboard is unavailable",
+            request_id,
+        ),
+        DesktopError::Timeout => ApiError::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "command_timeout",
+            "desktop command acknowledgement timed out",
+            request_id,
+        ),
+        DesktopError::ReconnectRateLimited => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "reconnect_rate_limited",
+            "reconnect request is rate limited",
+            request_id,
+        ),
+        DesktopError::Configuration(_) => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_request",
+            "request is not valid for the current operation",
+            request_id,
+        ),
+        DesktopError::AuthenticationFailed
+        | DesktopError::Transport
+        | DesktopError::Protocol
+        | DesktopError::Native => ApiError::new(
+            StatusCode::BAD_GATEWAY,
+            "desktop_operation_failed",
+            "desktop operation failed",
+            request_id,
+        ),
     }
 }
 
@@ -590,6 +969,10 @@ mod tests {
         snapshot: WorkerSnapshot,
         framebuffer: FramebufferMetadata,
         screenshot: Mutex<MockScreenshot>,
+        commands: Mutex<Vec<WorkerCommand>>,
+        execute_error: Mutex<Option<DesktopError>>,
+        clipboard: Mutex<Option<ClipboardSnapshot>>,
+        next_command_id: AtomicU64,
     }
 
     impl HttpBackend for MockBackend {
@@ -628,11 +1011,42 @@ mod tests {
                 )),
             }
         }
+
+        fn execute_command(
+            &self,
+            command: WorkerCommand,
+            _timeout: Duration,
+        ) -> Result<u64, DesktopError> {
+            if let Some(error) = self
+                .execute_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+            {
+                return Err(error);
+            }
+            self.commands
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(command);
+            Ok(self.next_command_id.fetch_add(1, Ordering::Relaxed))
+        }
+
+        fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {
+            self.clipboard
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+                .ok_or(DesktopError::ClipboardUnavailable)
+        }
     }
 
-    fn test_state(ready: bool, screenshot: MockScreenshot) -> HttpState {
+    fn test_state_with_backend(
+        ready: bool,
+        screenshot: MockScreenshot,
+    ) -> (HttpState, Arc<MockBackend>) {
         let now = UNIX_EPOCH + Duration::from_secs(100);
-        let backend = MockBackend {
+        let backend = Arc::new(MockBackend {
             snapshot: WorkerSnapshot {
                 state: if ready {
                     ConnectionState::Connected
@@ -661,14 +1075,24 @@ mod tests {
                 updated_at: ready.then_some(now),
             },
             screenshot: Mutex::new(screenshot),
-        };
-        HttpState::new(
-            Arc::new(backend),
+            commands: Mutex::new(Vec::new()),
+            execute_error: Mutex::new(None),
+            clipboard: Mutex::new(None),
+            next_command_id: AtomicU64::new(1),
+        });
+        let state = HttpState::new(
+            backend.clone(),
             Arc::from("test-token"),
             Arc::from("test-process"),
             4096,
+            Duration::from_secs(1),
         )
-        .expect("valid test state")
+        .expect("valid test state");
+        (state, backend)
+    }
+
+    fn test_state(ready: bool, screenshot: MockScreenshot) -> HttpState {
+        test_state_with_backend(ready, screenshot).0
     }
 
     fn request(uri: &str) -> axum::http::request::Builder {
@@ -918,15 +1342,17 @@ mod tests {
 
     #[test]
     fn state_validation_and_bearer_comparison_fail_closed() {
-        let backend: Arc<dyn HttpBackend> = Arc::new(MockBackend {
-            snapshot: test_state(true, MockScreenshot::Png).backend.snapshot(),
-            framebuffer: test_state(true, MockScreenshot::Png)
-                .backend
-                .framebuffer_metadata(),
-            screenshot: Mutex::new(MockScreenshot::Png),
-        });
+        let (_, concrete) = test_state_with_backend(true, MockScreenshot::Png);
+        let backend: Arc<dyn HttpBackend> = concrete;
         assert!(
-            HttpState::new(Arc::clone(&backend), Arc::from(""), Arc::from("process"), 1,).is_err()
+            HttpState::new(
+                Arc::clone(&backend),
+                Arc::from(""),
+                Arc::from("process"),
+                1,
+                Duration::from_secs(1),
+            )
+            .is_err()
         );
         assert!(
             HttpState::new(
@@ -934,13 +1360,312 @@ mod tests {
                 Arc::from("token"),
                 Arc::from("bad process"),
                 1,
+                Duration::from_secs(1),
             )
             .is_err()
         );
-        assert!(HttpState::new(backend, Arc::from("token"), Arc::from("process"), 0).is_err());
+        assert!(
+            HttpState::new(
+                Arc::clone(&backend),
+                Arc::from("token"),
+                Arc::from("process"),
+                0,
+                Duration::from_secs(1),
+            )
+            .is_err()
+        );
+        assert!(
+            HttpState::new(
+                backend,
+                Arc::from("token"),
+                Arc::from("process"),
+                1,
+                Duration::ZERO,
+            )
+            .is_err()
+        );
         assert!(bearer_matches(b"Bearer token", b"token"));
         assert!(!bearer_matches(b"Bearer Token", b"token"));
         assert!(!bearer_matches(b"Basic token", b"token"));
         assert!(!bearer_matches(b"Bearer", b"token"));
+    }
+
+    fn authenticated_json_request(
+        method: &str,
+        uri: &str,
+        value: serde_json::Value,
+    ) -> axum::http::Request<Body> {
+        request(uri)
+            .method(method)
+            .header(AUTHORIZATION, "Bearer test-token")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(value.to_string()))
+            .expect("request")
+    }
+
+    #[tokio::test]
+    async fn pointer_routes_return_202_and_preserve_preflighted_commands() {
+        let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+        let app = router(state);
+        let fixtures = [
+            ("/v1/pointer/move", serde_json::json!({"x": 1, "y": 1})),
+            (
+                "/v1/pointer/button",
+                serde_json::json!({"x": 1, "y": 1, "button": "left", "pressed": true}),
+            ),
+            (
+                "/v1/pointer/click",
+                serde_json::json!({"x": 1, "y": 1, "button": "middle"}),
+            ),
+            (
+                "/v1/pointer/double-click",
+                serde_json::json!({"x": 1, "y": 1, "button": "right", "interval_ms": 50}),
+            ),
+            (
+                "/v1/pointer/scroll",
+                serde_json::json!({"x": 1, "y": 1, "delta_y": -2}),
+            ),
+        ];
+        for (index, (uri, payload)) in fixtures.into_iter().enumerate() {
+            let response = app
+                .clone()
+                .oneshot(authenticated_json_request("POST", uri, payload))
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let body = json_body(response).await;
+            assert_eq!(body["status"], "accepted");
+            assert_eq!(body["command_id"], u64::try_from(index + 1).unwrap());
+        }
+        let commands = backend
+            .commands
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(commands.len(), 5);
+        assert!(matches!(commands[0], WorkerCommand::MovePointer { .. }));
+        assert!(matches!(commands[1], WorkerCommand::SetButton { .. }));
+        assert!(matches!(commands[2], WorkerCommand::Click { .. }));
+        assert!(matches!(commands[3], WorkerCommand::DoubleClick { .. }));
+        assert!(matches!(
+            commands[4],
+            WorkerCommand::Scroll {
+                delta_x: 0,
+                delta_y: -2,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn invalid_pointer_request_never_reaches_worker() {
+        let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+        let response = router(state)
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/v1/pointer/move",
+                serde_json::json!({"x": 2, "y": 0}),
+            ))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "invalid_coordinate");
+        assert!(
+            backend
+                .commands
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn keyboard_text_and_clipboard_preflight_before_worker_execution() {
+        let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+        let app = router(state);
+        for (uri, payload) in [
+            (
+                "/v1/keyboard/key",
+                serde_json::json!({"key": "F5", "action": "down"}),
+            ),
+            (
+                "/v1/keyboard/chord",
+                serde_json::json!({"keys": ["CTRL_LEFT", "SHIFT_LEFT", "F6"]}),
+            ),
+            (
+                "/v1/keyboard/text",
+                serde_json::json!({"text": "safe text\n"}),
+            ),
+            (
+                "/v1/clipboard",
+                serde_json::json!({"text": "clipboard value"}),
+            ),
+        ] {
+            let method = if uri == "/v1/clipboard" {
+                "PUT"
+            } else {
+                "POST"
+            };
+            let response = app
+                .clone()
+                .oneshot(authenticated_json_request(method, uri, payload))
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+        let count_before = backend
+            .commands
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
+        let response = app
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/v1/keyboard/text",
+                serde_json::json!({"text": "prefix☃suffix"}),
+            ))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "unsupported_text");
+        assert_eq!(
+            backend
+                .commands
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            count_before
+        );
+    }
+
+    #[tokio::test]
+    async fn clipboard_snapshot_and_unavailable_error_are_stable() {
+        let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+        let app = router(state);
+        let response = app
+            .clone()
+            .oneshot(
+                request("/v1/clipboard")
+                    .header(AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "clipboard_unavailable");
+
+        *backend
+            .clipboard
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(ClipboardSnapshot {
+            text: Arc::from("inbound clipboard"),
+            revision: 9,
+            updated_at: UNIX_EPOCH + Duration::from_secs(200),
+        });
+        let response = app
+            .oneshot(
+                request("/v1/clipboard")
+                    .header(AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["text"], "inbound clipboard");
+        assert_eq!(body["revision"], 9);
+        assert_eq!(body["updated_at_unix_ms"], 200_000);
+    }
+
+    #[tokio::test]
+    async fn worker_failures_map_to_stable_payload_free_errors() {
+        for (error, status, code) in [
+            (
+                DesktopError::CommandQueueFull,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "command_queue_full",
+            ),
+            (
+                DesktopError::WorkerUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "worker_unavailable",
+            ),
+            (
+                DesktopError::Timeout,
+                StatusCode::GATEWAY_TIMEOUT,
+                "command_timeout",
+            ),
+            (
+                DesktopError::ReconnectRateLimited,
+                StatusCode::TOO_MANY_REQUESTS,
+                "reconnect_rate_limited",
+            ),
+        ] {
+            let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+            *backend
+                .execute_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+            let response = router(state)
+                .oneshot(
+                    request("/v1/connection/reconnect")
+                        .method("POST")
+                        .header(AUTHORIZATION, "Bearer test-token")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), status);
+            let body = json_body(response).await;
+            assert_eq!(body["error"]["code"], code);
+            assert!(!body.to_string().contains("test-token"));
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_and_oversized_json_fail_before_worker_execution() {
+        let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+        state.begin_shutdown();
+        let app = router(state);
+        let response = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "POST",
+                "/v1/keyboard/key",
+                serde_json::json!({"key": "F5", "action": "down"}),
+            ))
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "shutting_down");
+
+        let oversized = format!(r#"{{"text":"{}"}}"#, "x".repeat(5000));
+        let response = app
+            .oneshot(
+                request("/v1/keyboard/text")
+                    .method("POST")
+                    .header(AUTHORIZATION, "Bearer test-token")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from(oversized))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["code"], "payload_too_large");
+        assert!(
+            backend
+                .commands
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
     }
 }
