@@ -77,6 +77,35 @@ jobs:
       - name: Generate mutating HTTP candidate
         run: python3 tools/r10_http_mutating.py
 
+      - name: Repair generated compile defects
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          api = Path("crates/controller-api/src/api_contract.rs")
+          text = api.read_text(encoding="utf-8")
+          target = "        let display = display();"
+          if text.count(target) != 2:
+              raise SystemExit("expected exactly two generated pointer display fixtures")
+          replacement = (
+              "        let display = DisplayInfo::new(1_280, 800, 24, 1, true)"
+              ".expect(\"valid display\");"
+          )
+          api.write_text(text.replace(target, replacement), encoding="utf-8")
+
+          http = Path("crates/controller-api/src/http.rs")
+          text = http.read_text(encoding="utf-8")
+          type_target = "    text: Arc<str>,\n"
+          value_target = "        text: snapshot.text,\n"
+          if text.count(type_target) != 1 or text.count(value_target) != 1:
+              raise SystemExit("clipboard response repair targets are not unique")
+          text = text.replace(type_target, "    text: String,\n", 1)
+          text = text.replace(value_target, "        text: snapshot.text.to_string(),\n", 1)
+          http.write_text(text, encoding="utf-8")
+          PY
+
       - name: Format candidate
         run: cargo fmt --all
 
