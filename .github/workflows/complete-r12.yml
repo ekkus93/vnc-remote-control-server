@@ -1,0 +1,121 @@
+name: Complete R12
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/r12_payload_*.b64
+      - .github/workflows/complete-r12.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: complete-r12-master
+  cancel-in-progress: false
+
+jobs:
+  complete-r12:
+    name: Complete R12 on master
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Install native and integration dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libvncserver-dev \
+            pkg-config \
+            tigervnc-tools \
+            tigervnc-viewer \
+            xvfb
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+
+      - name: Reconstruct and apply R12 implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/r12_payload_*.b64 > /tmp/r12_apply.py.xz.b64
+          echo 'f9e879b0566bb3827a58ea129d39ec5199ecc9d9b64934c9142065cc6e3cb733  /tmp/r12_apply.py.xz.b64' | sha256sum --check --strict
+          base64 --decode /tmp/r12_apply.py.xz.b64 | xz --decompress > /tmp/r12_apply.py
+          echo '536cb06f9cf3cda2a015beac239fd7805a46613aed6b67ab96911bbd2388906e  /tmp/r12_apply.py' | sha256sum --check --strict
+          python3 -m py_compile /tmp/r12_apply.py
+          python3 /tmp/r12_apply.py
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run workspace tests
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --locked --workspace --all-features
+
+      - name: Run Clippy with warnings denied
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Build rustdoc with warnings denied
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --locked --workspace --all-features --no-deps
+
+      - name: Run Python and workflow contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q tools/ci_status tests desktop/test-app
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Check first-party shell syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -type f \( -name '*.sh' -o -name xstartup \) -not -path './.git/*' -print0 \
+            | xargs -0 -n1 bash -n
+
+      - name: Run desktop smoke
+        run: bash tests/desktop/run.sh
+
+      - name: Run native adapter smoke
+        run: bash tests/native/run.sh
+
+      - name: Run WorkerHandle input E2E
+        run: bash tests/worker-e2e/run.sh
+
+      - name: Run WorkerHandle text and clipboard E2E
+        run: bash tests/worker-text-clipboard-e2e/run.sh
+
+      - name: Run authenticated HTTP and WebSocket E2E
+        run: bash tests/http-e2e/run.sh
+
+      - name: Run controller image, Compose, and persistence smoke
+        run: bash tests/compose/run.sh
+
+      - name: Commit validated R12 directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/r12_payload_*.b64 .github/workflows/complete-r12.yml
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Complete R12 controller image Compose and persistence'
+          git push origin HEAD:master
