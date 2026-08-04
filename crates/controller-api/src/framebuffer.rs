@@ -400,8 +400,8 @@ impl FramebufferStore {
     }
 
     fn validate_dimensions(&self, width: u32, height: u32) -> Result<usize, FramebufferError> {
-        let length = checked_rgba_len(width, height)
-            .map_err(|_| FramebufferError::InvalidDimensions)?;
+        let length =
+            checked_rgba_len(width, height).map_err(|_| FramebufferError::InvalidDimensions)?;
         if length > self.maximum_bytes {
             return Err(FramebufferError::InvalidDimensions);
         }
@@ -510,8 +510,7 @@ fn next_revision(current: u64) -> Result<u64, FramebufferError> {
 }
 
 fn read_unpoisoned<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn write_unpoisoned<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
@@ -577,9 +576,7 @@ mod tests {
             store.current_snapshot().err(),
             Some(FramebufferError::Unavailable)
         );
-        store
-            .replace_rgba(2, 2, solid(2, 2, 2))
-            .expect("complete");
+        store.replace_rgba(2, 2, solid(2, 2, 2)).expect("complete");
         assert!(store.invalidate());
         assert_eq!(store.metadata().status, FramebufferStatus::Stale);
         assert_eq!(
@@ -682,13 +679,9 @@ mod tests {
     #[test]
     fn snapshots_are_immutable_across_later_commits() {
         let store = FramebufferStore::default();
-        store
-            .replace_rgba(2, 2, solid(2, 2, 1))
-            .expect("first");
+        store.replace_rgba(2, 2, solid(2, 2, 1)).expect("first");
         let first = store.current_snapshot().expect("first snapshot");
-        store
-            .replace_rgba(2, 2, solid(2, 2, 2))
-            .expect("second");
+        store.replace_rgba(2, 2, solid(2, 2, 2)).expect("second");
         let second = store.current_snapshot().expect("second snapshot");
         assert!(first.rgba().iter().all(|value| *value == 1));
         assert!(second.rgba().iter().all(|value| *value == 2));
@@ -699,23 +692,15 @@ mod tests {
     #[test]
     fn reconnect_commit_keeps_revision_monotonic() {
         let store = FramebufferStore::default();
-        assert_eq!(
-            store.replace_rgba(1, 1, vec![1, 1, 1, 255]),
-            Ok(1)
-        );
+        assert_eq!(store.replace_rgba(1, 1, vec![1, 1, 1, 255]), Ok(1));
         assert!(store.invalidate());
-        assert_eq!(
-            store.replace_rgba(1, 1, vec![2, 2, 2, 255]),
-            Ok(2)
-        );
+        assert_eq!(store.replace_rgba(1, 1, vec![2, 2, 2, 255]), Ok(2));
     }
 
     #[test]
     fn concurrent_snapshots_never_observe_partial_commits() {
         let store = FramebufferStore::default();
-        store
-            .replace_rgba(8, 8, solid(8, 8, 0))
-            .expect("initial");
+        store.replace_rgba(8, 8, solid(8, 8, 0)).expect("initial");
         let start = Arc::new(Barrier::new(2));
         let writer_store = store.clone();
         let writer_start = Arc::clone(&start);
