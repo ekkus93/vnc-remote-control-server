@@ -920,7 +920,7 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use remote_desktop_core::{DisplayInfo, MouseButton};
+    use remote_desktop_core::MouseButton;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1239,7 +1239,7 @@ mod tests {
             .expect("accepted")
             .wait(Duration::from_secs(1))
             .expect_err("out-of-range coordinate must fail");
-        assert!(matches!(error, DesktopError::CoordinateOutOfRange { .. }));
+        assert!(matches!(error, DesktopError::InvalidCoordinate { .. }));
         assert!(lock_unpoisoned(&events).is_empty());
         worker
             .shutdown(Duration::from_secs(1))
