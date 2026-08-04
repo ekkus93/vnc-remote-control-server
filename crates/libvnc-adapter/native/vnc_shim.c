@@ -15,6 +15,7 @@
 struct vrc_client {
     rfbClient *native;
     char *host;
+    int port;
     char *password;
     uint8_t *framebuffer;
     size_t framebuffer_length;
@@ -32,6 +33,7 @@ struct vrc_client {
 };
 
 static int vrc_context_tag;
+static char vrc_program_name[] = "vrc-client";
 
 static void vrc_set_error(vrc_client *client, const char *message) {
     if (client == NULL) {
@@ -52,9 +54,6 @@ static char *vrc_duplicate(const char *value) {
         return NULL;
     }
     length = strlen(value);
-    if (length == SIZE_MAX) {
-        return NULL;
-    }
     copy = malloc(length + 1U);
     if (copy == NULL) {
         return NULL;
@@ -67,7 +66,7 @@ static vrc_client *vrc_context(rfbClient *native) {
     if (native == NULL) {
         return NULL;
     }
-    return (vrc_client *)rfbClientGetClientData(native, &vrc_context_tag);
+    return rfbClientGetClientData(native, &vrc_context_tag);
 }
 
 static char *vrc_get_password(rfbClient *native) {
@@ -115,6 +114,9 @@ static rfbBool vrc_allocate_framebuffer(rfbClient *native) {
         return FALSE;
     }
 
+    if (native->frameBuffer == client->framebuffer) {
+        native->frameBuffer = NULL;
+    }
     free(client->framebuffer);
     client->framebuffer = framebuffer;
     client->framebuffer_length = length;
@@ -157,10 +159,6 @@ static void vrc_store_clipboard(vrc_client *client, const char *text, int text_l
         vrc_set_error(client, "invalid clipboard update");
         return;
     }
-    if (length == SIZE_MAX) {
-        vrc_set_error(client, "clipboard size overflow");
-        return;
-    }
 
     copy = malloc(length + 1U);
     if (copy == NULL) {
@@ -175,11 +173,11 @@ static void vrc_store_clipboard(vrc_client *client, const char *text, int text_l
     free(client->clipboard);
     client->clipboard = copy;
     client->clipboard_length = length;
-    if (client->clipboard_revision < UINT64_MAX) {
-        client->clipboard_revision += 1U;
-    } else {
+    if (client->clipboard_revision == UINT64_MAX) {
         vrc_set_error(client, "clipboard revision overflow");
+        return;
     }
+    client->clipboard_revision += 1U;
 }
 
 static void vrc_got_clipboard(rfbClient *native, const char *text, int text_length) {
@@ -211,6 +209,7 @@ vrc_client *vrc_client_create(
         vrc_client_destroy(client);
         return NULL;
     }
+    client->port = port;
     client->connect_timeout_seconds = connect_timeout_seconds;
     client->read_timeout_seconds = read_timeout_seconds;
     client->last_error[0] = '\0';
@@ -220,7 +219,6 @@ vrc_client *vrc_client_create(
 vrc_status vrc_client_connect(vrc_client *client) {
     size_t endpoint_capacity;
     char *endpoint;
-    char program_name[] = "vrc-client";
     char *arguments[3];
     int argument_count = 2;
     int written;
@@ -252,6 +250,7 @@ vrc_status vrc_client_connect(vrc_client *client) {
         return VRC_STATUS_ALLOCATION_FAILED;
     }
 
+    client->native->programName = vrc_program_name;
     client->native->GetPassword = vrc_get_password;
     client->native->MallocFrameBuffer = vrc_allocate_framebuffer;
     client->native->FinishedFrameBufferUpdate = vrc_finished_framebuffer_update;
@@ -261,20 +260,12 @@ vrc_status vrc_client_connect(vrc_client *client) {
     client->native->appData.shareDesktop = TRUE;
     rfbClientSetClientData(client->native, &vrc_context_tag, client);
 
-    arguments[0] = program_name;
+    arguments[0] = vrc_program_name;
     arguments[1] = endpoint;
     arguments[2] = NULL;
     if (!rfbInitClient(client->native, &argument_count, arguments)) {
         free(endpoint);
         vrc_set_error(client, "rfbInitClient failed");
-        if (client->native->frameBuffer == client->framebuffer) {
-            client->native->frameBuffer = NULL;
-        }
-        free(client->framebuffer);
-        client->framebuffer = NULL;
-        client->framebuffer_length = 0U;
-        rfbClientCleanup(client->native);
-        client->native = NULL;
         return VRC_STATUS_NATIVE_FAILURE;
     }
 
@@ -296,11 +287,13 @@ vrc_status vrc_client_poll(vrc_client *client, unsigned int timeout_microseconds
     }
     if (wait_result < 0) {
         client->connected = 0;
+        client->complete = 0;
         vrc_set_error(client, "VNC transport wait failed");
         return VRC_STATUS_DISCONNECTED;
     }
     if (!HandleRFBServerMessage(client->native)) {
         client->connected = 0;
+        client->complete = 0;
         vrc_set_error(client, "VNC server message handling failed");
         return VRC_STATUS_DISCONNECTED;
     }
@@ -365,7 +358,7 @@ vrc_status vrc_client_send_clipboard(vrc_client *client, const char *text, size_
         return VRC_STATUS_DISCONNECTED;
     }
     if ((text == NULL && text_length > 0U) || text_length > VRC_MAX_CLIPBOARD_BYTES
-        || text_length > (size_t)INT_MAX || text_length == SIZE_MAX) {
+        || text_length > (size_t)INT_MAX) {
         return VRC_STATUS_INVALID_ARGUMENT;
     }
     if (text_length > 0U && memchr(text, '\0', text_length) != NULL) {
