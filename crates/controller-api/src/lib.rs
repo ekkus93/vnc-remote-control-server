@@ -2,4 +2,5 @@
 #![forbid(unsafe_code)]
 
 pub mod api_contract;
+pub mod framebuffer;
 pub mod worker;
