@@ -661,17 +661,18 @@ CI run:
 Evidence:
 
 ```text
-API branch: codex/r10-runtime
-Routes implemented: health, status, display, screenshot, pointer, keyboard, clipboard, reconnect
-Auth tests: router unit tests plus real missing-token/correct-token HTTP E2E
+Master implementation SHA: b3b57b7e98284ad83ef84d0182f6f00d24bba841
+Final evidence SHA: fcfef9de44aaaa389805cce00ce65dc422045edb
+Routes implemented: health, status, display, screenshot, pointer, keyboard, clipboard, reconnect, authenticated WebSocket upgrade shell
+Auth tests: missing, malformed, wrong, correct, query-string rejection, and real WebSocket handshake E2E
 Error tests: stable JSON envelope and domain mapping unit tests
 Limit tests: body size, header deadline, body deadline, acknowledgement deadline, shutdown rejection
-Runtime E2E: authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC deterministic pointer observation
-Validated head SHA: f0c7d8ee4a95a1cb154b83c87c3cbe8d84b9d494
-Pull request: #6
-CI run: 30945615936
-Quality job: 92114729003 (success)
-Desktop/native/HTTP E2E job: 92114729086 (success)
+Runtime E2E: authenticated HTTP/WebSocket -> WorkerClient -> LibVNCClient -> TigerVNC
+Final R10 executor run: 30954770309
+Final R10 executor job: 92145112246 (success)
+Final ordinary master CI run: 30955178017
+Quality job: 92146417492 (success)
+Desktop/native/HTTP E2E job: 92146417477 (success)
 ```
 
 ---
@@ -689,7 +690,7 @@ Desktop/native/HTTP E2E job: 92114729086 (success)
 
 ### R11.2 WebSocket endpoint
 
-- [ ] Implement authenticated `/v1/events` upgrade.
+- [ ] Extend the authenticated `/v1/events` upgrade shell with event delivery.
 - [ ] Send initial connection-state snapshot.
 - [ ] Broadcast connection changes.
 - [ ] Broadcast framebuffer revisions.
