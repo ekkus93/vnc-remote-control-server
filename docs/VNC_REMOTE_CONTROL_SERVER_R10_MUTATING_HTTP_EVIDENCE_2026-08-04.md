@@ -1,21 +1,16 @@
-# R10 Authenticated Mutating HTTP Route Evidence — 2026-08-04
+# R10 Authenticated HTTP and Runtime Evidence — 2026-08-04
 
 ## Scope
 
 This evidence record covers the authenticated HTTP router and the completed R10 runtime slice: the configured TCP listener, bounded header and body reads, signal-driven graceful shutdown, shutdown-time command rejection, and the real authenticated HTTP-to-worker-to-LibVNCClient-to-TigerVNC path.
 
-## Implementation commit
+## Router implementation commit
 
 ```text
 de92b71e9160e5f6319ea08029f7919f3660c2e9
 ```
 
-The implementation commit was produced by a fail-closed isolated workflow and then fast-forwarded onto `master`. Its product diff changes only:
-
-- `crates/controller-api/src/api_contract.rs`
-- `crates/controller-api/src/http.rs`
-
-The temporary generator and candidate workflow were deleted in the same commit. The temporary candidate tag was deleted after `master` reached the validated commit.
+The router implementation commit introduced the authenticated mutating route surface and its fail-closed validation and error behavior.
 
 ## Routes implemented
 
@@ -76,7 +71,7 @@ The router maps domain failures to payload-free stable error codes, including:
 
 Native error strings, bearer tokens, typed text, and clipboard payloads are not included in error envelopes.
 
-## Tests
+## Router tests
 
 The router and API-contract tests cover:
 
@@ -90,7 +85,7 @@ The router and API-contract tests cover:
 - oversized JSON rejection before worker execution;
 - configuration rejection for a zero acknowledgement timeout.
 
-## Isolated validation
+## Router validation
 
 ```text
 Workflow run: 30939727683
@@ -107,7 +102,7 @@ Validated gates:
 - rustdoc for all workspace features with warnings denied;
 - all Python contract tests.
 
-## Authoritative master validation
+## Router evidence validation on master
 
 ```text
 Evidence SHA: 33c8aa36a1da4f29729ac7d91e5bcced472192f9
@@ -119,9 +114,7 @@ Artifact ID: 8904759812
 Result: success
 ```
 
-The ordinary `master` workflow passed formatting, warning-denied Clippy, all Rust tests, warning-denied rustdoc, Python and shell contract gates, desktop image smoke, live native-adapter smoke, WorkerHandle input E2E, failure-diagnostic redaction self-test, and WorkerHandle text/clipboard E2E.
-
-This evidence update is documentation-only and triggers one final ordinary CI run so the repository can close the slice on a SHA containing the completed evidence record.
+That ordinary `master` workflow passed formatting, warning-denied Clippy, all Rust tests, warning-denied rustdoc, Python and shell contract gates, desktop image smoke, live native-adapter smoke, WorkerHandle input E2E, failure-diagnostic redaction self-test, and WorkerHandle text/clipboard E2E.
 
 ## Runtime completion implementation
 
@@ -135,7 +128,7 @@ The runtime completion branch adds:
 - slow-header, slow-body, and oversized-body runtime tests;
 - a real authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC E2E test.
 
-## Pull-request validation
+## Runtime pull-request validation
 
 ```text
 Pull request: #6
@@ -160,6 +153,8 @@ The exact validated head passed:
 - WorkerHandle text/clipboard E2E;
 - authenticated HTTP -> worker -> LibVNCClient -> TigerVNC pointer mutation E2E;
 - SIGTERM-driven bounded controller shutdown with secret-log checks.
+
+The documentation-only successor containing this reconciled record must also pass ordinary pull-request CI before the branch is considered ready to merge.
 
 ## R10 boundary after this slice
 
