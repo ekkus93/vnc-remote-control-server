@@ -1,0 +1,109 @@
+name: R8 worker Clippy repair
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/r8-worker-clippy-fix.yml
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: r8-worker-clippy-fix
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libvncserver-dev pkg-config
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+
+      - name: Apply exact source repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/controller-api/src/worker.rs")
+          text = path.read_text()
+          replacements = [
+              (
+                  "use remote_desktop_core::{DisplayInfo, MouseButton};",
+                  "use remote_desktop_core::MouseButton;",
+              ),
+              (
+                  "DesktopError::CoordinateOutOfRange { .. }",
+                  "DesktopError::InvalidCoordinate { .. }",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one occurrence of {old!r}, found {count}")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+      - name: Validate exact repair
+        shell: bash
+        env:
+          RUSTFLAGS: -Dwarnings
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-targets --all-features
+          cargo doc --locked --workspace --all-features --no-deps
+
+      - name: Publish validated candidate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/r8-worker-clippy-fix.yml
+          git add crates/controller-api/src/worker.rs
+          test "$(git diff --cached --name-only | sort)" = $'.github/workflows/r8-worker-clippy-fix.yml\ncrates/controller-api/src/worker.rs'
+          git commit -m "Fix R8 worker contract tests"
+          candidate_sha=$(git rev-parse HEAD)
+          git tag --force r8-worker-fix-candidate "$candidate_sha"
+          git push --force origin refs/tags/r8-worker-fix-candidate
+          gh api "repos/${GITHUB_REPOSITORY}/issues/1/comments" \
+            -f body="R8 worker Clippy repair candidate: \`${candidate_sha}\` (validated). Temporary ref: \`r8-worker-fix-candidate\`."
+
+          for _ in $(seq 1 180); do
+            master_sha=$(git ls-remote origin refs/heads/master | cut -f1)
+            if [ "$master_sha" = "$candidate_sha" ]; then
+              git push origin :refs/tags/r8-worker-fix-candidate
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "master did not advance to candidate within cleanup window" >&2
+          exit 1
