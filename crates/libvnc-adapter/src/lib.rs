@@ -279,12 +279,7 @@ impl NativeClient {
         let y = i32::try_from(coordinate.y).map_err(|_| NativeError::InvalidArgument)?;
         // SAFETY: mutable access guarantees exclusive native use.
         let status = unsafe {
-            vrc_client_send_pointer(
-                self.pointer.as_ptr(),
-                x,
-                y,
-                c_int::from(button_mask),
-            )
+            vrc_client_send_pointer(self.pointer.as_ptr(), x, y, c_int::from(button_mask))
         };
         self.status_to_result(status)
     }
@@ -293,9 +288,7 @@ impl NativeClient {
     pub fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
         let pressed = if pressed { 1 } else { 0 };
         // SAFETY: mutable access guarantees exclusive native use.
-        let status = unsafe {
-            vrc_client_send_key(self.pointer.as_ptr(), key.keysym(), pressed)
-        };
+        let status = unsafe { vrc_client_send_key(self.pointer.as_ptr(), key.keysym(), pressed) };
         self.status_to_result(status)
     }
 
@@ -343,8 +336,7 @@ impl NativeClient {
         let display = self.display_info()?;
         let mut length = 0_usize;
         // SAFETY: output pointer is valid and the opaque handle is live.
-        let status =
-            unsafe { vrc_client_framebuffer_length(self.pointer.as_ptr(), &mut length) };
+        let status = unsafe { vrc_client_framebuffer_length(self.pointer.as_ptr(), &mut length) };
         self.status_to_result(status)?;
         let mut bytes = vec![0_u8; length];
         let mut revision = 0_u64;
@@ -377,16 +369,10 @@ impl NativeClient {
         let mut announced_revision = 0_u64;
         // SAFETY: output pointers are valid and the opaque handle is live.
         let status = unsafe {
-            vrc_client_clipboard_length(
-                self.pointer.as_ptr(),
-                &mut length,
-                &mut announced_revision,
-            )
+            vrc_client_clipboard_length(self.pointer.as_ptr(), &mut length, &mut announced_revision)
         };
         self.status_to_result(status)?;
-        let capacity = length
-            .checked_add(1)
-            .ok_or(NativeError::AllocationFailed)?;
+        let capacity = length.checked_add(1).ok_or(NativeError::AllocationFailed)?;
         let mut bytes = vec![0_u8; capacity];
         let mut revision = 0_u64;
         // SAFETY: destination spans `capacity` initialized writable bytes.
