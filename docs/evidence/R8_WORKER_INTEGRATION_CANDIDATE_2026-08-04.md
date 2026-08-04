@@ -1,4 +1,4 @@
-# R8 Worker Integration Candidate Evidence
+# R8 Worker Integration Evidence
 
 Date: 2026-08-04
 
@@ -6,6 +6,7 @@ Date: 2026-08-04
 
 - Implementation commit: `6997362414336b8ef727c1a5cbabdbb1bc1c4b94`
 - Clippy/test-contract repair: `df911e883bff6e52a78b4ddbf00d9d73067ffcf1`
+- Exact-green code/evidence candidate: `55fb359a5b307e49693bde8041a1e7298264bfd0`
 - Branch policy: direct `master`; no implementation branch or pull request
 - Temporary validation refs: removed after `master` fast-forward
 - Temporary workflows and transformation scripts: absent from final tree
@@ -21,9 +22,9 @@ Date: 2026-08-04
 - Disconnect and shutdown perform best-effort release of tracked buttons and keys before native session destruction.
 - Command completion returns native input failures to the caller.
 
-## Pre-publication validation
+## Validation commands
 
-Both validated candidates were produced only after all of the following succeeded with Rust `1.97.1`:
+Both implementation candidates were produced only after all of the following succeeded with Rust `1.97.1`:
 
 ```text
 cargo fmt --all --check
@@ -40,11 +41,30 @@ Worker-level tests cover:
 - propagation of partial native input failure after release retry;
 - release of tracked mouse and keyboard state during orderly shutdown.
 
-## Authoritative CI history
+## Repair history
 
 Run `30893582994` on SHA `7748ec0acb97763aba315b66126608a031bffa80` proved the unchanged live desktop/native path remained green, but the quality job correctly failed on two test-contract defects:
 
 - an unused test-only `DisplayInfo` import;
 - an assertion using nonexistent `DesktopError::CoordinateOutOfRange` instead of the actual `DesktopError::InvalidCoordinate` contract.
 
-The defects were fixed at their source without warning suppression. This evidence update intentionally triggers a new ordinary `CI` run. Exact final run and job identifiers are pending completion and must be recorded before R8 worker integration is considered closed.
+The defects were fixed at their source without warning suppression.
+
+## Exact-green authoritative CI
+
+```text
+SHA: 55fb359a5b307e49693bde8041a1e7298264bfd0
+Run: 30894239655
+Attempt: 1
+Conclusion: completed / success
+Quality job: 91943250678
+Desktop/native job: 91943250683
+Artifact ID: 8886338149
+Artifact name: ci-evidence-30894239655
+```
+
+The quality job passed formatting, warning-denied Clippy, all Rust tests, warning-denied rustdoc, Python/workflow contract tests, shell syntax checks, and evidence generation. The independent desktop/native job passed the secured desktop image smoke test and the live LibVNCClient adapter smoke test.
+
+## Remaining R8 evidence boundary
+
+This closes the production worker-integration and worker-level test slice. The separate real TigerVNC end-to-end proof through `WorkerHandle` remains open before the entire R8 milestone can be declared complete.
