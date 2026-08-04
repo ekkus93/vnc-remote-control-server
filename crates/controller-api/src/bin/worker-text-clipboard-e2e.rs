@@ -71,7 +71,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         })?
         .wait(COMMAND_TIMEOUT)
         .expect_err("unsupported text must fail before native mutation");
-    if !matches!(unsupported_error, DesktopError::UnsupportedText { .. }) {
+    if !matches!(
+        unsupported_error,
+        DesktopError::UnsupportedTextCharacter { .. }
+    ) {
         return Err(io::Error::other("unsupported text returned the wrong error category").into());
     }
 
