@@ -1,0 +1,145 @@
+name: R10 Mutating HTTP Candidate
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r10-http-mutating-candidate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  candidate:
+    name: Validate authenticated mutating HTTP routes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libvncserver-dev pkg-config
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+
+      - name: Generate mutating HTTP candidate
+        run: python3 tools/r10_http_mutating.py
+
+      - name: Format candidate
+        run: cargo fmt --all
+
+      - name: Reject whitespace errors
+        run: git diff --check
+
+      - name: Run Clippy with warnings denied
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --locked --workspace --all-features
+
+      - name: Build documentation with warnings denied
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --locked --workspace --all-features --no-deps
+
+      - name: Run Python contract tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Create exact cleanup candidate commit
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f -- \
+            .github/workflows/r10-http-mutating-candidate.yml \
+            tools/r10_http_mutating.py
+          git add -A -- \
+            .github/workflows/r10-http-mutating-candidate.yml \
+            tools/r10_http_mutating.py \
+            crates/controller-api/src/api_contract.rs \
+            crates/controller-api/src/http.rs
+
+          expected="$(mktemp)"
+          actual="$(mktemp)"
+          cat >"$expected" <<'EOF'
+          .github/workflows/r10-http-mutating-candidate.yml
+          crates/controller-api/src/api_contract.rs
+          crates/controller-api/src/http.rs
+          tools/r10_http_mutating.py
+          EOF
+          git diff --cached --name-only | LC_ALL=C sort >"$actual"
+          LC_ALL=C sort -o "$expected" "$expected"
+          diff -u "$expected" "$actual"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Implement authenticated mutating HTTP routes"
+
+          candidate_sha="$(git rev-parse HEAD)"
+          tag="r10-http-mutating-${GITHUB_RUN_ID}"
+          git tag "$tag" "$candidate_sha"
+          git push origin "refs/tags/$tag"
+          printf 'candidate_sha=%s\n' "$candidate_sha" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish candidate locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.commit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment 1 --body "<!-- r10-http-mutating-commit --> R10 mutating HTTP commit ready. Run: ${{ github.run_id }}. Candidate: ${CANDIDATE_SHA}. Ref: refs/tags/${CANDIDATE_TAG}."
+
+      - name: Wait for master and remove temporary tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.commit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+              master_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/master --jq '.object.sha')"
+              if [[ "$master_sha" == "$CANDIDATE_SHA" ]]; then
+                  git push origin ":refs/tags/$CANDIDATE_TAG"
+                  gh issue comment 1 --body "<!-- r10-http-mutating-cleanup --> R10 mutating HTTP candidate ${CANDIDATE_SHA} reached master; temporary tag ${CANDIDATE_TAG} was removed."
+                  exit 0
+              fi
+              sleep 10
+          done
+          printf 'master did not advance to validated candidate %s before cleanup deadline\n' "$CANDIDATE_SHA" >&2
+          exit 1
+
+      - name: Publish failed candidate locator
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment 1 --body "<!-- r10-http-mutating-candidate --> R10 mutating HTTP candidate failed. Run: ${{ github.run_id }}. SHA: ${{ github.sha }}."
