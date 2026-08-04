@@ -1,0 +1,167 @@
+name: R10 Config Candidate
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r10-config-candidate.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  candidate:
+    name: Validate typed controller configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install native build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libvncserver-dev pkg-config
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+
+      - name: Enable typed configuration module
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          config = Path("crates/controller-api/src/config.rs")
+          text = config.read_text(encoding="utf-8")
+          replacements = [
+              ("use std::collections::HashMap;\n", ""),
+              ("use std::io;\n", ""),
+              (
+                  "mod tests {\n    use super::*;\n",
+                  "mod tests {\n    use super::*;\n    use std::collections::HashMap;\n    use std::io;\n",
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f"config replacement target count for {old!r} was {text.count(old)}")
+              text = text.replace(old, new, 1)
+          config.write_text(text, encoding="utf-8")
+
+          lib = Path("crates/controller-api/src/lib.rs")
+          text = lib.read_text(encoding="utf-8")
+          target = "pub mod api_contract;\n"
+          if text.count(target) != 1 or "pub mod config;" in text:
+              raise SystemExit("controller lib module target is not unique")
+          lib.write_text(text.replace(target, target + "pub mod config;\n", 1), encoding="utf-8")
+          PY
+
+      - name: Format candidate
+        run: cargo fmt --all
+
+      - name: Reject whitespace errors
+        run: git diff --check
+
+      - name: Run Clippy with warnings denied
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: cargo test --locked --workspace --all-features
+
+      - name: Build documentation with warnings denied
+        env:
+          RUSTDOCFLAGS: -Dwarnings
+        run: cargo doc --locked --workspace --all-features --no-deps
+
+      - name: Run Python contract tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Create exact cleanup candidate commit
+        id: commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f -- .github/workflows/r10-config-candidate.yml
+          git add -A -- \
+            .github/workflows/r10-config-candidate.yml \
+            crates/controller-api/src/config.rs \
+            crates/controller-api/src/lib.rs
+
+          expected="$(mktemp)"
+          actual="$(mktemp)"
+          cat >"$expected" <<'EOF'
+          .github/workflows/r10-config-candidate.yml
+          crates/controller-api/src/config.rs
+          crates/controller-api/src/lib.rs
+          EOF
+          git diff --cached --name-only | LC_ALL=C sort >"$actual"
+          LC_ALL=C sort -o "$expected" "$expected"
+          diff -u "$expected" "$actual"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Implement typed controller configuration"
+
+          candidate_sha="$(git rev-parse HEAD)"
+          tag="r10-config-candidate-${GITHUB_RUN_ID}"
+          git tag "$tag" "$candidate_sha"
+          git push origin "refs/tags/$tag"
+          printf 'candidate_sha=%s\n' "$candidate_sha" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish candidate locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.commit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment 1 --body "<!-- r10-config-commit --> R10 configuration commit ready. Run: ${{ github.run_id }}. Candidate: ${CANDIDATE_SHA}. Ref: refs/tags/${CANDIDATE_TAG}."
+
+      - name: Wait for master and remove temporary tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ steps.commit.outputs.candidate_sha }}
+          CANDIDATE_TAG: ${{ steps.commit.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 60); do
+              master_sha="$(gh api repos/${GITHUB_REPOSITORY}/git/ref/heads/master --jq '.object.sha')"
+              if [[ "$master_sha" == "$CANDIDATE_SHA" ]]; then
+                  git push origin ":refs/tags/$CANDIDATE_TAG"
+                  gh issue comment 1 --body "<!-- r10-config-cleanup --> R10 configuration candidate ${CANDIDATE_SHA} reached master; temporary tag ${CANDIDATE_TAG} was removed."
+                  exit 0
+              fi
+              sleep 10
+          done
+          printf 'master did not advance to validated candidate %s before cleanup deadline\n' "$CANDIDATE_SHA" >&2
+          exit 1
+
+      - name: Publish failed candidate locator
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue comment 1 --body "<!-- r10-config-candidate --> R10 configuration candidate failed. Run: ${{ github.run_id }}. SHA: ${{ github.sha }}."
