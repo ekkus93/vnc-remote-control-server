@@ -562,111 +562,112 @@ CI run:
 
 ### R10.1 Typed configuration
 
-- [ ] Implement typed configuration loading.
-- [ ] Load non-secret values from env.
-- [ ] Load API token and VNC password from files by default.
-- [ ] Permit env secrets only in documented dev mode, if at all.
-- [ ] Validate socket addresses.
-- [ ] Validate ports.
-- [ ] Validate capacities.
-- [ ] Validate limits.
-- [ ] Validate timeouts.
-- [ ] Reject empty secrets.
-- [ ] Warn/fail on overly broad secret-file permissions according to policy.
-- [ ] Redact secret values from debug output.
+- [x] Implement typed configuration loading.
+- [x] Load non-secret values from env.
+- [x] Load API token and VNC password from files by default.
+- [x] Permit env secrets only in documented dev mode, if at all.
+- [x] Validate socket addresses.
+- [x] Validate ports.
+- [x] Validate capacities.
+- [x] Validate limits.
+- [x] Validate timeouts.
+- [x] Reject empty secrets.
+- [x] Warn/fail on overly broad secret-file permissions according to policy.
+- [x] Redact secret values from debug output.
 
 ### R10.2 Authentication middleware
 
-- [ ] Require `Authorization: Bearer <token>` for all `/v1/*` routes.
+- [x] Require `Authorization: Bearer <token>` for all `/v1/*` routes.
 - [ ] Authenticate WebSocket upgrades.
-- [ ] Never accept tokens in query parameters.
-- [ ] Use timing-resistant comparison where practical.
-- [ ] Return same generic response for missing and invalid tokens.
+- [x] Never accept tokens in query parameters.
+- [x] Use timing-resistant comparison where practical.
+- [x] Return same generic response for missing and invalid tokens.
 - [ ] Ensure access logs redact authorization header.
-- [ ] Test missing token.
-- [ ] Test malformed token.
-- [ ] Test wrong token.
-- [ ] Test correct token.
-- [ ] Test query-string token rejection.
+- [x] Test missing token.
+- [x] Test malformed token.
+- [x] Test wrong token.
+- [x] Test correct token.
+- [x] Test query-string token rejection.
 
 ### R10.3 Request IDs and errors
 
-- [ ] Accept valid incoming request ID or generate one.
-- [ ] Return request ID in response headers.
-- [ ] Return request ID in error body.
-- [ ] Implement JSON error envelope.
-- [ ] Map every domain error to stable code/status.
-- [ ] Prevent raw native errors from reaching clients.
-- [ ] Prevent secrets/payloads from reaching clients.
-- [ ] Test representative errors for every endpoint family.
+- [x] Accept valid incoming request ID or generate one.
+- [x] Return request ID in response headers.
+- [x] Return request ID in error body.
+- [x] Implement JSON error envelope.
+- [x] Map every domain error to stable code/status.
+- [x] Prevent raw native errors from reaching clients.
+- [x] Prevent secrets/payloads from reaching clients.
+- [x] Test representative errors for every endpoint family.
 
 ### R10.4 Health/status/display
 
-- [ ] Implement `GET /health/live`.
-- [ ] Implement `GET /health/ready`.
-- [ ] Ensure liveness does not imply VNC readiness.
-- [ ] Ensure readiness requires complete framebuffer.
-- [ ] Implement `GET /v1/status`.
-- [ ] Implement `GET /v1/display`.
-- [ ] Verify no secret/password is serialized.
+- [x] Implement `GET /health/live`.
+- [x] Implement `GET /health/ready`.
+- [x] Ensure liveness does not imply VNC readiness.
+- [x] Ensure readiness requires complete framebuffer.
+- [x] Implement `GET /v1/status`.
+- [x] Implement `GET /v1/display`.
+- [x] Verify no secret/password is serialized.
 
 ### R10.5 Screenshot route
 
-- [ ] Implement `GET /v1/screenshot.png`.
-- [ ] Add ETag support.
-- [ ] Add conditional GET support.
-- [ ] Return JSON error when unavailable.
-- [ ] Apply encode concurrency limit.
-- [ ] Apply encode deadline.
+- [x] Implement `GET /v1/screenshot.png`.
+- [x] Add ETag support.
+- [x] Add conditional GET support.
+- [x] Return JSON error when unavailable.
+- [x] Apply encode concurrency limit.
+- [x] Apply encode deadline.
 
 ### R10.6 Pointer routes
 
-- [ ] Implement `POST /v1/pointer/move`.
-- [ ] Implement `POST /v1/pointer/button`.
-- [ ] Implement `POST /v1/pointer/click`.
-- [ ] Implement `POST /v1/pointer/double-click`.
-- [ ] Implement `POST /v1/pointer/scroll`.
-- [ ] Validate all payloads before enqueue.
-- [ ] Return `202` for accepted asynchronous commands.
+- [x] Implement `POST /v1/pointer/move`.
+- [x] Implement `POST /v1/pointer/button`.
+- [x] Implement `POST /v1/pointer/click`.
+- [x] Implement `POST /v1/pointer/double-click`.
+- [x] Implement `POST /v1/pointer/scroll`.
+- [x] Validate all payloads before enqueue.
+- [x] Return `202` for accepted asynchronous commands.
 
 ### R10.7 Keyboard routes
 
-- [ ] Implement `POST /v1/keyboard/key`.
-- [ ] Implement `POST /v1/keyboard/chord`.
-- [ ] Implement `POST /v1/keyboard/text`.
-- [ ] Ensure text preflight completes before enqueue.
-- [ ] Enforce chord limit.
-- [ ] Enforce text limit.
+- [x] Implement `POST /v1/keyboard/key`.
+- [x] Implement `POST /v1/keyboard/chord`.
+- [x] Implement `POST /v1/keyboard/text`.
+- [x] Ensure text preflight completes before enqueue.
+- [x] Enforce chord limit.
+- [x] Enforce text limit.
 
 ### R10.8 Clipboard and connection routes
 
-- [ ] Implement `GET /v1/clipboard`.
-- [ ] Implement `PUT /v1/clipboard`.
-- [ ] Implement `POST /v1/connection/reconnect`.
-- [ ] Rate-limit manual reconnect.
-- [ ] Return `202` for accepted reconnect request.
+- [x] Implement `GET /v1/clipboard`.
+- [x] Implement `PUT /v1/clipboard`.
+- [x] Implement `POST /v1/connection/reconnect`.
+- [x] Rate-limit manual reconnect.
+- [x] Return `202` for accepted reconnect request.
 
 ### R10.9 HTTP limits and shutdown behavior
 
-- [ ] Enforce global JSON body limit.
-- [ ] Enforce route-specific text limit.
-- [ ] Enforce route-specific clipboard limit.
-- [ ] Add request header timeout.
-- [ ] Add request body timeout.
-- [ ] Add operation acknowledgement timeout.
-- [ ] Reject new control commands during shutdown.
-- [ ] Test slow requests.
-- [ ] Test oversized requests.
+- [x] Enforce global JSON body limit.
+- [x] Enforce route-specific text limit.
+- [x] Enforce route-specific clipboard limit.
+- [x] Add request header timeout.
+- [x] Add request body timeout.
+- [x] Add operation acknowledgement timeout.
+- [x] Reject new control commands during shutdown.
+- [x] Test slow requests.
+- [x] Test oversized requests.
 
 Evidence:
 
 ```text
-API commit:
-Routes implemented:
-Auth tests:
-Error tests:
-Limit tests:
-CI run:
+API branch: codex/r10-runtime
+Routes implemented: health, status, display, screenshot, pointer, keyboard, clipboard, reconnect
+Auth tests: router unit tests plus real missing-token/correct-token HTTP E2E
+Error tests: stable JSON envelope and domain mapping unit tests
+Limit tests: body size, header deadline, body deadline, acknowledgement deadline, shutdown rejection
+Runtime E2E: authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC deterministic pointer observation
+CI run: pending branch validation
 ```
 
 ---

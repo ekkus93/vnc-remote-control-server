@@ -131,3 +131,17 @@ This evidence update is documentation-only and triggers one final ordinary CI ru
 - run authenticated public HTTP-to-worker-to-LibVNCClient-to-TigerVNC end-to-end tests;
 - add slow-request tests;
 - reconcile the authoritative R10 checklist after the remaining HTTP runtime slice is complete.
+
+## Runtime completion candidate
+
+Branch `codex/r10-runtime` closes the remaining R10 runtime slice by adding:
+
+- a real TCP listener bound to `ControllerConfig::listen_address`;
+- bounded HTTP/1 header reads (`VRC_HTTP_HEADER_TIMEOUT_MS`);
+- bounded, length-limited request-body collection (`VRC_HTTP_BODY_TIMEOUT_MS`);
+- SIGINT/SIGTERM-driven shutdown that marks `HttpState` as shutting down before the listener stops accepting sockets;
+- bounded active-connection draining (`VRC_SHUTDOWN_GRACE_MS`) followed by worker shutdown and join;
+- slow-header, slow-body, and oversized-body runtime tests;
+- a real authenticated HTTP -> WorkerClient -> LibVNCClient -> TigerVNC E2E test.
+
+Exact branch CI run, job IDs, and validated commit SHA remain pending until the ordinary pull-request workflow completes.
