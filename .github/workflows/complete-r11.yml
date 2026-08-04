@@ -47,6 +47,7 @@ jobs:
           echo 'bbefead62145bf2d8bbee8410ac8a446b3669372f1ff8c61676b23c0b6bf755d  /tmp/r11_apply.py' | sha256sum --check --strict
           python3 -m py_compile /tmp/r11_apply.py
           python3 /tmp/r11_apply.py
+          sed -i '/use tracing_subscriber::util::SubscriberInitExt;/d' crates/controller-api/src/observability.rs
 
       - name: Format Rust sources
         run: cargo fmt --all
