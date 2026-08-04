@@ -37,7 +37,10 @@ The release controller image must install the matching runtime library explicitl
 The shim is limited to:
 
 - `rfbGetClient`;
-- `rfbInitClient`;
+- `ConnectToRFBServer`;
+- `InitialiseRFBConnection`;
+- the configured `MallocFrameBuffer` callback;
+- `SetFormatAndEncodings`;
 - `WaitForMessage` followed by `HandleRFBServerMessage`;
 - `rfbClientSetClientData` and `rfbClientGetClientData`;
 - password, framebuffer-allocation, completed-framebuffer-update, and clipboard callbacks;
@@ -46,6 +49,8 @@ The shim is limited to:
 - `SendKeyEvent`;
 - `SendClientCutText` and, when available through the installed API, UTF-8 clipboard support;
 - `rfbClientCleanup`.
+
+The shim deliberately does not call `rfbInitClient`. LibVNCClient's implementation calls `rfbClientCleanup` internally when connection or protocol initialization fails, which would make an external RAII owner retain a dangling pointer unless it relied on undocumented recovery behavior. Its argv endpoint parser also has semantics that differ from TigerVNC viewer's `host::port` notation. The shim instead passes the configured hostname and raw TCP port directly to `ConnectToRFBServer`, performs the documented initialization sequence, and retains one cleanup owner for every success and failure path.
 
 LibVNCClient documents that `rfbClientCleanup` does not free `client->frameBuffer`; therefore the shim owns and frees that buffer before native cleanup.
 
@@ -59,8 +64,9 @@ LibVNCClient documents that `rfbClientCleanup` does not free `client->frameBuffe
 6. No rectangle or snapshot copy is exposed until its bounds and length are validated.
 7. C callbacks contain no Rust code and cannot unwind into C.
 8. Cleanup frees project-owned buffers before calling `rfbClientCleanup` and is guarded against repeated execution.
-9. Native errors expose bounded categories only; secret and payload values are never formatted.
-10. The native client is intended only for the project-owned desktop container, not arbitrary untrusted VNC servers.
+9. Partial connection and protocol initialization failures remain owned by the shim and are destroyed only through the RAII cleanup path.
+10. Native errors expose bounded categories only; secret and payload values are never formatted.
+11. The native client is intended only for the project-owned desktop container, not arbitrary untrusted VNC servers.
 
 ## Version and security policy
 
@@ -81,6 +87,10 @@ Rejected because it exposes the full mutable C structure and callback surface, e
 ### Hand-maintained Rust representation of `rfbClient`
 
 Rejected because struct layout drift would be memory-unsafe.
+
+### `rfbInitClient` convenience initialization
+
+Rejected because it takes ownership of cleanup on failure and parses connection endpoints through command-line syntax. Both behaviors conflict with this project's explicit single-owner RAII contract.
 
 ### High-level third-party Rust wrapper
 
