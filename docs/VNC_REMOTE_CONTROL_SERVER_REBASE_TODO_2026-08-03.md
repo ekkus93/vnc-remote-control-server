@@ -578,11 +578,11 @@ CI run:
 ### R10.2 Authentication middleware
 
 - [x] Require `Authorization: Bearer <token>` for all `/v1/*` routes.
-- [ ] Authenticate WebSocket upgrades.
+- [x] Authenticate WebSocket upgrades.
 - [x] Never accept tokens in query parameters.
 - [x] Use timing-resistant comparison where practical.
 - [x] Return same generic response for missing and invalid tokens.
-- [ ] Ensure access logs redact authorization header.
+- [x] Ensure access logs redact authorization header.
 - [x] Test missing token.
 - [x] Test malformed token.
 - [x] Test wrong token.

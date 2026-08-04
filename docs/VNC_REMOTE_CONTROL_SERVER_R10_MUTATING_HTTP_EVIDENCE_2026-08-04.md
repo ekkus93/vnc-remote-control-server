@@ -156,9 +156,14 @@ The exact validated head passed:
 
 The documentation-only successor containing this reconciled record must also pass ordinary pull-request CI before the branch is considered ready to merge.
 
-## R10 boundary after this slice
+## R10 completion
 
-The requested R10 runtime work is complete. Two checklist entries remain intentionally open because they belong to the later WebSocket/observability slice rather than this HTTP runtime slice:
+Every R10 checklist item is now implemented on `master`.
 
-- authenticate WebSocket upgrades;
-- ensure future access logs redact the authorization header.
+- `GET /v1/events` is an authenticated WebSocket upgrade shell. Missing, malformed, wrong, and query-string credentials fail with the same generic `401` response before upgrade; a correct bearer token completes a standards-compliant `101 Switching Protocols` handshake.
+- The R10 shell drains incoming WebSocket traffic without publishing events. Event envelopes, delivery, buffering, client limits, heartbeats, and slow-client handling remain the explicit R11 scope.
+- The access-log middleware records the HTTP method, URI path without its query string, response status, validated request ID, bounded duration, and either `authorization=[REDACTED]` or `authorization=absent`.
+- Raw bearer values and query-string token attempts are never written to access logs.
+- Unit coverage verifies the formatter cannot expose header or query secrets, and the real HTTP E2E verifies unauthenticated/query/wrong WebSocket attempts fail, an authenticated upgrade succeeds, the redaction marker is emitted, and the API/VNC secrets remain absent from controller logs.
+
+Exact final `master` CI evidence will be appended after the ordinary CI run completes.

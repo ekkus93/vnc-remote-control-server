@@ -15,9 +15,13 @@ use crate::framebuffer::{FramebufferMetadata, FramebufferStatus};
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome, ScreenshotService};
 use crate::worker::{WorkerClient, WorkerFailureKind, WorkerSnapshot};
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Extension, Request, State, rejection::JsonRejection};
+use axum::extract::{
+    DefaultBodyLimit, Extension, Request, State,
+    rejection::JsonRejection,
+    ws::{WebSocket, WebSocketUpgrade},
+};
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -30,7 +34,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
@@ -222,6 +226,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/status", get(status))
         .route("/display", get(display))
         .route("/screenshot.png", get(screenshot))
+        .route("/events", get(events))
         .route("/pointer/move", post(pointer_move))
         .route("/pointer/button", post(pointer_button))
         .route("/pointer/click", post(pointer_click))
@@ -242,6 +247,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/health/ready", get(readiness))
         .nest("/v1", protected)
         .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
+        .layer(middleware::from_fn(access_log))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             assign_request_id,
@@ -430,6 +436,51 @@ async fn assign_request_id(
     response
 }
 
+struct AccessLogContext {
+    method: Method,
+    path: String,
+    request_id: RequestId,
+    authorization: &'static str,
+}
+
+impl AccessLogContext {
+    fn from_request(request: &Request) -> Self {
+        Self {
+            method: request.method().clone(),
+            path: request.uri().path().to_owned(),
+            request_id: request_id(request),
+            authorization: if request.headers().contains_key(AUTHORIZATION) {
+                "[REDACTED]"
+            } else {
+                "absent"
+            },
+        }
+    }
+}
+
+async fn access_log(request: Request, next: Next) -> Response {
+    let context = AccessLogContext::from_request(&request);
+    let started = Instant::now();
+    let response = next.run(request).await;
+    eprintln!(
+        "{}",
+        format_access_log(&context, response.status(), started.elapsed())
+    );
+    response
+}
+
+fn format_access_log(context: &AccessLogContext, status: StatusCode, elapsed: Duration) -> String {
+    format!(
+        "http_access method={} path={} status={} request_id={} authorization={} duration_ms={}",
+        context.method,
+        context.path,
+        status.as_u16(),
+        context.request_id.0,
+        context.authorization,
+        elapsed.as_millis()
+    )
+}
+
 async fn require_bearer(State(state): State<HttpState>, request: Request, next: Next) -> Response {
     let request_id = request_id(&request);
     let authorized = request
@@ -440,6 +491,18 @@ async fn require_bearer(State(state): State<HttpState>, request: Request, next: 
         return ApiError::unauthorized(request_id).into_response();
     }
     next.run(request).await
+}
+
+async fn events(websocket: WebSocketUpgrade) -> Response {
+    websocket.on_upgrade(drain_authenticated_websocket)
+}
+
+async fn drain_authenticated_websocket(mut socket: WebSocket) {
+    while let Some(message) = socket.recv().await {
+        if message.is_err() {
+            break;
+        }
+    }
 }
 
 async fn liveness() -> Json<HealthResponse> {
@@ -1338,6 +1401,28 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = json_body(response).await;
         assert_eq!(body["error"]["code"], "framebuffer_unavailable");
+    }
+
+    #[test]
+    fn access_log_redacts_authorization_and_query_values() {
+        let mut logged_request = request("/v1/status?token=query-secret")
+            .header(AUTHORIZATION, "Bearer header-secret")
+            .body(Body::empty())
+            .expect("request");
+        logged_request
+            .extensions_mut()
+            .insert(RequestId(Arc::from("caller-1")));
+        let context = AccessLogContext::from_request(&logged_request);
+        let line = format_access_log(&context, StatusCode::OK, Duration::from_millis(12));
+
+        assert!(line.contains("method=GET"));
+        assert!(line.contains("path=/v1/status"));
+        assert!(line.contains("status=200"));
+        assert!(line.contains("request_id=caller-1"));
+        assert!(line.contains("authorization=[REDACTED]"));
+        assert!(!line.contains("header-secret"));
+        assert!(!line.contains("query-secret"));
+        assert!(!line.contains("?token="));
     }
 
     #[test]
