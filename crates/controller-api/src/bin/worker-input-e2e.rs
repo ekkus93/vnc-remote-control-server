@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
-const INPUT_COORDINATE: Coordinate = Coordinate { x: 320, y: 240 };
+const PRIMARY_COORDINATE: Coordinate = Coordinate { x: 320, y: 240 };
+const MIDDLE_COORDINATE: Coordinate = Coordinate { x: 340, y: 260 };
+const RIGHT_COORDINATE: Coordinate = Coordinate { x: 360, y: 280 };
+const DOUBLE_CLICK_COORDINATE: Coordinate = Coordinate { x: 380, y: 300 };
 
 fn main() {
     if let Err(error) = run() {
@@ -36,7 +39,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             connect_timeout: Duration::from_secs(5),
             read_timeout: Duration::from_secs(5),
         },
-        command_capacity: 16,
+        command_capacity: 32,
         event_capacity: 64,
         maximum_framebuffer_bytes: MAX_FRAMEBUFFER_BYTES,
         poll_interval: Duration::from_millis(10),
@@ -57,22 +60,68 @@ fn run() -> Result<(), Box<dyn Error>> {
     execute(
         &client,
         WorkerCommand::MovePointer {
-            coordinate: INPUT_COORDINATE,
+            coordinate: PRIMARY_COORDINATE,
+        },
+    )?;
+    execute(
+        &client,
+        WorkerCommand::SetButton {
+            coordinate: PRIMARY_COORDINATE,
+            button: MouseButton::Left,
+            pressed: true,
+        },
+    )?;
+    execute(
+        &client,
+        WorkerCommand::SetButton {
+            coordinate: PRIMARY_COORDINATE,
+            button: MouseButton::Left,
+            pressed: false,
         },
     )?;
     execute(
         &client,
         WorkerCommand::Click {
-            coordinate: INPUT_COORDINATE,
+            coordinate: PRIMARY_COORDINATE,
             button: MouseButton::Left,
         },
     )?;
     execute(
         &client,
+        WorkerCommand::Click {
+            coordinate: MIDDLE_COORDINATE,
+            button: MouseButton::Middle,
+        },
+    )?;
+    execute(
+        &client,
+        WorkerCommand::Click {
+            coordinate: RIGHT_COORDINATE,
+            button: MouseButton::Right,
+        },
+    )?;
+    execute(
+        &client,
+        WorkerCommand::DoubleClick {
+            coordinate: DOUBLE_CLICK_COORDINATE,
+            button: MouseButton::Left,
+            interval_ms: 100,
+        },
+    )?;
+    execute(
+        &client,
         WorkerCommand::Scroll {
-            coordinate: INPUT_COORDINATE,
+            coordinate: PRIMARY_COORDINATE,
             delta_x: 0,
             delta_y: 2,
+        },
+    )?;
+    execute(
+        &client,
+        WorkerCommand::Scroll {
+            coordinate: PRIMARY_COORDINATE,
+            delta_x: 0,
+            delta_y: -1,
         },
     )?;
     execute(
