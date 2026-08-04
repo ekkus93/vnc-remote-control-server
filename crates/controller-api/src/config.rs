@@ -27,6 +27,10 @@ const DEFAULT_MAXIMUM_JSON_BYTES: usize = 1024 * 1024;
 const DEFAULT_COMMAND_ACK_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_SCREENSHOT_CONCURRENCY: usize = 2;
 const DEFAULT_SCREENSHOT_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_WEBSOCKET_EVENT_CAPACITY: usize = 256;
+const DEFAULT_WEBSOCKET_MAX_CLIENTS: usize = 16;
+const DEFAULT_WEBSOCKET_PING_INTERVAL_MS: u64 = 15_000;
+const DEFAULT_WEBSOCKET_IDLE_TIMEOUT_MS: u64 = 45_000;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 10;
 const DEFAULT_STARTUP_TIMEOUT_MS: u64 = 10_000;
 const DEFAULT_RECONNECT_MIN_MS: u64 = 250;
@@ -58,6 +62,14 @@ pub struct ControllerConfig {
     pub screenshot_concurrency: usize,
     /// Screenshot encode deadline.
     pub screenshot_timeout: Duration,
+    /// Per-client WebSocket event buffer capacity.
+    pub websocket_event_capacity: usize,
+    /// Maximum simultaneous authenticated WebSocket clients.
+    pub websocket_max_clients: usize,
+    /// WebSocket heartbeat interval.
+    pub websocket_ping_interval: Duration,
+    /// Maximum client inactivity before heartbeat cleanup.
+    pub websocket_idle_timeout: Duration,
     /// Native worker configuration.
     pub worker: WorkerSettings,
 }
@@ -73,6 +85,10 @@ impl fmt::Debug for ControllerConfig {
             .field("command_ack_timeout", &self.command_ack_timeout)
             .field("screenshot_concurrency", &self.screenshot_concurrency)
             .field("screenshot_timeout", &self.screenshot_timeout)
+            .field("websocket_event_capacity", &self.websocket_event_capacity)
+            .field("websocket_max_clients", &self.websocket_max_clients)
+            .field("websocket_ping_interval", &self.websocket_ping_interval)
+            .field("websocket_idle_timeout", &self.websocket_idle_timeout)
             .field("vnc_host", &self.worker.native.host)
             .field("vnc_port", &self.worker.native.port)
             .field("vnc_password", &"[REDACTED]")
@@ -143,6 +159,33 @@ impl ControllerConfig {
             "VRC_SCREENSHOT_TIMEOUT_MS",
             DEFAULT_SCREENSHOT_TIMEOUT_MS,
         )?;
+        let websocket_event_capacity = parse_bounded_usize(
+            environment,
+            "VRC_WEBSOCKET_EVENT_CAPACITY",
+            DEFAULT_WEBSOCKET_EVENT_CAPACITY,
+            1,
+            MAX_CHANNEL_CAPACITY,
+        )?;
+        let websocket_max_clients = parse_bounded_usize(
+            environment,
+            "VRC_WEBSOCKET_MAX_CLIENTS",
+            DEFAULT_WEBSOCKET_MAX_CLIENTS,
+            1,
+            MAX_CHANNEL_CAPACITY,
+        )?;
+        let websocket_ping_interval = parse_duration_ms(
+            environment,
+            "VRC_WEBSOCKET_PING_INTERVAL_MS",
+            DEFAULT_WEBSOCKET_PING_INTERVAL_MS,
+        )?;
+        let websocket_idle_timeout = parse_duration_ms(
+            environment,
+            "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+            DEFAULT_WEBSOCKET_IDLE_TIMEOUT_MS,
+        )?;
+        if websocket_idle_timeout <= websocket_ping_interval {
+            return Err(ConfigError::InvalidValue("VRC_WEBSOCKET_IDLE_TIMEOUT_MS"));
+        }
 
         let vnc_host = value_or(environment, "VRC_VNC_HOST", DEFAULT_VNC_HOST);
         if vnc_host.is_empty() || vnc_host.len() > 253 {
@@ -242,6 +285,10 @@ impl ControllerConfig {
             command_ack_timeout,
             screenshot_concurrency,
             screenshot_timeout,
+            websocket_event_capacity,
+            websocket_max_clients,
+            websocket_ping_interval,
+            websocket_idle_timeout,
             worker,
         })
     }
@@ -504,6 +551,16 @@ mod tests {
             ("VRC_VNC_PORT".to_owned(), "5999".to_owned()),
             ("VRC_COMMAND_CAPACITY".to_owned(), "8".to_owned()),
             ("VRC_EVENT_CAPACITY".to_owned(), "9".to_owned()),
+            ("VRC_WEBSOCKET_EVENT_CAPACITY".to_owned(), "10".to_owned()),
+            ("VRC_WEBSOCKET_MAX_CLIENTS".to_owned(), "3".to_owned()),
+            (
+                "VRC_WEBSOCKET_PING_INTERVAL_MS".to_owned(),
+                "1000".to_owned(),
+            ),
+            (
+                "VRC_WEBSOCKET_IDLE_TIMEOUT_MS".to_owned(),
+                "3000".to_owned(),
+            ),
             (
                 "VRC_PROCESS_INSTANCE".to_owned(),
                 "test-instance".to_owned(),
@@ -519,6 +576,10 @@ mod tests {
         assert_eq!(config.worker.native.port, 5999);
         assert_eq!(config.worker.command_capacity, 8);
         assert_eq!(config.worker.event_capacity, 9);
+        assert_eq!(config.websocket_event_capacity, 10);
+        assert_eq!(config.websocket_max_clients, 3);
+        assert_eq!(config.websocket_ping_interval, Duration::from_secs(1));
+        assert_eq!(config.websocket_idle_timeout, Duration::from_secs(3));
         assert_eq!(config.process_instance.as_ref(), "test-instance");
     }
 
@@ -530,6 +591,9 @@ mod tests {
             ("VRC_COMMAND_CAPACITY", "0"),
             ("VRC_MAX_JSON_BYTES", "2097153"),
             ("VRC_SCREENSHOT_MAX_CONCURRENT", "65"),
+            ("VRC_WEBSOCKET_EVENT_CAPACITY", "0"),
+            ("VRC_WEBSOCKET_MAX_CLIENTS", "0"),
+            ("VRC_WEBSOCKET_PING_INTERVAL_MS", "0"),
             ("VRC_COMMAND_ACK_TIMEOUT_MS", "0"),
             ("VRC_RECONNECT_JITTER_PER_MILLE", "501"),
         ] {

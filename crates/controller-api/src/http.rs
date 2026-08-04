@@ -11,14 +11,14 @@ use crate::api_contract::{
     PointerDoubleClickRequest, PointerMoveRequest, PointerScrollRequest, TextRequest,
 };
 use crate::config::ControllerConfig;
+use crate::events::{EventHub, WebSocketCapacityError};
 use crate::framebuffer::{FramebufferMetadata, FramebufferStatus};
+use crate::observability::Metrics;
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome, ScreenshotService};
 use crate::worker::{WorkerClient, WorkerFailureKind, WorkerSnapshot};
 use axum::body::Body;
 use axum::extract::{
-    DefaultBodyLimit, Extension, Request, State,
-    rejection::JsonRejection,
-    ws::{WebSocket, WebSocketUpgrade},
+    DefaultBodyLimit, Extension, Request, State, rejection::JsonRejection, ws::WebSocketUpgrade,
 };
 use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
+use tracing::Instrument;
 
 const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 const MAX_REQUEST_ID_BYTES: usize = 64;
@@ -60,6 +61,14 @@ pub trait HttpBackend: Send + Sync + 'static {
     ) -> Result<u64, DesktopError>;
     /// Returns the last valid inbound clipboard snapshot.
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError>;
+    /// Returns the current bounded command queue depth.
+    fn command_queue_depth(&self) -> usize {
+        0
+    }
+    /// Returns the configured bounded command queue capacity.
+    fn command_queue_capacity(&self) -> usize {
+        0
+    }
 }
 
 /// Production HTTP backend over one worker client and screenshot service.
@@ -113,6 +122,14 @@ impl HttpBackend for WorkerHttpBackend {
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {
         self.client.clipboard_snapshot()
     }
+
+    fn command_queue_depth(&self) -> usize {
+        self.client.command_queue_depth()
+    }
+
+    fn command_queue_capacity(&self) -> usize {
+        self.client.command_queue_capacity()
+    }
 }
 
 /// Shared router state.
@@ -125,6 +142,8 @@ pub struct HttpState {
     shutting_down: Arc<AtomicBool>,
     maximum_json_bytes: usize,
     command_ack_timeout: Duration,
+    events: EventHub,
+    metrics: Metrics,
 }
 
 impl HttpState {
@@ -135,6 +154,34 @@ impl HttpState {
         process_instance: Arc<str>,
         maximum_json_bytes: usize,
         command_ack_timeout: Duration,
+    ) -> Result<Self, HttpBuildError> {
+        let metrics = Metrics::default();
+        let events = EventHub::detached(
+            16,
+            4,
+            Duration::from_secs(15),
+            Duration::from_secs(45),
+            metrics.clone(),
+        );
+        Self::new_with_observability(
+            backend,
+            api_token,
+            process_instance,
+            maximum_json_bytes,
+            command_ack_timeout,
+            events,
+            metrics,
+        )
+    }
+
+    fn new_with_observability(
+        backend: Arc<dyn HttpBackend>,
+        api_token: Arc<str>,
+        process_instance: Arc<str>,
+        maximum_json_bytes: usize,
+        command_ack_timeout: Duration,
+        events: EventHub,
+        metrics: Metrics,
     ) -> Result<Self, HttpBuildError> {
         if api_token.is_empty() {
             return Err(HttpBuildError::EmptyApiToken);
@@ -156,21 +203,27 @@ impl HttpState {
             shutting_down: Arc::new(AtomicBool::new(false)),
             maximum_json_bytes,
             command_ack_timeout,
+            events,
+            metrics,
         })
     }
 
     /// Creates production HTTP state from a worker and validated configuration.
     pub fn from_worker(
         client: WorkerClient,
+        events: EventHub,
+        metrics: Metrics,
         config: &ControllerConfig,
     ) -> Result<Self, HttpBuildError> {
         let backend = WorkerHttpBackend::new(client, config).map_err(HttpBuildError::Screenshot)?;
-        Self::new(
+        Self::new_with_observability(
             Arc::new(backend),
             Arc::clone(&config.api_token),
             Arc::clone(&config.process_instance),
             config.maximum_json_bytes,
             config.command_ack_timeout,
+            events,
+            metrics,
         )
     }
 
@@ -227,6 +280,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/display", get(display))
         .route("/screenshot.png", get(screenshot))
         .route("/events", get(events))
+        .route("/metrics", get(metrics_endpoint))
         .route("/pointer/move", post(pointer_move))
         .route("/pointer/button", post(pointer_button))
         .route("/pointer/click", post(pointer_click))
@@ -247,7 +301,7 @@ pub fn router(state: HttpState) -> Router {
         .route("/health/ready", get(readiness))
         .nest("/v1", protected)
         .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
-        .layer(middleware::from_fn(access_log))
+        .layer(middleware::from_fn_with_state(state.clone(), access_log))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             assign_request_id,
@@ -458,17 +512,33 @@ impl AccessLogContext {
     }
 }
 
-async fn access_log(request: Request, next: Next) -> Response {
+async fn access_log(State(state): State<HttpState>, request: Request, next: Next) -> Response {
     let context = AccessLogContext::from_request(&request);
     let started = Instant::now();
-    let response = next.run(request).await;
-    eprintln!(
-        "{}",
-        format_access_log(&context, response.status(), started.elapsed())
+    let span = tracing::info_span!(
+        "http_request",
+        method = %context.method,
+        path = %context.path,
+        request_id = %context.request_id.0,
+    );
+    let response = next.run(request).instrument(span).await;
+    let elapsed = started.elapsed();
+    state
+        .metrics
+        .record_http(response.status().as_u16(), elapsed);
+    tracing::info!(
+        method = %context.method,
+        path = %context.path,
+        status = response.status().as_u16(),
+        request_id = %context.request_id.0,
+        authorization = context.authorization,
+        duration_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        "http_access"
     );
     response
 }
 
+#[cfg(test)]
 fn format_access_log(context: &AccessLogContext, status: StatusCode, elapsed: Duration) -> String {
     format!(
         "http_access method={} path={} status={} request_id={} authorization={} duration_ms={}",
@@ -488,21 +558,52 @@ async fn require_bearer(State(state): State<HttpState>, request: Request, next: 
         .get(AUTHORIZATION)
         .is_some_and(|value| bearer_matches(value.as_bytes(), state.api_token.as_bytes()));
     if !authorized {
+        state.metrics.record_auth_failure();
+        tracing::warn!(request_id = %request_id.0, "authentication_rejected");
         return ApiError::unauthorized(request_id).into_response();
     }
     next.run(request).await
 }
 
-async fn events(websocket: WebSocketUpgrade) -> Response {
-    websocket.on_upgrade(drain_authenticated_websocket)
+async fn events(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let subscription = state.events.subscribe().map_err(|WebSocketCapacityError| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "websocket_capacity",
+            "WebSocket client capacity is exhausted",
+            request_id,
+        )
+    })?;
+    let snapshot = state.backend.snapshot();
+    let clipboard_revision = state
+        .backend
+        .clipboard_snapshot()
+        .ok()
+        .map(|clipboard| clipboard.revision);
+    let initial = state.events.snapshot_event(&snapshot, clipboard_revision);
+    let events = state.events.clone();
+    Ok(websocket.on_upgrade(move |socket| async move {
+        events.serve(socket, subscription, initial).await;
+    }))
 }
 
-async fn drain_authenticated_websocket(mut socket: WebSocket) {
-    while let Some(message) = socket.recv().await {
-        if message.is_err() {
-            break;
-        }
-    }
+async fn metrics_endpoint(State(state): State<HttpState>) -> Response {
+    let snapshot = state.backend.snapshot();
+    let body = state.metrics.render(
+        &snapshot,
+        state.backend.command_queue_depth(),
+        state.backend.command_queue_capacity(),
+    );
+    let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    response
 }
 
 async fn liveness() -> Json<HealthResponse> {
@@ -573,11 +674,29 @@ async fn screenshot(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let backend = Arc::clone(&state.backend);
-    let result =
+    let started = Instant::now();
+    state.metrics.screenshot_started();
+    let joined =
         tokio::task::spawn_blocking(move || backend.capture_screenshot(if_none_match.as_deref()))
-            .await
-            .map_err(|_| ApiError::internal(request_id.clone()))?
-            .map_err(|error| screenshot_error(error, request_id.clone()))?;
+            .await;
+    let result = match joined {
+        Ok(Ok(result)) => {
+            state
+                .metrics
+                .screenshot_succeeded(&result, started.elapsed());
+            result
+        }
+        Ok(Err(error)) => {
+            state
+                .metrics
+                .screenshot_failed(Some(error), started.elapsed());
+            return Err(screenshot_error(error, request_id));
+        }
+        Err(_) => {
+            state.metrics.screenshot_failed(None, started.elapsed());
+            return Err(ApiError::internal(request_id));
+        }
+    };
 
     match result {
         ScreenshotOutcome::NotModified { headers } => {
@@ -769,12 +888,20 @@ async fn execute_command(
     if state.is_shutting_down() {
         return Err(ApiError::shutting_down(request_id));
     }
+    state.metrics.record_command(&command);
     let backend = Arc::clone(&state.backend);
     let timeout = state.command_ack_timeout;
     let result = tokio::task::spawn_blocking(move || backend.execute_command(command, timeout))
         .await
-        .map_err(|_| ApiError::internal(request_id.clone()))?
-        .map_err(|error| domain_error(error, request_id.clone()))?;
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let result = match result {
+        Ok(command_id) => command_id,
+        Err(error) => {
+            state.metrics.record_command_failure(&error);
+            tracing::warn!(error = %error, request_id = %request_id.0, "desktop_command_failed");
+            return Err(domain_error(error, request_id));
+        }
+    };
     Ok((
         StatusCode::ACCEPTED,
         Json(CommandAcceptedResponse {
@@ -1752,5 +1879,28 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn authenticated_metrics_use_fixed_labels_and_exclude_secrets() {
+        let app = router(test_state(true, MockScreenshot::Png));
+        let response = app
+            .oneshot(
+                request("/v1/metrics")
+                    .header(AUTHORIZATION, "Bearer test-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .expect("bounded metrics body");
+        let body = String::from_utf8(body.to_vec()).expect("UTF-8 metrics");
+        assert!(body.contains("vrc_connection_state{state=\"connected\"} 1"));
+        assert!(body.contains("vrc_worker_command_queue_capacity 0"));
+        assert!(!body.contains("test-token"));
+        assert!(!body.contains("request_id"));
     }
 }

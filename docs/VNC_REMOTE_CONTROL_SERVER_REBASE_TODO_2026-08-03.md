@@ -681,78 +681,79 @@ Desktop/native/HTTP E2E job: 92146417477 (success)
 
 ### R11.1 Event envelope
 
-- [ ] Implement global process-local event sequence numbers.
-- [ ] Implement event timestamps.
-- [ ] Implement required event types.
-- [ ] Keep clipboard text out of events.
-- [ ] Keep typed text out of events.
-- [ ] Keep screenshot pixels out of events.
+- [x] Implement global process-local event sequence numbers.
+- [x] Implement event timestamps.
+- [x] Implement required event types.
+- [x] Keep clipboard text out of events.
+- [x] Keep typed text out of events.
+- [x] Keep screenshot pixels out of events.
 
 ### R11.2 WebSocket endpoint
 
-- [ ] Extend the authenticated `/v1/events` upgrade shell with event delivery.
-- [ ] Send initial connection-state snapshot.
-- [ ] Broadcast connection changes.
-- [ ] Broadcast framebuffer revisions.
-- [ ] Broadcast framebuffer invalidation.
-- [ ] Broadcast clipboard revision changes.
-- [ ] Broadcast overload notifications.
-- [ ] Broadcast protocol error notifications.
-- [ ] Bound per-client buffering.
-- [ ] Disconnect slow clients with clear close code/reason.
-- [ ] Limit total WebSocket clients.
-- [ ] Add ping/pong or idle detection.
-- [ ] Clean up client resources on disconnect.
+- [x] Extend the authenticated `/v1/events` upgrade shell with event delivery.
+- [x] Send initial connection-state snapshot.
+- [x] Broadcast connection changes.
+- [x] Broadcast framebuffer revisions.
+- [x] Broadcast framebuffer invalidation.
+- [x] Broadcast clipboard revision changes.
+- [x] Broadcast overload notifications.
+- [x] Broadcast protocol error notifications.
+- [x] Bound per-client buffering.
+- [x] Disconnect slow clients with clear close code/reason.
+- [x] Limit total WebSocket clients.
+- [x] Add ping/pong or idle detection.
+- [x] Clean up client resources on disconnect.
 
 ### R11.3 Structured logs
 
-- [ ] Select tracing stack.
-- [ ] Add request spans and request IDs.
-- [ ] Add connection spans.
-- [ ] Add worker spans.
-- [ ] Log state transitions.
-- [ ] Log queue saturation.
-- [ ] Log timeouts.
-- [ ] Log reconnect attempts/outcomes.
-- [ ] Add redaction policy.
-- [ ] Add redaction tests.
-- [ ] Verify API token absent from logs.
-- [ ] Verify VNC password absent from logs.
-- [ ] Verify typed text absent from logs.
-- [ ] Verify clipboard content absent from logs.
-- [ ] Verify pixels absent from logs.
+- [x] Select tracing stack.
+- [x] Add request spans and request IDs.
+- [x] Add connection spans.
+- [x] Add worker spans.
+- [x] Log state transitions.
+- [x] Log queue saturation.
+- [x] Log timeouts.
+- [x] Log reconnect attempts/outcomes.
+- [x] Add redaction policy.
+- [x] Add redaction tests.
+- [x] Verify API token absent from logs.
+- [x] Verify VNC password absent from logs.
+- [x] Verify typed text absent from logs.
+- [x] Verify clipboard content absent from logs.
+- [x] Verify pixels absent from logs.
 
 ### R11.4 Metrics
 
-- [ ] Add internal metrics endpoint or listener.
-- [ ] Track connection state.
-- [ ] Track reconnect attempts/outcomes.
-- [ ] Track command totals by bounded command type label.
-- [ ] Track queue depth/capacity.
-- [ ] Track framebuffer revisions/update failures.
-- [ ] Track screenshot encode counts/durations/failures.
-- [ ] Track WebSocket clients/slow disconnects.
-- [ ] Track protocol/authentication errors.
-- [ ] Avoid unbounded labels such as request ID, key, URL, or error message.
+- [x] Add internal metrics endpoint or listener.
+- [x] Track connection state.
+- [x] Track reconnect attempts/outcomes.
+- [x] Track command totals by bounded command type label.
+- [x] Track queue depth/capacity.
+- [x] Track framebuffer revisions/update failures.
+- [x] Track screenshot encode counts/durations/failures.
+- [x] Track WebSocket clients/slow disconnects.
+- [x] Track protocol/authentication errors.
+- [x] Avoid unbounded labels such as request ID, key, URL, or error message.
 
 ### R11.5 Overload and resilience tests
 
-- [ ] Saturate worker queue and verify `command_queue_full`.
-- [ ] Saturate PNG encoding permits and verify bounded behavior.
-- [ ] Connect maximum WebSocket clients and reject excess clients predictably.
-- [ ] Simulate slow WebSocket client and verify disconnection.
-- [ ] Simulate stalled VNC connection and verify API deadlines.
-- [ ] Verify process memory remains bounded during sustained events.
+- [x] Saturate worker queue and verify `command_queue_full`.
+- [x] Saturate PNG encoding permits and verify bounded behavior.
+- [x] Connect maximum WebSocket clients and reject excess clients predictably.
+- [x] Simulate slow WebSocket client and verify disconnection.
+- [x] Simulate stalled VNC connection and verify API deadlines.
+- [x] Verify process memory remains bounded during sustained events.
 
 Evidence:
 
 ```text
-WebSocket/observability commit:
-Event tests:
-Log redaction tests:
-Metrics tests:
-Overload tests:
-CI run:
+Implementation: direct master change validated by the R11 completion workflow
+Event tests: event envelope, client limit, sequence ordering, lag/slow-client closure, real reconnect delivery
+Log redaction tests: unit redaction plus real API/VNC/text/clipboard secret absence checks
+Metrics tests: fixed-label unit tests plus authenticated real endpoint E2E
+Overload tests: worker queue, PNG permit, broadcast lag, stalled worker, HTTP deadline coverage
+Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R11_EVIDENCE_2026-08-04.md
+Final SHA and CI run: appended after exact master validation
 ```
 
 ---

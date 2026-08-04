@@ -1,3 +1,4 @@
+\
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -5,6 +6,8 @@ readonly image_name="vnc-remote-control-desktop:native-test"
 readonly container_name="vnc-remote-control-http-e2e-${GITHUB_RUN_ID:-local}-$$"
 readonly vnc_password='http-e2e-vnc-password'
 readonly api_token='http-e2e-api-token'
+readonly typed_secret='R11-TYPED-PAYLOAD-MUST-NOT-LOG'
+readonly clipboard_secret='R11-CLIPBOARD-PAYLOAD-MUST-NOT-LOG'
 temporary_directory=""
 controller_pid=""
 controller_log=""
@@ -117,6 +120,10 @@ env \
     VRC_HTTP_HEADER_TIMEOUT_MS=1000 \
     VRC_HTTP_BODY_TIMEOUT_MS=1000 \
     VRC_SHUTDOWN_GRACE_MS=3000 \
+    VRC_WEBSOCKET_EVENT_CAPACITY=4 \
+    VRC_WEBSOCKET_MAX_CLIENTS=1 \
+    VRC_WEBSOCKET_PING_INTERVAL_MS=500 \
+    VRC_WEBSOCKET_IDLE_TIMEOUT_MS=5000 \
     target/debug/controller-api >"$controller_log" 2>&1 &
 controller_pid=$!
 wait_for_controller
@@ -125,29 +132,32 @@ log "verifying bearer authentication fails closed"
 status="$(curl --silent --output "$temporary_directory/unauthorized.json" --write-out '%{http_code}' \
     "http://127.0.0.1:${api_port}/v1/status")"
 [[ "$status" == "401" ]] || fail "unauthenticated status request returned HTTP $status"
-
 grep -Fq '"code":"unauthorized"' "$temporary_directory/unauthorized.json" || \
     fail "unauthenticated response did not use the stable error envelope"
 
-
-log "verifying WebSocket upgrades require bearer authentication"
+log "verifying authenticated WebSocket snapshots, event delivery, heartbeats, and client limits"
 python3 - "$api_port" "$api_token" <<'PY'
 import base64
 import hashlib
+import http.client
+import json
 import os
 import socket
+import struct
 import sys
+import time
 
-host = "127.0.0.1"
-port = int(sys.argv[1])
-api_token = sys.argv[2]
-websocket_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+HOST = "127.0.0.1"
+PORT = int(sys.argv[1])
+API_TOKEN = sys.argv[2]
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-def check_upgrade(path: str, authorization: str | None, expected_status: int) -> None:
+
+def handshake(path: str, authorization: str | None):
     key = base64.b64encode(os.urandom(16)).decode("ascii")
     lines = [
         f"GET {path} HTTP/1.1",
-        f"Host: {host}:{port}",
+        f"Host: {HOST}:{PORT}",
         "Upgrade: websocket",
         "Connection: Upgrade",
         f"Sec-WebSocket-Key: {key}",
@@ -156,53 +166,170 @@ def check_upgrade(path: str, authorization: str | None, expected_status: int) ->
     if authorization is not None:
         lines.append(f"Authorization: Bearer {authorization}")
     request = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+    sock = socket.create_connection((HOST, PORT), timeout=5)
+    sock.settimeout(5)
+    sock.sendall(request)
+    response = bytearray()
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        response.extend(chunk)
+        if len(response) > 65536:
+            raise AssertionError("WebSocket handshake response exceeded limit")
+    headers_raw, _, leftover = bytes(response).partition(b"\r\n\r\n")
+    header_lines = headers_raw.decode("iso-8859-1").split("\r\n")
+    status = int(header_lines[0].split()[1])
+    headers = {}
+    for line in header_lines[1:]:
+        if ":" in line:
+            name, value = line.split(":", 1)
+            headers[name.strip().lower()] = value.strip()
+    if status == 101:
+        expected = base64.b64encode(
+            hashlib.sha1((key + GUID).encode("ascii")).digest()
+        ).decode("ascii")
+        if headers.get("sec-websocket-accept") != expected:
+            raise AssertionError("invalid WebSocket accept key")
+    return sock, status, headers, bytearray(leftover)
 
-    with socket.create_connection((host, port), timeout=5) as sock:
-        sock.settimeout(5)
-        sock.sendall(request)
-        response = bytearray()
-        while b"\r\n\r\n" not in response:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            response.extend(chunk)
-            if len(response) > 65536:
-                raise AssertionError("WebSocket handshake response exceeded limit")
 
-        header_block = bytes(response).split(b"\r\n\r\n", 1)[0].decode("iso-8859-1")
-        header_lines = header_block.split("\r\n")
-        status = int(header_lines[0].split()[1])
-        if status != expected_status:
-            raise AssertionError(
-                f"{path} returned {status}, expected {expected_status}: {header_block}"
-            )
-        headers = {}
-        for line in header_lines[1:]:
-            if ":" in line:
-                name, value = line.split(":", 1)
-                headers[name.strip().lower()] = value.strip()
+def expect_status(path: str, authorization: str | None, expected: int):
+    sock, status, headers, _ = handshake(path, authorization)
+    try:
+        if status != expected:
+            raise AssertionError(f"{path} returned {status}, expected {expected}")
+        if expected != 101 and "sec-websocket-accept" in headers:
+            raise AssertionError("rejected upgrade returned an accept key")
+    finally:
+        sock.close()
 
-        if expected_status == 101:
-            expected_accept = base64.b64encode(
-                hashlib.sha1((key + websocket_guid).encode("ascii")).digest()
-            ).decode("ascii")
-            if headers.get("sec-websocket-accept") != expected_accept:
-                raise AssertionError("authenticated upgrade returned invalid accept key")
-            if headers.get("upgrade", "").lower() != "websocket":
-                raise AssertionError("authenticated upgrade omitted Upgrade: websocket")
-            if "upgrade" not in headers.get("connection", "").lower():
-                raise AssertionError("authenticated upgrade omitted Connection: upgrade")
-            sock.sendall(b"\x88\x80" + os.urandom(4))
-        elif "sec-websocket-accept" in headers:
-            raise AssertionError("unauthorized upgrade returned a WebSocket accept key")
 
-check_upgrade("/v1/events", None, 401)
-check_upgrade(f"/v1/events?token={api_token}", None, 401)
-check_upgrade("/v1/events", "wrong-token", 401)
-check_upgrade("/v1/events", api_token, 101)
+def recv_exact(sock: socket.socket, buffer: bytearray, length: int) -> bytes:
+    while len(buffer) < length:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise AssertionError("WebSocket closed while reading a frame")
+        buffer.extend(chunk)
+    data = bytes(buffer[:length])
+    del buffer[:length]
+    return data
+
+
+def read_frame(sock: socket.socket, buffer: bytearray):
+    first, second = recv_exact(sock, buffer, 2)
+    opcode = first & 0x0F
+    masked = bool(second & 0x80)
+    length = second & 0x7F
+    if length == 126:
+        length = struct.unpack("!H", recv_exact(sock, buffer, 2))[0]
+    elif length == 127:
+        length = struct.unpack("!Q", recv_exact(sock, buffer, 8))[0]
+    mask = recv_exact(sock, buffer, 4) if masked else b""
+    payload = bytearray(recv_exact(sock, buffer, length))
+    if masked:
+        for index in range(len(payload)):
+            payload[index] ^= mask[index % 4]
+    return opcode, bytes(payload)
+
+
+def send_frame(sock: socket.socket, opcode: int, payload: bytes = b""):
+    mask = os.urandom(4)
+    length = len(payload)
+    header = bytearray([0x80 | opcode])
+    if length < 126:
+        header.append(0x80 | length)
+    elif length <= 0xFFFF:
+        header.append(0x80 | 126)
+        header.extend(struct.pack("!H", length))
+    else:
+        header.append(0x80 | 127)
+        header.extend(struct.pack("!Q", length))
+    header.extend(mask)
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    sock.sendall(bytes(header) + masked)
+
+
+def next_json(sock: socket.socket, buffer: bytearray, deadline: float):
+    while time.monotonic() < deadline:
+        opcode, payload = read_frame(sock, buffer)
+        if opcode == 0x1:
+            return json.loads(payload.decode("utf-8"))
+        if opcode == 0x9:
+            send_frame(sock, 0xA, payload)
+            continue
+        if opcode == 0x8:
+            raise AssertionError("WebSocket closed before expected event")
+    raise AssertionError("WebSocket event deadline exceeded")
+
+
+expect_status("/v1/events", None, 401)
+expect_status(f"/v1/events?token={API_TOKEN}", None, 401)
+expect_status("/v1/events", "wrong-token", 401)
+
+sock, status, _, buffer = handshake("/v1/events", API_TOKEN)
+if status != 101:
+    raise AssertionError(f"authenticated upgrade returned {status}")
+try:
+    snapshot = next_json(sock, buffer, time.monotonic() + 5)
+    if snapshot.get("type") != "snapshot":
+        raise AssertionError("first WebSocket message was not a snapshot: " + repr(snapshot))
+    if snapshot.get("state") != "connected":
+        raise AssertionError("snapshot did not report connected state: " + repr(snapshot))
+    if not isinstance(snapshot.get("sequence"), int):
+        raise AssertionError("snapshot sequence is missing")
+    if not isinstance(snapshot.get("timestamp_unix_ms"), int):
+        raise AssertionError("snapshot timestamp is missing")
+
+    second, second_status, _, _ = handshake("/v1/events", API_TOKEN)
+    try:
+        if second_status != 503:
+            raise AssertionError(f"excess WebSocket client returned {second_status}, expected 503")
+    finally:
+        second.close()
+
+    connection = http.client.HTTPConnection(HOST, PORT, timeout=5)
+    connection.request(
+        "POST",
+        "/v1/connection/reconnect",
+        body=b"",
+        headers={"Authorization": f"Bearer {API_TOKEN}", "Content-Length": "0"},
+    )
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    if response.status != 202:
+        raise AssertionError(f"reconnect returned HTTP {response.status}")
+
+    observed = []
+    sequences = [snapshot["sequence"]]
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        event = next_json(sock, buffer, deadline)
+        serialized = json.dumps(event, sort_keys=True)
+        for forbidden in [API_TOKEN, "password", "clipboard_text", "typed_text", "pixels"]:
+            if forbidden in serialized:
+                raise AssertionError("event exposed prohibited data")
+        sequence = event.get("sequence")
+        if not isinstance(sequence, int) or sequence <= sequences[-1]:
+            raise AssertionError("event sequences are not strictly increasing")
+        sequences.append(sequence)
+        observed.append(event.get("type"))
+        if "connection_state" in observed and "framebuffer_invalidated" in observed:
+            break
+    else:
+        raise AssertionError("reconnect events were not observed: " + repr(observed))
+finally:
+    try:
+        send_frame(sock, 0x8, struct.pack("!H", 1000))
+    finally:
+        sock.close()
 PY
 
-log "sending an authenticated pointer command through HTTP and the production worker"
+log "waiting for controller readiness after reconnect"
+wait_for_controller
+
+log "sending authenticated input and payload-redaction probes"
 status="$(curl --silent --show-error --output "$temporary_directory/pointer.json" --write-out '%{http_code}' \
     --request POST \
     --header "Authorization: Bearer ${api_token}" \
@@ -212,6 +339,22 @@ status="$(curl --silent --show-error --output "$temporary_directory/pointer.json
 [[ "$status" == "202" ]] || fail "authenticated pointer request returned HTTP $status"
 grep -Fq '"status":"accepted"' "$temporary_directory/pointer.json" || \
     fail "pointer response did not publish the accepted marker"
+
+status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --request POST \
+    --header "Authorization: Bearer ${api_token}" \
+    --header 'Content-Type: application/json' \
+    --data "{\"text\":\"${typed_secret}\"}" \
+    "http://127.0.0.1:${api_port}/v1/keyboard/text")"
+[[ "$status" == "202" ]] || fail "authenticated text request returned HTTP $status"
+
+status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+    --request PUT \
+    --header "Authorization: Bearer ${api_token}" \
+    --header 'Content-Type: application/json' \
+    --data "{\"text\":\"${clipboard_secret}\"}" \
+    "http://127.0.0.1:${api_port}/v1/clipboard")"
+[[ "$status" == "202" ]] || fail "authenticated clipboard request returned HTTP $status"
 
 log "verifying TigerVNC delivered the HTTP command to the deterministic desktop"
 docker exec -i "$container_name" python3 - <<'PY'
@@ -230,6 +373,26 @@ else:
     raise AssertionError('HTTP pointer command was not observed: ' + json.dumps(state, sort_keys=True))
 PY
 
+log "verifying authenticated bounded-label metrics"
+status="$(curl --silent --show-error --output "$temporary_directory/metrics.txt" --write-out '%{http_code}' \
+    --header "Authorization: Bearer ${api_token}" \
+    "http://127.0.0.1:${api_port}/v1/metrics")"
+[[ "$status" == "200" ]] || fail "metrics request returned HTTP $status"
+for metric in \
+    vrc_connection_state \
+    vrc_worker_command_queue_capacity \
+    vrc_commands_total \
+    vrc_websocket_rejected_total \
+    vrc_events_total \
+    vrc_protocol_errors_total; do
+    grep -Fq "$metric" "$temporary_directory/metrics.txt" || fail "metrics omitted $metric"
+done
+for secret in "$api_token" "$vnc_password" "$typed_secret" "$clipboard_secret"; do
+    if grep -Fq "$secret" "$temporary_directory/metrics.txt"; then
+        fail "metrics exposed prohibited payload or secret data"
+    fi
+done
+
 log "requesting signal-driven graceful shutdown"
 kill -TERM "$controller_pid"
 shutdown_deadline=$((SECONDS + 10))
@@ -244,16 +407,19 @@ set -e
 controller_pid=""
 [[ "$controller_status" -eq 0 ]] || fail "controller exited with status $controller_status"
 
-if grep -Fq "$vnc_password" "$controller_log"; then
-    fail "controller log exposed the VNC password"
-fi
-if grep -Fq "$api_token" "$controller_log"; then
-    fail "controller log exposed the API token"
-fi
-grep -Fq 'authorization=[REDACTED]' "$controller_log" || \
+for secret in "$vnc_password" "$api_token" "$typed_secret" "$clipboard_secret"; do
+    if grep -Fq "$secret" "$controller_log"; then
+        fail "controller log exposed prohibited payload or secret data"
+    fi
+done
+grep -Fq '[REDACTED]' "$controller_log" || \
     fail "controller access log did not emit the authorization redaction marker"
-grep -Fq 'path=/v1/events status=101' "$controller_log" || \
-    fail "controller access log did not record the authenticated WebSocket upgrade"
+grep -Fq 'http_access' "$controller_log" || \
+    fail "controller did not emit structured HTTP access events"
+grep -Fq '/v1/events' "$controller_log" || \
+    fail "controller access log did not record the WebSocket endpoint"
+grep -Fq 'worker_state_transition' "$controller_log" || \
+    fail "controller did not emit structured worker state transitions"
 
 printf 'http_runtime_e2e_complete=1\n'
-log "authenticated HTTP to TigerVNC E2E test passed"
+log "authenticated HTTP/WebSocket observability E2E test passed"

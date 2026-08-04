@@ -1,7 +1,9 @@
 //! Controller API process entry point.
 
 use controller_api::config::ControllerConfig;
+use controller_api::events::EventHub;
 use controller_api::http::{HttpState, router};
+use controller_api::observability::{Metrics, init_tracing};
 use controller_api::runtime::{RuntimeSettings, serve_until_shutdown};
 use controller_api::worker::DesktopWorker;
 use std::error::Error;
@@ -11,8 +13,9 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
+    init_tracing();
     if let Err(error) = run().await {
-        eprintln!("controller-api failed: {error}");
+        tracing::error!(error = %error, "controller_api_failed");
         std::process::exit(1);
     }
 }
@@ -21,8 +24,17 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let config = ControllerConfig::load()?;
     let runtime = RuntimeSettings::load(config.maximum_json_bytes)?;
     let listener = TcpListener::bind(config.listen_address).await?;
-    let worker = DesktopWorker::spawn(config.worker.clone())?;
-    let state = HttpState::from_worker(worker.client(), &config)?;
+    let mut worker = DesktopWorker::spawn(config.worker.clone())?;
+    let metrics = Metrics::default();
+    let (event_hub, event_bridge) = EventHub::start(
+        worker.take_events()?,
+        config.websocket_event_capacity,
+        config.websocket_max_clients,
+        config.websocket_ping_interval,
+        config.websocket_idle_timeout,
+        metrics.clone(),
+    )?;
+    let state = HttpState::from_worker(worker.client(), event_hub, metrics, &config)?;
     let app = router(state.clone());
     let termination = termination_signal()?;
     let shutdown_state = state.clone();
@@ -34,8 +46,10 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     state.begin_shutdown();
     let worker_result = worker.shutdown(config.command_ack_timeout);
+    let bridge_result = event_bridge.join();
     server_result?;
     worker_result?;
+    bridge_result?;
     Ok(())
 }
 

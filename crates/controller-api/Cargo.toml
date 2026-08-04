@@ -20,6 +20,8 @@ serde_json.workspace = true
 subtle.workspace = true
 tokio.workspace = true
 tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"

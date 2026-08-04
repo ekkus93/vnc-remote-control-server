@@ -18,9 +18,9 @@ use remote_desktop_core::{
     ClipboardSnapshot, ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo,
     KeyboardKey, MAX_FRAMEBUFFER_BYTES, WorkerCommand, validate_clipboard,
 };
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{
-    Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
+    Receiver, RecvError, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
 };
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
@@ -194,6 +194,9 @@ pub struct WorkerClient {
     framebuffer: FramebufferStore,
     clipboard: Arc<Mutex<Option<ClipboardSnapshot>>>,
     next_command_id: Arc<AtomicU64>,
+    command_queue_depth: Arc<AtomicUsize>,
+    command_queue_capacity: usize,
+    pending_overload: Arc<AtomicU64>,
 }
 
 impl WorkerClient {
@@ -210,23 +213,43 @@ impl WorkerClient {
             command,
             completion: completion_tx,
         };
+        self.command_queue_depth.fetch_add(1, Ordering::AcqRel);
         match self.commands.try_send(envelope) {
             Ok(()) => Ok(CommandTicket {
                 id,
                 completion: completion_rx,
             }),
             Err(TrySendError::Full(_)) => {
+                self.command_queue_depth.fetch_sub(1, Ordering::AcqRel);
+                self.pending_overload.fetch_add(1, Ordering::Relaxed);
                 let mut current = lock_unpoisoned(&self.snapshot);
                 current.rejected_commands = current.rejected_commands.saturating_add(1);
+                tracing::warn!(
+                    queue_capacity = self.command_queue_capacity,
+                    "worker_command_queue_saturated"
+                );
                 Err(DesktopError::CommandQueueFull)
             }
-            Err(TrySendError::Disconnected(_)) => Err(DesktopError::WorkerUnavailable),
+            Err(TrySendError::Disconnected(_)) => {
+                self.command_queue_depth.fetch_sub(1, Ordering::AcqRel);
+                Err(DesktopError::WorkerUnavailable)
+            }
         }
     }
 
     /// Returns one coherent status snapshot.
     pub fn snapshot(&self) -> WorkerSnapshot {
         lock_unpoisoned(&self.snapshot).clone()
+    }
+
+    /// Returns the current bounded command queue depth.
+    pub fn command_queue_depth(&self) -> usize {
+        self.command_queue_depth.load(Ordering::Acquire)
+    }
+
+    /// Returns the configured bounded command queue capacity.
+    pub const fn command_queue_capacity(&self) -> usize {
+        self.command_queue_capacity
     }
 
     /// Returns coherent framebuffer metadata without copying pixels.
@@ -268,6 +291,11 @@ pub struct WorkerEvents {
 }
 
 impl WorkerEvents {
+    /// Waits indefinitely for one worker event.
+    pub fn recv(&self) -> Result<WorkerEvent, RecvError> {
+        self.receiver.recv()
+    }
+
     /// Waits for one worker event.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<WorkerEvent, RecvTimeoutError> {
         self.receiver.recv_timeout(timeout)
@@ -277,7 +305,7 @@ impl WorkerEvents {
 /// Owning worker runtime. Dropping it requests shutdown and joins the thread.
 pub struct DesktopWorker {
     client: WorkerClient,
-    events: WorkerEvents,
+    events: Option<WorkerEvents>,
     join: Option<JoinHandle<()>>,
 }
 
@@ -293,9 +321,16 @@ impl DesktopWorker {
         self.client.clone()
     }
 
-    /// Returns the event receiver.
-    pub const fn events(&self) -> &WorkerEvents {
-        &self.events
+    /// Returns the event receiver while it remains owned by the worker.
+    pub fn events(&self) -> &WorkerEvents {
+        self.events
+            .as_ref()
+            .expect("worker events already transferred")
+    }
+
+    /// Transfers the single event receiver to the asynchronous event bridge.
+    pub fn take_events(&mut self) -> Result<WorkerEvents, DesktopError> {
+        self.events.take().ok_or(DesktopError::WorkerUnavailable)
     }
 
     /// Requests orderly shutdown, waits for acknowledgement, and joins the native thread.
@@ -312,6 +347,7 @@ impl DesktopWorker {
     {
         settings.validate()?;
         let startup_timeout = settings.startup_timeout;
+        let command_capacity = settings.command_capacity;
         let framebuffer = FramebufferStore::new(settings.maximum_framebuffer_bytes)?;
         let thread_framebuffer = framebuffer.clone();
         let clipboard = Arc::new(Mutex::new(None));
@@ -319,6 +355,10 @@ impl DesktopWorker {
         let (command_tx, command_rx) = sync_channel(settings.command_capacity);
         let (event_tx, event_rx) = sync_channel(settings.event_capacity);
         let (startup_tx, startup_rx) = sync_channel(1);
+        let command_queue_depth = Arc::new(AtomicUsize::new(0));
+        let thread_command_queue_depth = Arc::clone(&command_queue_depth);
+        let pending_overload = Arc::new(AtomicU64::new(0));
+        let thread_pending_overload = Arc::clone(&pending_overload);
         let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
             state: ConnectionState::Starting,
             started_at: SystemTime::now(),
@@ -342,6 +382,8 @@ impl DesktopWorker {
                         commands: command_rx,
                         events: event_tx,
                         startup: startup_tx,
+                        command_queue_depth: thread_command_queue_depth,
+                        pending_overload: thread_pending_overload,
                     },
                     thread_snapshot,
                     thread_framebuffer,
@@ -360,8 +402,11 @@ impl DesktopWorker {
                     framebuffer,
                     clipboard,
                     next_command_id: Arc::new(AtomicU64::new(1)),
+                    command_queue_depth,
+                    command_queue_capacity: command_capacity,
+                    pending_overload,
                 },
-                events: WorkerEvents { receiver: event_rx },
+                events: Some(WorkerEvents { receiver: event_rx }),
                 join: Some(join),
             }),
             Err(RecvTimeoutError::Timeout) => {
@@ -489,14 +534,17 @@ struct LoopState<'a, S> {
 
 impl<S: WorkerSession> LoopState<'_, S> {
     fn transition(&mut self, next: ConnectionState) -> Result<(), DesktopError> {
-        {
+        let previous = {
             let mut current = lock_unpoisoned(self.snapshot);
             if !current.state.can_transition_to(next) {
                 current.fatal_exit = true;
                 return Err(DesktopError::Protocol);
             }
+            let previous = current.state;
             current.state = next;
-        }
+            previous
+        };
+        tracing::info!(from = ?previous, to = ?next, "worker_state_transition");
         self.publish(DesktopEventKind::ConnectionState { state: next });
         Ok(())
     }
@@ -517,6 +565,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
             Err(TrySendError::Full(_)) => {
                 let mut current = lock_unpoisoned(self.snapshot);
                 current.dropped_events = current.dropped_events.saturating_add(1);
+                tracing::warn!("worker_event_queue_saturated");
             }
             Err(TrySendError::Disconnected(_)) => {}
         }
@@ -524,6 +573,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
 
     fn record_failure(&self, failure: WorkerFailureKind) {
         lock_unpoisoned(self.snapshot).last_failure = Some(failure);
+        tracing::warn!(failure = ?failure, "worker_failure_recorded");
     }
 
     fn begin_connect(&mut self) -> Result<(), DesktopError> {
@@ -651,8 +701,13 @@ impl<S: WorkerSession> LoopState<'_, S> {
             let _ = self.transition(ConnectionState::Disconnected);
         }
         let _ = self.transition(ConnectionState::Reconnecting);
-        self.next_connect =
-            Some(Instant::now() + reconnect_delay(self.settings, self.reconnect_attempt));
+        let delay = reconnect_delay(self.settings, self.reconnect_attempt);
+        tracing::info!(
+            attempt = self.reconnect_attempt,
+            delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            "worker_reconnect_scheduled"
+        );
+        self.next_connect = Some(Instant::now() + delay);
     }
 
     fn manual_reconnect(&mut self) -> Result<(), DesktopError> {
@@ -814,6 +869,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
                     now.saturating_duration_since(sent) >= self.settings.stall_confirm_after
                 }) {
                     self.record_failure(WorkerFailureKind::Timeout);
+                    tracing::warn!("worker_stall_timeout");
                     self.transition(ConnectionState::Degraded)?;
                     self.invalidate();
                     self.schedule_reconnect();
@@ -834,6 +890,8 @@ struct WorkerChannels {
     commands: Receiver<CommandEnvelope>,
     events: SyncSender<WorkerEvent>,
     startup: SyncSender<()>,
+    command_queue_depth: Arc<AtomicUsize>,
+    pending_overload: Arc<AtomicU64>,
 }
 
 fn run_worker<F, S>(
@@ -851,7 +909,11 @@ fn run_worker<F, S>(
         commands,
         events,
         startup,
+        command_queue_depth,
+        pending_overload,
     } = channels;
+    let worker_span = tracing::info_span!("desktop_worker");
+    let _worker_entered = worker_span.enter();
     let _ = startup.send(());
     let mut state = LoopState {
         settings: &settings,
@@ -876,6 +938,10 @@ fn run_worker<F, S>(
     let mut orderly_shutdown = false;
 
     loop {
+        if pending_overload.swap(0, Ordering::AcqRel) > 0 {
+            state.publish(DesktopEventKind::Overload);
+        }
+
         if state.session.is_none()
             && state
                 .next_connect
@@ -884,6 +950,9 @@ fn run_worker<F, S>(
             if state.begin_connect().is_err() {
                 break;
             }
+            let connection_span =
+                tracing::info_span!("vnc_connection_attempt", attempt = state.reconnect_attempt);
+            let _connection_entered = connection_span.enter();
             match factory() {
                 Ok(mut session) => match session.request_full_refresh() {
                     Ok(()) => {
@@ -917,6 +986,7 @@ fn run_worker<F, S>(
 
         match commands.try_recv() {
             Ok(envelope) => {
+                command_queue_depth.fetch_sub(1, Ordering::AcqRel);
                 let result = match envelope.command {
                     WorkerCommand::Shutdown => {
                         orderly_shutdown = true;
@@ -1695,5 +1765,49 @@ mod tests {
         assert!(first <= settings.reconnect_max_delay);
         assert!(second <= settings.reconnect_max_delay);
         assert!(far <= settings.reconnect_max_delay);
+    }
+
+    #[test]
+    fn bounded_command_queue_tracks_depth_and_rejection_without_payload_logging() {
+        let (command_tx, _command_rx) = sync_channel(1);
+        let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
+            state: ConnectionState::Connected,
+            started_at: SystemTime::now(),
+            connected_at: Some(SystemTime::now()),
+            last_message_at: Some(SystemTime::now()),
+            reconnect_attempts: 0,
+            last_failure: None,
+            framebuffer_revision: None,
+            rejected_commands: 0,
+            dropped_events: 0,
+            fatal_exit: false,
+        }));
+        let command_queue_depth = Arc::new(AtomicUsize::new(0));
+        let pending_overload = Arc::new(AtomicU64::new(0));
+        let client = WorkerClient {
+            commands: command_tx,
+            snapshot: Arc::clone(&snapshot),
+            framebuffer: FramebufferStore::default(),
+            clipboard: Arc::new(Mutex::new(None)),
+            next_command_id: Arc::new(AtomicU64::new(1)),
+            command_queue_depth: Arc::clone(&command_queue_depth),
+            command_queue_capacity: 1,
+            pending_overload: Arc::clone(&pending_overload),
+        };
+
+        let _first = client
+            .submit(WorkerCommand::RequestFullRefresh)
+            .expect("first command fits");
+        assert_eq!(client.command_queue_depth(), 1);
+        assert_eq!(client.command_queue_capacity(), 1);
+        assert!(matches!(
+            client.submit(WorkerCommand::TypeText {
+                text: "queue-secret".to_owned(),
+            }),
+            Err(DesktopError::CommandQueueFull)
+        ));
+        assert_eq!(command_queue_depth.load(Ordering::Acquire), 1);
+        assert_eq!(pending_overload.load(Ordering::Acquire), 1);
+        assert_eq!(lock_unpoisoned(&snapshot).rejected_commands, 1);
     }
 }

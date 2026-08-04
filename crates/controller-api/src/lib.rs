@@ -3,9 +3,11 @@
 
 pub mod api_contract;
 pub mod config;
+pub mod events;
 pub mod framebuffer;
 pub mod http;
 pub mod input;
+pub mod observability;
 pub mod runtime;
 pub mod screenshot;
 pub mod worker;

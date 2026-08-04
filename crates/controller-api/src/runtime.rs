@@ -182,7 +182,7 @@ async fn serve_connection(
     let mut builder = http1::Builder::new();
     builder.timer(TokioTimer::new());
     builder.header_read_timeout(settings.header_read_timeout);
-    let connection = builder.serve_connection(io, service);
+    let connection = builder.serve_connection(io, service).with_upgrades();
     tokio::pin!(connection);
 
     tokio::select! {
