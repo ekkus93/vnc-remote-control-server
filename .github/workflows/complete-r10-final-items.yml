@@ -36,33 +36,56 @@ jobs:
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           rustup default 1.97.1
 
-      - name: Apply remaining R10 implementation
-        run: python3 .github/complete_r10.py
-
-      - name: Format and validate implementation
+      - name: Apply, validate, and commit R10 directly to master
         shell: bash
+        env:
+          FAILURE_REPORT: docs/R10_EXECUTOR_FAILURE.txt
         run: |
-          set -euo pipefail
-          cargo fmt --all
-          cargo test --workspace --all-features
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-          cargo test --locked --workspace --all-features
-          RUSTDOCFLAGS=-Dwarnings cargo doc --locked --workspace --all-features --no-deps
-          bash -n tests/http-e2e/run.sh
+          set -uo pipefail
+          log_file="$(mktemp)"
+          set +e
+          {
+            echo 'stage=apply'
+            python3 .github/complete_r10.py
+            echo 'stage=format'
+            cargo fmt --all
+            echo 'stage=tests-unlocked'
+            cargo test --workspace --all-features
+            echo 'stage=clippy'
+            cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+            echo 'stage=tests-locked'
+            cargo test --locked --workspace --all-features
+            echo 'stage=rustdoc'
+            RUSTDOCFLAGS=-Dwarnings cargo doc --locked --workspace --all-features --no-deps
+            echo 'stage=shell-syntax'
+            bash -n tests/http-e2e/run.sh
+            echo 'stage=real-e2e'
+            bash tests/http-e2e/run.sh
+          } >"$log_file" 2>&1
+          status=$?
+          set -e
 
-      - name: Run real authenticated HTTP and WebSocket E2E
-        shell: bash
-        run: |
-          set -euo pipefail
-          bash tests/http-e2e/run.sh
-
-      - name: Commit directly to master and remove temporary files
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f .github/workflows/complete-r10-final-items.yml .github/complete_r10.py
           git config user.name "ekkus93"
           git config user.email "1386709+ekkus93@users.noreply.github.com"
+
+          if (( status != 0 )); then
+            git reset --hard HEAD
+            {
+              printf 'R10 direct-master executor failed with status %s.\n\n' "$status"
+              tail -n 500 "$log_file"
+            } | sed \
+              -e 's/http-e2e-api-token/[REDACTED]/g' \
+              -e 's/http-e2e-vnc-password/[REDACTED]/g' \
+              > "$FAILURE_REPORT"
+            git add "$FAILURE_REPORT"
+            git diff --cached --check
+            git commit -m "Record sanitized R10 executor failure"
+            git push origin HEAD:master
+            exit "$status"
+          fi
+
+          rm -f "$FAILURE_REPORT"
+          rm -f .github/workflows/complete-r10-final-items.yml .github/complete_r10.py
           git add -A
           git diff --cached --check
           git commit -m "Complete R10 WebSocket authentication and log redaction"
