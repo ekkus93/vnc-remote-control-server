@@ -17,20 +17,23 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Delete validated candidate tag
+      - name: Delete validated candidate tags
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          tag='r10-http-readonly-30936100767'
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
-              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}"
-          fi
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
-              printf 'temporary candidate tag still exists: %s\n' "$tag" >&2
-              exit 1
-          fi
-          gh issue comment 1 --body "<!-- r10-http-readonly-cleanup --> Temporary tag ${tag} was removed after replay commit 151053b0d6dccf6422b4cd27b321d0904e46122c reached master."
-
-# Triggered after the cleanup workflow became available on master.
+          tags=(
+              'r10-http-readonly-30936100767'
+              'r10-http-readonly-30936258782'
+          )
+          for tag in "${tags[@]}"; do
+              if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+                  gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}"
+              fi
+              if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+                  printf 'temporary candidate tag still exists: %s\n' "$tag" >&2
+                  exit 1
+              fi
+          done
+          gh issue comment 1 --body "<!-- r10-http-readonly-cleanup --> Temporary R10 read-only HTTP candidate tags were removed after replay commit 151053b0d6dccf6422b4cd27b321d0904e46122c reached master."
