@@ -58,7 +58,7 @@ class NativeContractTests(unittest.TestCase):
         for phrase in (
             "opaque native handle",
             "does not free `client->frameBuffer`",
-            "No callback from C into Rust",
+            "no callback from C into Rust",
             "project-owned desktop container",
             "version is captured in CI evidence",
         ):
