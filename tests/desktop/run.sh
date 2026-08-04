@@ -140,7 +140,7 @@ docker exec "$container_name" pgrep -u 10001 -x Xtigervnc >/dev/null || fail "Xt
 docker exec "$container_name" sh -eu -c "nc -z 127.0.0.1 5901"
 dimensions="$(docker exec "$container_name" sh -eu -c "xdpyinfo -display :1 | awk '/dimensions:/{print \$2; exit}'")"
 [[ "$dimensions" == "1280x800" ]] || fail "unexpected desktop dimensions: $dimensions"
-docker exec "$container_name" python3 - <<'PY'
+docker exec -i "$container_name" python3 - <<'PY'
 import json
 from pathlib import Path
 
