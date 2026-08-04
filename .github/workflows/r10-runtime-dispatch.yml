@@ -86,11 +86,14 @@ jobs:
         if: steps.pending.outputs.apply == 'true'
         run: bash -n tests/http-e2e/run.sh
 
-      - name: Commit validated runtime slice
+      - name: Commit validated runtime slice without workflow mutations
         if: steps.pending.outputs.apply == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          git restore --source=HEAD -- \
+            .github/workflows/ci.yml \
+            .github/workflows/r10-runtime-bootstrap.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add --all
