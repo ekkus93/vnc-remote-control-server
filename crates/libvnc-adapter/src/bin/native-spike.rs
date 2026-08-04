@@ -1,5 +1,5 @@
-use libvnc_adapter::{NativeClient, NativeClientConfig, PollOutcome};
-use remote_desktop_core::checked_rgba_len;
+use libvnc_adapter::{NativeClient, NativeClientConfig};
+use remote_desktop_core::{Coordinate, DisplayInfo, KeyboardKey, checked_rgba_len};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -10,6 +10,9 @@ const EXPECTED_WIDTH: u32 = 1_280;
 const EXPECTED_HEIGHT: u32 = 800;
 const FRAMEBUFFER_DEADLINE: Duration = Duration::from_secs(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const POINTER_X: u32 = 100;
+const POINTER_Y: u32 = 100;
+const CLIPBOARD_PROOF: &str = "native-clipboard-proof";
 
 fn main() {
     if let Err(error) = run() {
@@ -47,9 +50,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     client.request_full_refresh()?;
     let deadline = Instant::now() + FRAMEBUFFER_DEADLINE;
     loop {
-        match client.poll(POLL_INTERVAL)? {
-            PollOutcome::MessageProcessed | PollOutcome::TimedOut => {}
-        }
+        client.poll(POLL_INTERVAL)?;
 
         if let Ok(display) = client.display_info()
             && display.complete
@@ -62,6 +63,20 @@ fn run() -> Result<(), Box<dyn Error>> {
             if framebuffer.bytes.len() != expected_length {
                 return Err(io::Error::other("unexpected VNC framebuffer byte length").into());
             }
+
+            let domain_display = DisplayInfo::new(
+                framebuffer.width,
+                framebuffer.height,
+                24,
+                framebuffer.revision,
+                true,
+            )?;
+            let coordinate = Coordinate::new(POINTER_X, POINTER_Y, domain_display)?;
+            client.send_pointer(coordinate, 0)?;
+            client.send_key(KeyboardKey::F5, true)?;
+            client.send_key(KeyboardKey::F5, false)?;
+            client.send_clipboard(CLIPBOARD_PROOF)?;
+
             println!(
                 "libvncclient_version={} protocol_major={} dimensions={}x{} revision={} bytes={}",
                 NativeClient::library_version(),
