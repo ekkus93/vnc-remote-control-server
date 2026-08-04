@@ -4,13 +4,12 @@
 //! LibVNCClient callbacks and never calls Rust, so Rust panics cannot cross the
 //! native callback boundary.
 
-use remote_desktop_core::{
-    Coordinate, DesktopError, KeyboardKey, validate_clipboard,
-};
+use remote_desktop_core::{Coordinate, DesktopError, KeyboardKey, validate_clipboard};
+use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint};
+use std::fmt;
 use std::ptr::NonNull;
 use std::time::Duration;
-use thiserror::Error;
 
 const STATUS_OK: c_int = 0;
 const STATUS_INVALID_ARGUMENT: c_int = 1;
@@ -96,39 +95,54 @@ pub struct NativeClientConfig {
 }
 
 /// Bounded native adapter failures that do not contain credentials or payloads.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeError {
     /// A public argument violated the native boundary contract.
-    #[error("native argument rejected")]
     InvalidArgument,
     /// Native allocation failed.
-    #[error("native allocation failed")]
     AllocationFailed,
     /// LibVNCClient reported a bounded native failure.
-    #[error("native VNC operation failed: {message}")]
     NativeFailure {
         /// Bounded message produced only by the project-owned shim.
         message: String,
     },
     /// The transport is disconnected.
-    #[error("native VNC transport is disconnected")]
     Disconnected,
     /// No complete framebuffer is available.
-    #[error("native framebuffer is unavailable")]
     FramebufferUnavailable,
     /// A destination buffer was smaller than the reported source size.
-    #[error("native destination buffer is too small")]
     BufferTooSmall,
     /// No inbound clipboard value has been observed.
-    #[error("native clipboard is unavailable")]
     ClipboardUnavailable,
     /// Native clipboard bytes were not valid UTF-8.
-    #[error("native clipboard is not valid UTF-8")]
     ClipboardNotUtf8,
     /// A configuration string contained an embedded NUL.
-    #[error("native configuration contains an embedded NUL")]
     EmbeddedNul,
 }
+
+impl fmt::Display for NativeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidArgument => formatter.write_str("native argument rejected"),
+            Self::AllocationFailed => formatter.write_str("native allocation failed"),
+            Self::NativeFailure { message } => {
+                write!(formatter, "native VNC operation failed: {message}")
+            }
+            Self::Disconnected => formatter.write_str("native VNC transport is disconnected"),
+            Self::FramebufferUnavailable => {
+                formatter.write_str("native framebuffer is unavailable")
+            }
+            Self::BufferTooSmall => formatter.write_str("native destination buffer is too small"),
+            Self::ClipboardUnavailable => formatter.write_str("native clipboard is unavailable"),
+            Self::ClipboardNotUtf8 => formatter.write_str("native clipboard is not valid UTF-8"),
+            Self::EmbeddedNul => {
+                formatter.write_str("native configuration contains an embedded NUL")
+            }
+        }
+    }
+}
+
+impl Error for NativeError {}
 
 impl From<NativeError> for DesktopError {
     fn from(error: NativeError) -> Self {
@@ -237,8 +251,8 @@ impl NativeClient {
 
     /// Processes at most one server message within a bounded wait.
     pub fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
-        let microseconds = u32::try_from(timeout.as_micros())
-            .map_err(|_| NativeError::InvalidArgument)?;
+        let microseconds =
+            u32::try_from(timeout.as_micros()).map_err(|_| NativeError::InvalidArgument)?;
         // SAFETY: mutable access guarantees exclusive native use.
         let status = unsafe { vrc_client_poll(self.pointer.as_ptr(), microseconds) };
         match status {
@@ -277,13 +291,10 @@ impl NativeClient {
 
     /// Sends one symbolic key transition.
     pub fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
+        let pressed = if pressed { 1 } else { 0 };
         // SAFETY: mutable access guarantees exclusive native use.
         let status = unsafe {
-            vrc_client_send_key(
-                self.pointer.as_ptr(),
-                key.keysym(),
-                c_int::from(pressed),
-            )
+            vrc_client_send_key(self.pointer.as_ptr(), key.keysym(), pressed)
         };
         self.status_to_result(status)
     }
@@ -332,9 +343,8 @@ impl NativeClient {
         let display = self.display_info()?;
         let mut length = 0_usize;
         // SAFETY: output pointer is valid and the opaque handle is live.
-        let status = unsafe {
-            vrc_client_framebuffer_length(self.pointer.as_ptr(), &mut length)
-        };
+        let status =
+            unsafe { vrc_client_framebuffer_length(self.pointer.as_ptr(), &mut length) };
         self.status_to_result(status)?;
         let mut bytes = vec![0_u8; length];
         let mut revision = 0_u64;
