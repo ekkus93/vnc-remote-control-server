@@ -3,4 +3,5 @@
 
 pub mod api_contract;
 pub mod framebuffer;
+pub mod screenshot;
 pub mod worker;

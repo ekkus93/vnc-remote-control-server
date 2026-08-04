@@ -14,6 +14,7 @@ license = "MIT"
 repository = "https://github.com/ekkus93/vnc-remote-control-server"
 
 [workspace.dependencies]
+png = "0.18.1"
 proptest = "1.7.0"
 serde = { version = "1.0.219", features = ["derive"] }
 thiserror = "2.0.12"

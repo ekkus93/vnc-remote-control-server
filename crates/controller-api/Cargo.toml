@@ -9,6 +9,7 @@ description = "Authenticated HTTP and WebSocket controller for one VNC desktop"
 
 [dependencies]
 libvnc-adapter = { path = "../libvnc-adapter" }
+png.workspace = true
 remote-desktop-core = { path = "../remote-desktop-core" }
 serde.workspace = true
 
