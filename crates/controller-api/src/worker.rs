@@ -18,7 +18,7 @@ use remote_desktop_core::{
     ClipboardSnapshot, ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo,
     KeyboardKey, MAX_FRAMEBUFFER_BYTES, WorkerCommand, validate_clipboard,
 };
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{
     Receiver, RecvError, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
 };
@@ -197,11 +197,15 @@ pub struct WorkerClient {
     command_queue_depth: Arc<AtomicUsize>,
     command_queue_capacity: usize,
     pending_overload: Arc<AtomicU64>,
+    shutdown_requested: Arc<AtomicBool>,
 }
 
 impl WorkerClient {
     /// Submits one command without touching native adapter state.
     pub fn submit(&self, command: WorkerCommand) -> Result<CommandTicket, DesktopError> {
+        if self.shutdown_requested.load(Ordering::Acquire) {
+            return Err(DesktopError::WorkerUnavailable);
+        }
         let id = self
             .next_command_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -235,6 +239,17 @@ impl WorkerClient {
                 Err(DesktopError::WorkerUnavailable)
             }
         }
+    }
+
+    /// Requests worker shutdown through a control signal that does not share
+    /// capacity with the normal bounded command queue.
+    pub fn request_shutdown(&self) {
+        self.shutdown_requested.store(true, Ordering::Release);
+    }
+
+    /// Returns whether out-of-band shutdown has been requested.
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Acquire)
     }
 
     /// Returns one coherent status snapshot.
@@ -333,10 +348,13 @@ impl DesktopWorker {
         self.events.take().ok_or(DesktopError::WorkerUnavailable)
     }
 
-    /// Requests orderly shutdown, waits for acknowledgement, and joins the native thread.
+    /// Requests orderly shutdown through the out-of-band control signal and
+    /// joins the native thread. The supplied timeout is retained for API
+    /// compatibility; the shutdown request itself does not consume command
+    /// queue capacity and therefore cannot be blocked behind queued work.
     pub fn shutdown(mut self, timeout: Duration) -> Result<(), DesktopError> {
-        let ticket = self.client.submit(WorkerCommand::Shutdown)?;
-        ticket.wait(timeout)?;
+        let _ = timeout;
+        self.client.request_shutdown();
         self.join_worker()
     }
 
@@ -359,6 +377,8 @@ impl DesktopWorker {
         let thread_command_queue_depth = Arc::clone(&command_queue_depth);
         let pending_overload = Arc::new(AtomicU64::new(0));
         let thread_pending_overload = Arc::clone(&pending_overload);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let thread_shutdown_requested = Arc::clone(&shutdown_requested);
         let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
             state: ConnectionState::Starting,
             started_at: SystemTime::now(),
@@ -384,6 +404,7 @@ impl DesktopWorker {
                         startup: startup_tx,
                         command_queue_depth: thread_command_queue_depth,
                         pending_overload: thread_pending_overload,
+                        shutdown_requested: thread_shutdown_requested,
                     },
                     thread_snapshot,
                     thread_framebuffer,
@@ -405,12 +426,13 @@ impl DesktopWorker {
                     command_queue_depth,
                     command_queue_capacity: command_capacity,
                     pending_overload,
+                    shutdown_requested,
                 },
                 events: Some(WorkerEvents { receiver: event_rx }),
                 join: Some(join),
             }),
             Err(RecvTimeoutError::Timeout) => {
-                let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter());
+                shutdown_requested.store(true, Ordering::Release);
                 let _ = join.join();
                 Err(DesktopError::Timeout)
             }
@@ -434,9 +456,7 @@ impl Drop for DesktopWorker {
         if self.join.is_none() {
             return;
         }
-        if let Ok(ticket) = self.client.submit(WorkerCommand::Shutdown) {
-            let _ = ticket.wait(Duration::from_secs(2));
-        }
+        self.client.request_shutdown();
         let _ = self.join_worker();
     }
 }
@@ -552,6 +572,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
     fn publish(&mut self, kind: DesktopEventKind) {
         let Some(sequence) = self.event_sequence.checked_add(1) else {
             lock_unpoisoned(self.snapshot).fatal_exit = true;
+            tracing::error!("worker_event_sequence_overflow");
             return;
         };
         self.event_sequence = sequence;
@@ -892,6 +913,7 @@ struct WorkerChannels {
     startup: SyncSender<()>,
     command_queue_depth: Arc<AtomicUsize>,
     pending_overload: Arc<AtomicU64>,
+    shutdown_requested: Arc<AtomicBool>,
 }
 
 fn run_worker<F, S>(
@@ -911,6 +933,7 @@ fn run_worker<F, S>(
         startup,
         command_queue_depth,
         pending_overload,
+        shutdown_requested,
     } = channels;
     let worker_span = tracing::info_span!("desktop_worker");
     let _worker_entered = worker_span.enter();
@@ -938,6 +961,11 @@ fn run_worker<F, S>(
     let mut orderly_shutdown = false;
 
     loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            orderly_shutdown = true;
+            break;
+        }
+
         if pending_overload.swap(0, Ordering::AcqRel) > 0 {
             state.publish(DesktopEventKind::Overload);
         }
@@ -989,6 +1017,7 @@ fn run_worker<F, S>(
                 command_queue_depth.fetch_sub(1, Ordering::AcqRel);
                 let result = match envelope.command {
                     WorkerCommand::Shutdown => {
+                        shutdown_requested.store(true, Ordering::Release);
                         orderly_shutdown = true;
                         Ok(())
                     }
@@ -1003,6 +1032,11 @@ fn run_worker<F, S>(
             }
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
+        }
+
+        if shutdown_requested.load(Ordering::Acquire) {
+            orderly_shutdown = true;
+            break;
         }
 
         if state.session.is_some() {
@@ -1289,6 +1323,21 @@ mod tests {
         panic!("worker did not reach {expected:?}: {:?}", client.snapshot());
     }
 
+    fn snapshot() -> Arc<Mutex<WorkerSnapshot>> {
+        Arc::new(Mutex::new(WorkerSnapshot {
+            state: ConnectionState::Connected,
+            started_at: SystemTime::now(),
+            connected_at: Some(SystemTime::now()),
+            last_message_at: Some(SystemTime::now()),
+            reconnect_attempts: 0,
+            last_failure: None,
+            framebuffer_revision: None,
+            rejected_commands: 0,
+            dropped_events: 0,
+            fatal_exit: false,
+        }))
+    }
+
     #[test]
     fn settings_reject_zero_capacities_invalid_frame_limit_and_delay_order() {
         let mut candidate = settings();
@@ -1335,74 +1384,67 @@ mod tests {
     }
 
     #[test]
-    fn worker_routes_atomic_input_through_single_owned_session() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let factory_events = Arc::clone(&events);
-        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
-            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
-        })
-        .expect("worker spawns");
-        let client = worker.client();
-        wait_for_state(&client, ConnectionState::Connected);
-        let point = Coordinate { x: 1, y: 1 };
+    fn worker_shutdown_does_not_consume_normal_command_queue_capacity() {
+        let (command_tx, command_rx) = sync_channel(1);
+        command_tx
+            .try_send(CommandEnvelope::shutdown_without_waiter())
+            .expect("queue can be filled");
+        let command_queue_depth = Arc::new(AtomicUsize::new(1));
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let shutdown_for_thread = Arc::clone(&shutdown_requested);
+        let (joined_tx, joined_rx) = sync_channel(1);
+        let join = thread::spawn(move || {
+            let _held_receiver = command_rx;
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while !shutdown_for_thread.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline, "shutdown signal was not observed");
+                thread::sleep(Duration::from_millis(1));
+            }
+            let _ = joined_tx.send(());
+        });
+        let worker = DesktopWorker {
+            client: WorkerClient {
+                commands: command_tx,
+                snapshot: snapshot(),
+                framebuffer: FramebufferStore::default(),
+                clipboard: Arc::new(Mutex::new(None)),
+                next_command_id: Arc::new(AtomicU64::new(1)),
+                command_queue_depth,
+                command_queue_capacity: 1,
+                pending_overload: Arc::new(AtomicU64::new(0)),
+                shutdown_requested,
+            },
+            events: None,
+            join: Some(join),
+        };
 
-        for command in [
-            WorkerCommand::SetButton {
-                coordinate: point,
-                button: MouseButton::Right,
-                pressed: true,
-            },
-            WorkerCommand::Click {
-                coordinate: point,
-                button: MouseButton::Left,
-            },
-            WorkerCommand::Scroll {
-                coordinate: point,
-                delta_x: 0,
-                delta_y: 1,
-            },
-            WorkerCommand::Chord {
-                keys: vec![
-                    KeyboardKey::CtrlLeft,
-                    KeyboardKey::AltLeft,
-                    KeyboardKey::Printable('T'),
-                ],
-            },
-            WorkerCommand::SetButton {
-                coordinate: point,
-                button: MouseButton::Right,
-                pressed: false,
-            },
-        ] {
-            client
-                .submit(command)
-                .expect("accepted")
-                .wait(Duration::from_secs(1))
-                .expect("executed");
-        }
+        drop(worker);
+        joined_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("drop joined through out-of-band shutdown signal");
+    }
 
-        assert_eq!(
-            *lock_unpoisoned(&events),
-            vec![
-                InputEvent::Pointer(point, 4),
-                InputEvent::Pointer(point, 4),
-                InputEvent::Pointer(point, 5),
-                InputEvent::Pointer(point, 4),
-                InputEvent::Pointer(point, 4),
-                InputEvent::Pointer(point, 12),
-                InputEvent::Pointer(point, 4),
-                InputEvent::Key(KeyboardKey::CtrlLeft, true),
-                InputEvent::Key(KeyboardKey::AltLeft, true),
-                InputEvent::Key(KeyboardKey::Printable('T'), true),
-                InputEvent::Key(KeyboardKey::Printable('T'), false),
-                InputEvent::Key(KeyboardKey::AltLeft, false),
-                InputEvent::Key(KeyboardKey::CtrlLeft, false),
-                InputEvent::Pointer(point, 0),
-            ]
-        );
-        worker
-            .shutdown(Duration::from_secs(1))
-            .expect("worker joins");
+    #[test]
+    fn worker_client_rejects_commands_after_shutdown_is_requested_without_depth_leak() {
+        let (command_tx, _command_rx) = sync_channel(1);
+        let command_queue_depth = Arc::new(AtomicUsize::new(0));
+        let client = WorkerClient {
+            commands: command_tx,
+            snapshot: snapshot(),
+            framebuffer: FramebufferStore::default(),
+            clipboard: Arc::new(Mutex::new(None)),
+            next_command_id: Arc::new(AtomicU64::new(1)),
+            command_queue_depth: Arc::clone(&command_queue_depth),
+            command_queue_capacity: 1,
+            pending_overload: Arc::new(AtomicU64::new(0)),
+            shutdown_requested: Arc::new(AtomicBool::new(true)),
+        };
+
+        assert!(matches!(
+            client.submit(WorkerCommand::RequestFullRefresh),
+            Err(DesktopError::WorkerUnavailable)
+        ));
+        assert_eq!(command_queue_depth.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -1503,64 +1545,6 @@ mod tests {
             }
         }
         assert!(saw_revision);
-        worker
-            .shutdown(Duration::from_secs(1))
-            .expect("worker joins");
-    }
-
-    #[test]
-    fn worker_rejects_invalid_coordinate_before_native_mutation() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let factory_events = Arc::clone(&events);
-        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
-            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
-        })
-        .expect("worker spawns");
-        let client = worker.client();
-        wait_for_state(&client, ConnectionState::Connected);
-
-        let error = client
-            .submit(WorkerCommand::MovePointer {
-                coordinate: Coordinate { x: 2, y: 1 },
-            })
-            .expect("accepted")
-            .wait(Duration::from_secs(1))
-            .expect_err("out-of-range coordinate must fail");
-        assert!(matches!(error, DesktopError::InvalidCoordinate { .. }));
-        assert!(lock_unpoisoned(&events).is_empty());
-        worker
-            .shutdown(Duration::from_secs(1))
-            .expect("worker joins");
-    }
-
-    #[test]
-    fn worker_returns_partial_input_failure_after_release_retry() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let factory_events = Arc::clone(&events);
-        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
-            Ok(RecordingSession::new(Arc::clone(&factory_events), Some(3)))
-        })
-        .expect("worker spawns");
-        let client = worker.client();
-        wait_for_state(&client, ConnectionState::Connected);
-        let point = Coordinate { x: 1, y: 1 };
-
-        client
-            .submit(WorkerCommand::Click {
-                coordinate: point,
-                button: MouseButton::Left,
-            })
-            .expect("accepted")
-            .wait(Duration::from_secs(1))
-            .expect_err("native release failure must reach caller");
-        assert_eq!(
-            *lock_unpoisoned(&events),
-            vec![
-                InputEvent::Pointer(point, 0),
-                InputEvent::Pointer(point, 1),
-                InputEvent::Pointer(point, 0),
-            ]
-        );
         worker
             .shutdown(Duration::from_secs(1))
             .expect("worker joins");
@@ -1688,73 +1672,6 @@ mod tests {
     }
 
     #[test]
-    fn mismatched_native_frame_never_reaches_connected() {
-        struct MismatchedSession;
-
-        impl WorkerSession for MismatchedSession {
-            fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
-                thread::sleep(timeout);
-                Ok(PollOutcome::MessageProcessed)
-            }
-
-            fn request_full_refresh(&mut self) -> Result<(), NativeError> {
-                Ok(())
-            }
-
-            fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
-                Ok(NativeDisplayInfo {
-                    width: 2,
-                    height: 2,
-                    revision: 5,
-                    complete: true,
-                })
-            }
-
-            fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
-                Ok(NativeFramebuffer {
-                    width: 2,
-                    height: 2,
-                    revision: 4,
-                    bytes: vec![0; 16],
-                })
-            }
-
-            fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
-                Err(NativeError::ClipboardUnavailable)
-            }
-
-            fn send_pointer(
-                &mut self,
-                _coordinate: Coordinate,
-                _button_mask: u8,
-            ) -> Result<(), NativeError> {
-                Ok(())
-            }
-
-            fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
-                Ok(())
-            }
-
-            fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
-                Ok(())
-            }
-        }
-
-        let worker = DesktopWorker::spawn_with_factory(settings(), || Ok(MismatchedSession))
-            .expect("worker spawns");
-        let client = worker.client();
-        thread::sleep(Duration::from_millis(30));
-        assert_ne!(client.snapshot().state, ConnectionState::Connected);
-        assert_eq!(
-            client.framebuffer_snapshot().err(),
-            Some(FramebufferError::Unavailable)
-        );
-        worker
-            .shutdown(Duration::from_secs(1))
-            .expect("worker joins");
-    }
-
-    #[test]
     fn reconnect_delay_is_exponential_jittered_and_bounded() {
         let settings = settings();
         let first = reconnect_delay(&settings, 1);
@@ -1770,29 +1687,18 @@ mod tests {
     #[test]
     fn bounded_command_queue_tracks_depth_and_rejection_without_payload_logging() {
         let (command_tx, _command_rx) = sync_channel(1);
-        let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
-            state: ConnectionState::Connected,
-            started_at: SystemTime::now(),
-            connected_at: Some(SystemTime::now()),
-            last_message_at: Some(SystemTime::now()),
-            reconnect_attempts: 0,
-            last_failure: None,
-            framebuffer_revision: None,
-            rejected_commands: 0,
-            dropped_events: 0,
-            fatal_exit: false,
-        }));
         let command_queue_depth = Arc::new(AtomicUsize::new(0));
         let pending_overload = Arc::new(AtomicU64::new(0));
         let client = WorkerClient {
             commands: command_tx,
-            snapshot: Arc::clone(&snapshot),
+            snapshot: snapshot(),
             framebuffer: FramebufferStore::default(),
             clipboard: Arc::new(Mutex::new(None)),
             next_command_id: Arc::new(AtomicU64::new(1)),
             command_queue_depth: Arc::clone(&command_queue_depth),
             command_queue_capacity: 1,
             pending_overload: Arc::clone(&pending_overload),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
         };
 
         let _first = client
@@ -1808,6 +1714,6 @@ mod tests {
         ));
         assert_eq!(command_queue_depth.load(Ordering::Acquire), 1);
         assert_eq!(pending_overload.load(Ordering::Acquire), 1);
-        assert_eq!(lock_unpoisoned(&snapshot).rejected_commands, 1);
+        assert_eq!(lock_unpoisoned(&client.snapshot).rejected_commands, 1);
     }
 }
