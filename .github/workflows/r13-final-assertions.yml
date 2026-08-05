@@ -22,12 +22,82 @@ jobs:
         with:
           ref: master
 
-      - name: Add exact click counts and horizontal rejection
+      - name: Add explicit horizontal rejection and exact click counts
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
+          api_path = Path('crates/controller-api/src/api_contract.rs')
+          api = api_path.read_text(encoding='utf-8')
+          old_fields = (
+              '    /// Signed vertical wheel steps.\n'
+              '    pub delta_y: i32,\n'
+          )
+          new_fields = (
+              '    /// Signed horizontal wheel steps. Nonzero values are rejected in v0.1.\n'
+              '    #[serde(default)]\n'
+              '    pub delta_x: i32,\n'
+              '    /// Signed vertical wheel steps.\n'
+              '    pub delta_y: i32,\n'
+          )
+          if api.count(old_fields) != 1:
+              raise SystemExit(f'expected one scroll field block, found {api.count(old_fields)}')
+          api = api.replace(old_fields, new_fields)
+
+          old_command = (
+              '        validate_scroll(0, self.delta_y)?;\n'
+              '        Ok(WorkerCommand::Scroll {\n'
+              '            coordinate: display.validate_coordinate(self.x, self.y)?,\n'
+              '            delta_x: 0,\n'
+              '            delta_y: self.delta_y,\n'
+              '        })\n'
+          )
+          new_command = (
+              '        validate_scroll(self.delta_x, self.delta_y)?;\n'
+              '        Ok(WorkerCommand::Scroll {\n'
+              '            coordinate: display.validate_coordinate(self.x, self.y)?,\n'
+              '            delta_x: self.delta_x,\n'
+              '            delta_y: self.delta_y,\n'
+              '        })\n'
+          )
+          if api.count(old_command) != 1:
+              raise SystemExit(f'expected one scroll conversion block, found {api.count(old_command)}')
+          api = api.replace(old_command, new_command)
+
+          test_marker = '    #[test]\n    fn text_support_matrix_and_byte_boundary_are_explicit() {\n'
+          test_addition = (
+              '    #[test]\n'
+              '    fn horizontal_scroll_is_recognized_and_rejected_explicitly() {\n'
+              '        let display = DisplayInfo {\n'
+              '            width: 1280,\n'
+              '            height: 800,\n'
+              '            depth: 24,\n'
+              '            revision: 1,\n'
+              '            complete: true,\n'
+              '        };\n'
+              '        let vertical: PointerScrollRequest = serde_json::from_str(\n'
+              '            r#"{\"x\":1,\"y\":1,\"delta_y\":1}"#,\n'
+              '        )\n'
+              '        .expect("vertical request parses");\n'
+              '        assert_eq!(vertical.delta_x, 0);\n'
+              '        assert!(vertical.into_command(display).is_ok());\n'
+              '\n'
+              '        let horizontal: PointerScrollRequest = serde_json::from_str(\n'
+              '            r#"{\"x\":1,\"y\":1,\"delta_x\":1,\"delta_y\":0}"#,\n'
+              '        )\n'
+              '        .expect("horizontal field is recognized");\n'
+              '        assert!(matches!(\n'
+              '            horizontal.into_command(display),\n'
+              '            Err(DesktopError::Configuration(_))\n'
+              '        ));\n'
+              '    }\n'
+              '\n'
+          )
+          if api.count(test_marker) != 1:
+              raise SystemExit('scroll regression test marker was not unique')
+          api_path.write_text(api.replace(test_marker, test_addition + test_marker), encoding='utf-8')
 
           path = Path('tests/integration/r13_integration.py')
           text = path.read_text(encoding='utf-8')
@@ -67,6 +137,7 @@ jobs:
               raise SystemExit('R13 contract scroll marker was not unique')
           contract.write_text(tests.replace(old, new), encoding='utf-8')
           PY
+          cargo fmt --all
           python3 -m compileall -q tests/integration tests/test_integration_contract.py
           python3 -m unittest tests.test_integration_contract -v
           git diff --check
@@ -76,12 +147,15 @@ jobs:
           R13_FAILURE_ARTIFACT_DIR: artifacts/r13-final-assertion-failure
         run: bash tests/integration/run.sh
 
-      - name: Commit validated assertions directly to master
+      - name: Commit validated repair and assertions directly to master
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'ekkus93'
           git config user.email '1386709+ekkus93@users.noreply.github.com'
-          git add tests/integration/r13_integration.py tests/test_integration_contract.py
-          git commit -m 'test: finalize exact R13 input assertions'
+          git add \
+            crates/controller-api/src/api_contract.rs \
+            tests/integration/r13_integration.py \
+            tests/test_integration_contract.py
+          git commit -m 'fix: reject horizontal scrolling explicitly'
           git push origin HEAD:master
