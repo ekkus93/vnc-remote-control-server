@@ -70,62 +70,13 @@ jobs:
               raise SystemExit("desktop smoke credential-path patch did not match exactly once")
           desktop_test.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-          compose_targets = []
-          for path in sorted(Path(".").rglob("*.y*ml")):
-              if ".git" in path.parts or ".github" in path.parts:
-                  continue
-              candidate = path.read_text(encoding="utf-8")
-              if "desktop/Dockerfile" in candidate and "desktop:" in candidate:
-                  compose_targets.append((path, candidate))
-          if len(compose_targets) != 1:
-              names = ", ".join(str(path) for path, _ in compose_targets)
-              raise SystemExit(f"expected one Compose desktop build target, found {len(compose_targets)}: {names}")
-
-          compose_path, compose_text = compose_targets[0]
-          lines = compose_text.splitlines(keepends=True)
-          service_index = next(
-              (index for index, line in enumerate(lines) if line.strip() == "desktop:"),
-              None,
-          )
-          if service_index is None:
-              raise SystemExit(f"{compose_path}: desktop service not found")
-          service_indent = len(lines[service_index]) - len(lines[service_index].lstrip())
-          service_end = len(lines)
-          for index in range(service_index + 1, len(lines)):
-              stripped = lines[index].strip()
-              indent = len(lines[index]) - len(lines[index].lstrip())
-              if stripped and not stripped.startswith("#") and indent == service_indent and stripped.endswith(":"):
-                  service_end = index
-                  break
-
-          context_indexes = []
-          dockerfile_indexes = []
-          for index in range(service_index + 1, service_end):
-              stripped = lines[index].strip()
-              if stripped.startswith("context:"):
-                  context_indexes.append(index)
-              elif stripped.startswith("dockerfile:"):
-                  dockerfile_indexes.append(index)
-          if len(context_indexes) != 1 or len(dockerfile_indexes) != 1:
-              raise SystemExit(
-                  f"{compose_path}: expected one desktop context and dockerfile, found "
-                  f"{len(context_indexes)} and {len(dockerfile_indexes)}"
-              )
-
-          context_index = context_indexes[0]
-          dockerfile_index = dockerfile_indexes[0]
-          context_value = lines[context_index].split(":", 1)[1].split("#", 1)[0].strip().strip("'\"")
-          dockerfile_value = lines[dockerfile_index].split(":", 1)[1].split("#", 1)[0].strip().strip("'\"")
-          if context_value != "." or dockerfile_value not in {"desktop/Dockerfile", "./desktop/Dockerfile"}:
-              raise SystemExit(
-                  f"{compose_path}: unexpected desktop build values "
-                  f"context={context_value!r} dockerfile={dockerfile_value!r}"
-              )
-          context_indent = lines[context_index][: len(lines[context_index]) - len(lines[context_index].lstrip())]
-          dockerfile_indent = lines[dockerfile_index][: len(lines[dockerfile_index]) - len(lines[dockerfile_index].lstrip())]
-          lines[context_index] = f"{context_indent}context: ./desktop\n"
-          lines[dockerfile_index] = f"{dockerfile_indent}dockerfile: Dockerfile\n"
-          compose_path.write_text("".join(lines), encoding="utf-8")
+          compose_path = Path("deploy/compose.yaml")
+          compose_text = compose_path.read_text(encoding="utf-8")
+          old_build = """    build:\n      context: ..\n      dockerfile: desktop/Dockerfile\n"""
+          new_build = """    build:\n      context: ../desktop\n      dockerfile: Dockerfile\n"""
+          if compose_text.count(old_build) != 1:
+              raise SystemExit("deploy/compose.yaml desktop build patch did not match exactly once")
+          compose_path.write_text(compose_text.replace(old_build, new_build, 1), encoding="utf-8")
           PYFIX
 
       - name: Check formatting
