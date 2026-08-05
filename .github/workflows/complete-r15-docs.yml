@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/r15_payload_*.b64 > /tmp/r15_apply.py.xz.b64
+          cat .github/r15_payload_*.b64 | tr -d '[:space:]' > /tmp/r15_apply.py.xz.b64
           echo '7e805496f2bc7aa2248ebc8632e73045bdc4077953660d9877e56384f3d541d5  /tmp/r15_apply.py.xz.b64' | sha256sum --check --strict
           base64 --decode /tmp/r15_apply.py.xz.b64 | xz --decompress > /tmp/r15_apply.py
           echo 'cf43d096126f16ca23c3dcd7f7bc20a483620595bcfd7df27e1dee4854bcc0e0  /tmp/r15_apply.py' | sha256sum --check --strict
