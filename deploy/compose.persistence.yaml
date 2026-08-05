@@ -1,0 +1,8 @@
+services:
+  desktop:
+    volumes:
+      - desktop_home:/home/desktop
+
+volumes:
+  desktop_home:
+    name: "${VRC_DESKTOP_HOME_VOLUME:-vnc-remote-control-desktop-home}"

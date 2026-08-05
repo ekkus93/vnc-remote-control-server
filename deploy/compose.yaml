@@ -1,0 +1,76 @@
+name: vnc-remote-control-server
+
+services:
+  desktop:
+    image: vnc-remote-control-desktop:local
+    build:
+      context: ../desktop
+      dockerfile: Dockerfile
+    expose:
+      - "5901"
+    environment:
+      VNC_PASSWORD_FILE: /run/secrets/vnc_password
+      TEST_APP_STATE_FILE: /tmp/vnc-test-app-state.json
+    secrets:
+      - vnc_password
+    networks:
+      - desktop_control
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    stop_grace_period: 15s
+
+  controller:
+    image: vnc-remote-control-controller:local
+    build:
+      context: ..
+      dockerfile: controller/Dockerfile
+    depends_on:
+      desktop:
+        condition: service_healthy
+    ports:
+      - "${VRC_API_BIND_ADDRESS:-127.0.0.1}:${VRC_API_HOST_PORT:-8080}:8080"
+    environment:
+      RUST_LOG: "${VRC_RUST_LOG:-info}"
+      VRC_LISTEN_ADDR: 0.0.0.0:8080
+      VRC_API_TOKEN_FILE: /run/secrets/api_token
+      VRC_VNC_HOST: desktop
+      VRC_VNC_PORT: "5901"
+      VRC_VNC_PASSWORD_FILE: /run/secrets/vnc_password
+    secrets:
+      - api_token
+      - vnc_password
+    networks:
+      - desktop_control
+      - api_ingress
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/controller-healthcheck
+        - ready
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 9
+
+networks:
+  api_ingress: {}
+  desktop_control:
+    internal: true
+
+secrets:
+  api_token:
+    file: "${VRC_API_TOKEN_SOURCE:-./secrets/api_token.txt}"
+  vnc_password:
+    file: "${VRC_VNC_PASSWORD_SOURCE:-./secrets/vnc_password.txt}"

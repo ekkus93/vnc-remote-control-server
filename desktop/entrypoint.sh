@@ -8,8 +8,8 @@ readonly password_file="${VNC_PASSWORD_FILE:-/run/secrets/vnc_password}"
 readonly geometry="${VNC_GEOMETRY:-1280x800}"
 readonly depth="${VNC_DEPTH:-24}"
 readonly home_dir="${HOME:-/home/desktop}"
-readonly vnc_dir="${home_dir}/.vnc"
-readonly encoded_password_file="${vnc_dir}/passwd"
+readonly vnc_runtime_dir=/tmp/vnc-runtime
+readonly encoded_password_file="${vnc_runtime_dir}/passwd"
 readonly readiness_file=/tmp/vnc-desktop-ready
 readonly supervisor_pid_file=/tmp/vnc-desktop-supervisor.pid
 readonly startup_timeout_seconds="${VNC_STARTUP_TIMEOUT_SECONDS:-30}"
@@ -55,7 +55,8 @@ remove_stale_display_files() {
 }
 
 create_password_file() {
-    install -d -m 0700 "$vnc_dir"
+    rm -rf -- "$vnc_runtime_dir"
+    install -d -m 0700 "$vnc_runtime_dir"
     umask 077
     local password
     password="$(cat -- "$password_file")"
@@ -89,6 +90,7 @@ cleanup() {
     stop_children KILL
     wait "$desktop_pid" 2>/dev/null || true
     wait "$vnc_pid" 2>/dev/null || true
+    rm -rf -- "$vnc_runtime_dir"
 }
 
 trap 'cleanup; exit 143' TERM

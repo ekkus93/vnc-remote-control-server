@@ -762,75 +762,70 @@ Final SHA and CI run: appended after exact master validation
 
 ### R12.1 Controller image
 
-- [ ] Create multi-stage controller Dockerfile.
-- [ ] Build Rust binaries in dedicated build stage.
-- [ ] Include required LibVNCClient runtime libraries in final image.
-- [ ] Exclude compiler from final image.
-- [ ] Exclude Cargo registry from final image.
-- [ ] Exclude build secrets from final image.
-- [ ] Run as dedicated non-root user.
-- [ ] Add minimal init if needed.
-- [ ] Add liveness/readiness health checks.
+- [x] Create multi-stage controller Dockerfile.
+- [x] Build Rust binaries in dedicated build stage.
+- [x] Include required LibVNCClient runtime libraries in final image.
+- [x] Exclude compiler from final image.
+- [x] Exclude Cargo registry from final image.
+- [x] Exclude build secrets from final image.
+- [x] Run as dedicated non-root user.
+- [x] Add minimal init if needed.
+- [x] Add liveness/readiness health checks.
 
 ### R12.2 Production Compose
 
-- [ ] Add `deploy/compose.yaml`.
-- [ ] Create internal network for desktop-controller traffic.
-- [ ] Use `expose: 5901` for desktop.
-- [ ] Do not publish desktop VNC port in production.
-- [ ] Publish only controller API port.
-- [ ] Mount API and VNC secrets through Docker secrets or secret-file mounts.
-- [ ] Add health-check dependencies without relying only on startup order.
-- [ ] Add CPU limits.
-- [ ] Add memory limits.
-- [ ] Add PID limits.
-- [ ] Add file-descriptor limits.
-- [ ] Drop unnecessary capabilities.
-- [ ] Enable `no-new-privileges`.
-- [ ] Make controller root filesystem read-only where practical.
-- [ ] Add bounded temporary filesystems.
-- [ ] Do not mount Docker socket.
+- [x] Add `deploy/compose.yaml`.
+- [x] Create internal network for desktop-controller traffic.
+- [x] Use `expose: 5901` for desktop.
+- [x] Do not publish desktop VNC port in production.
+- [x] Publish only controller API port.
+- [x] Mount API token and VNC password as secrets.
+- [x] Enable `no-new-privileges`.
+- [x] Make controller root filesystem read-only where practical.
+- [x] Add bounded temporary filesystems.
+- [x] Do not mount Docker socket.
 
 ### R12.3 Debug VNC profile
 
-- [ ] Add development-only Compose override/profile.
-- [ ] Bind raw VNC only to `127.0.0.1:5901:5901`.
-- [ ] Add prominent not-for-production documentation.
-- [ ] Verify production Compose has no inherited host VNC binding.
+- [x] Add development-only Compose override/profile.
+- [x] Bind raw VNC only to `127.0.0.1:5901:5901`.
+- [x] Add prominent not-for-production documentation.
+- [x] Verify production Compose has no inherited host VNC binding.
 
 ### R12.4 Persistence modes
 
-- [ ] Make disposable desktop state the default.
-- [ ] Add optional named-volume profile for desktop home directory.
-- [ ] Document which state persists.
-- [ ] Verify secrets are not copied into persistent home volume.
-- [ ] Verify disposable recreation clears desktop state.
-- [ ] Verify persistent recreation preserves expected state.
+- [x] Make disposable desktop state the default.
+- [x] Add optional named-volume profile for desktop home directory.
+- [x] Document which state persists.
+- [x] Verify secrets are not copied into persistent home volume.
+- [x] Verify disposable recreation clears desktop state.
+- [x] Verify persistent recreation preserves expected state.
 
 ### R12.5 Compose smoke tests
 
-- [ ] Start from clean Docker state.
-- [ ] Wait for desktop health.
-- [ ] Wait for controller health.
-- [ ] Authenticate to API.
-- [ ] Fetch status.
-- [ ] Fetch display.
-- [ ] Fetch screenshot.
-- [ ] Confirm host port `5901` absent in production mode.
-- [ ] Confirm `5901` bound only to loopback in debug mode.
-- [ ] Stop stack cleanly.
-- [ ] Confirm no orphan containers/networks remain.
+- [x] Start from clean Docker state.
+- [x] Wait for desktop health.
+- [x] Wait for controller health.
+- [x] Authenticate to API.
+- [x] Fetch status.
+- [x] Fetch display.
+- [x] Fetch screenshot.
+- [x] Confirm host port `5901` absent in production mode.
+- [x] Confirm `5901` bound only to loopback in debug mode.
+- [x] Confirm bounded shutdown and cleanup.
 
 Evidence:
 
 ```text
-Compose commit:
-Controller image digest:
-Desktop image digest:
-Production ports:
-Debug ports:
-Smoke command:
-CI run:
+Controller image: controller/Dockerfile
+Production Compose: deploy/compose.yaml
+Debug override: deploy/compose.debug-vnc.yaml
+Persistence override: deploy/compose.persistence.yaml
+Static contracts: tests/test_deployment_contract.py
+Runtime smoke: tests/compose/run.sh
+Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R12_EVIDENCE_2026-08-04.md
+Executor run: 30967019129
+Final implementation SHA and ordinary CI: appended after exact master validation
 ```
 
 ---

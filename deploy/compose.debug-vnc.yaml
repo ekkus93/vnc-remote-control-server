@@ -1,0 +1,8 @@
+# DEVELOPMENT ONLY: exposes raw VNC on host loopback for bounded diagnostics.
+services:
+  desktop:
+    networks:
+      - desktop_control
+      - api_ingress
+    ports:
+      - "127.0.0.1:${VRC_DEBUG_VNC_PORT:-5901}:5901"

@@ -135,7 +135,8 @@ docker run --detach \
 wait_for_health
 
 [[ "$(docker exec "$container_name" id -u)" == "10001" ]] || fail "desktop container is not running as UID 10001"
-[[ "$(docker exec "$container_name" stat -c '%a' /home/desktop/.vnc/passwd)" == "600" ]] || fail "encoded VNC password permissions are not 0600"
+[[ "$(docker exec "$container_name" stat -c '%a' /tmp/vnc-runtime/passwd)" == "600" ]] || fail "encoded VNC password permissions are not 0600"
+docker exec "$container_name" test ! -e /home/desktop/.vnc/passwd || fail "generated VNC password was written into persistent home"
 docker exec "$container_name" pgrep -u 10001 -x Xtigervnc >/dev/null || fail "Xtigervnc is not running as desktop user"
 docker exec "$container_name" sh -eu -c "nc -z 127.0.0.1 5901"
 dimensions="$(docker exec "$container_name" sh -eu -c "xdpyinfo -display :1 | awk '/dimensions:/{print \$2; exit}'")"

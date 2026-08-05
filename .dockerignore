@@ -1,0 +1,9 @@
+.git
+.github/r12_payload_*.b64
+target
+artifacts
+deploy/secrets/*
+!deploy/secrets/.gitignore
+!deploy/secrets/README.md
+**/__pycache__
+**/*.pyc

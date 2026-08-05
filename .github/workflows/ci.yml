@@ -82,7 +82,9 @@ jobs:
             tests/native/run.sh \
             tests/worker-e2e/run.sh \
             tests/worker-text-clipboard-e2e/run.sh \
-            tests/http-e2e/run.sh
+            tests/http-e2e/run.sh \
+            controller/healthcheck.sh \
+            tests/compose/run.sh
 
       - name: Build CI evidence
         env:
@@ -243,3 +245,6 @@ jobs:
 
       - name: Run authenticated HTTP TigerVNC E2E test
         run: bash tests/http-e2e/run.sh
+
+      - name: Run controller image, Compose, and persistence smoke test
+        run: bash tests/compose/run.sh

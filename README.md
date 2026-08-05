@@ -20,19 +20,18 @@ Implementation is in progress on `master` under the authoritative rebased plan:
 
 Implemented and validated so far:
 
-- pinned Rust workspace and committed lockfile;
-- warning-denied `remote-desktop-core` domain model and tests;
-- digest-pinned Debian 13 XFCE/TigerVNC desktop image;
-- non-root desktop runtime with file-mounted VNC secret;
-- deterministic graphical test application;
-- real correct-password, wrong-password, missing-secret, health, and shutdown desktop smoke checks;
+- pinned, warning-denied Rust workspace and committed lockfile;
+- safe core model, LibVNCClient adapter, dedicated worker, reconnect/stall behavior, framebuffer store, screenshots, and complete input/clipboard control;
+- authenticated HTTP and WebSocket APIs with structured tracing, bounded metrics, and overload controls;
+- digest-pinned Debian 13 XFCE/TigerVNC desktop image and deterministic graphical test application;
+- multi-stage non-root controller image with only runtime LibVNCClient dependencies;
+- production Compose with internal-only raw VNC, file-mounted secrets, read-only controller root filesystem, and bounded temporary storage;
+- explicit loopback-only VNC debug override;
+- disposable-by-default desktop state plus an opt-in persistent desktop-home volume;
+- real desktop, adapter, worker, HTTP/WebSocket, controller-image, Compose, and persistence smoke tests;
 - ChatGPT-readable CI status publishing through GitHub issue `#1`.
 
-Explicit placeholders remain:
-
-- `libvnc-adapter` does not yet contain the production LibVNCClient binding or worker;
-- `controller-api` does not yet contain the production HTTP/WebSocket server;
-- production Compose, integration tests, and end-to-end API validation are not yet implemented.
+Remaining release work is tracked in R13 and later milestones: broader integration/restart stress, native safety tooling, dependency and image security gates, API documentation, packaging, and final acceptance evidence.
 
 The original [`docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md`](docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md) is retained as historical planning context. The dated rebased TODO above is authoritative for current implementation work.
 
@@ -55,7 +54,7 @@ make test
 make build
 ```
 
-Container and integration commands become authoritative only when their backing milestones and CI gates are implemented. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for prerequisites and the current command surface.
+Production and development deployment commands are documented in [`deploy/README.md`](deploy/README.md). The production topology is `deploy/compose.yaml`; raw VNC requires the explicit development-only override. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for prerequisites and the current command surface.
 
 ## Security and operator boundaries
 
