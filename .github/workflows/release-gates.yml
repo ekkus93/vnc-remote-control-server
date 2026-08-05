@@ -210,6 +210,7 @@ jobs:
               '- AddressSanitizer instruments the Rust adapter and boundary tests.' \
               '- ThreadSanitizer is limited to Rust-only core shared-state tests.' \
               '- Rust does not expose a general UBSan mode; Miri is the undefined-behavior gate.' \
+              '- Miri isolation is disabled only for Proptest working-directory access.' \
               '- The distribution LibVNCClient shared library is not rebuilt with sanitizers.'
           } > artifacts/native-safety/toolchain.txt
 
@@ -240,7 +241,7 @@ jobs:
       - name: Run core tests under Miri
         env:
           PROPTEST_CASES: "16"
-          PROPTEST_DISABLE_FAILURE_PERSISTENCE: "1"
+          MIRIFLAGS: -Zmiri-disable-isolation
         shell: bash
         run: |
           set -euo pipefail
