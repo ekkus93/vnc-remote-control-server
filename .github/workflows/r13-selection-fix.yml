@@ -1,0 +1,87 @@
+name: Repair R13 Deterministic Text Selection
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r13-selection-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: r13-selection-fix-master
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Replace platform-specific select-all shortcut
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/integration/r13_integration.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    for keys in (["CTRL_LEFT", "a"], ["CTRL_LEFT", "v"]):
+              response = post_json(harness, "/v1/keyboard/chord", {"keys": keys})
+              require(response.status == 202, f"clipboard paste chord failed: {response.status}")
+          harness.wait_desktop_state(lambda value: value.get("text") == OUTBOUND_CLIPBOARD)
+
+          response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "a"]})
+          require(response.status == 202, "select-all before copy setup failed")
+          response = post_json(harness, "/v1/keyboard/text", {"text": INBOUND_CLIPBOARD})
+          require(response.status == 202, "copy fixture typing failed")
+          harness.wait_desktop_state(lambda value: value.get("text") == INBOUND_CLIPBOARD)
+          response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "a"]})
+          require(response.status == 202, "select-all before copy failed")
+          response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "c"]})
+          require(response.status == 202, "copy chord failed")
+          '''
+          new = '''    def select_all_entry() -> None:
+              # Tk on X11 maps Ctrl+A to cursor-home rather than select-all. Use
+              # the portable Home then Shift+End sequence through the public API.
+              for keys, label in ((["HOME"], "home"), (["SHIFT_LEFT", "END"], "shift-end")):
+                  selection = post_json(harness, "/v1/keyboard/chord", {"keys": keys})
+                  require(selection.status == 202, f"{label} selection chord failed: {selection.status}")
+
+          select_all_entry()
+          response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "v"]})
+          require(response.status == 202, f"clipboard paste chord failed: {response.status}")
+          harness.wait_desktop_state(lambda value: value.get("text") == OUTBOUND_CLIPBOARD)
+
+          select_all_entry()
+          response = post_json(harness, "/v1/keyboard/text", {"text": INBOUND_CLIPBOARD})
+          require(response.status == 202, "copy fixture typing failed")
+          harness.wait_desktop_state(lambda value: value.get("text") == INBOUND_CLIPBOARD)
+          select_all_entry()
+          response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "c"]})
+          require(response.status == 202, "copy chord failed")
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one platform-specific selection block, found {text.count(old)}')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          python3 -m py_compile tests/integration/r13_integration.py
+          python3 -m unittest tests.test_integration_contract -v
+          git diff --check
+
+      - name: Commit repair directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add tests/integration/r13_integration.py
+          git commit -m 'test: use portable R13 entry selection'
+          git push origin HEAD:master
