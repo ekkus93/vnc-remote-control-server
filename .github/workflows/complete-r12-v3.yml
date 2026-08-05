@@ -80,11 +80,11 @@ jobs:
           # DEVELOPMENT ONLY: exposes raw VNC on host loopback for bounded diagnostics.
           services:
             desktop:
+              networks:
+                - desktop_control
+                - api_ingress
               ports:
-                - target: 5901
-                  published: "${VRC_DEBUG_VNC_PORT:-5901}"
-                  host_ip: "127.0.0.1"
-                  protocol: tcp
+                - "127.0.0.1:${VRC_DEBUG_VNC_PORT:-5901}:5901"
           COMPOSE
 
       - name: Check formatting
