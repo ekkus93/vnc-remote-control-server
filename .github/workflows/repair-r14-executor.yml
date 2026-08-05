@@ -1,0 +1,50 @@
+name: Repair R14 Executor
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/repair-r14-executor.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Repair deferred expression construction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/implement-r14-r16-foundation.yml')
+          text = path.read_text(encoding='utf-8')
+          bad = "'" + "$" + "{{" + "'"
+          good = "'$' + '{{'"
+          count = text.count(bad)
+          if count != 2:
+              raise SystemExit(f'expected two unsafe deferred-expression literals, found {count}')
+          path.write_text(text.replace(bad, good), encoding='utf-8')
+          PY
+          git diff --check
+
+      - name: Commit repaired executor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add .github/workflows/implement-r14-r16-foundation.yml
+          git commit -m 'ci: repair deferred expression transport'
+          git push origin HEAD:master
