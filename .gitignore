@@ -49,3 +49,5 @@ __pycache__/
 
 # Personal Claude Code settings (not team-shared)
 .claude/settings.local.json
+
+run_claude*.sh*
