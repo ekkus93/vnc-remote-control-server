@@ -934,58 +934,58 @@ Final documentation SHA and ordinary CI: validated after this checklist commit
 
 ### R14.1 CI quality workflow expansion
 
-- [ ] Ensure `.github/workflows/ci.yml` runs `cargo fmt --check`.
-- [ ] Ensure Clippy runs all targets/features with warnings denied.
-- [ ] Ensure all Rust tests run.
-- [ ] Ensure rustdoc warnings are denied.
-- [ ] Add ShellCheck.
-- [ ] Add Actionlint.
-- [ ] Add Dockerfile lint or documented equivalent.
-- [ ] Add Compose config validation.
-- [ ] Add `cargo deny check`.
-- [ ] Cache dependencies without caching secrets.
-- [ ] Cancel superseded branch runs safely.
-- [ ] Add bounded workflow timeout.
+- [x] Ensure `.github/workflows/ci.yml` runs `cargo fmt --check`.
+- [x] Ensure Clippy runs all targets/features with warnings denied.
+- [x] Ensure all Rust tests run.
+- [x] Ensure rustdoc warnings are denied.
+- [x] Add ShellCheck.
+- [x] Add Actionlint.
+- [x] Add Dockerfile lint or documented equivalent.
+- [x] Add Compose config validation.
+- [x] Add `cargo deny check`.
+- [x] Cache dependencies without caching secrets.
+- [x] Cancel superseded branch runs safely.
+- [x] Add bounded workflow timeout.
 
 ### R14.2 Native safety jobs
 
-- [ ] Add AddressSanitizer coverage for adapter tests where supported.
-- [ ] Add UndefinedBehaviorSanitizer coverage where supported.
-- [ ] Consider ThreadSanitizer for Rust-only shared-state tests.
-- [ ] Document ThreadSanitizer/FFI limitations.
-- [ ] Run Miri on compatible core code.
-- [ ] Treat sanitizer findings as release blockers.
+- [x] Add AddressSanitizer coverage for adapter tests where supported.
+- [x] Add UndefinedBehaviorSanitizer coverage where supported.
+- [x] Consider ThreadSanitizer for Rust-only shared-state tests.
+- [x] Document ThreadSanitizer/FFI limitations.
+- [x] Run Miri on compatible core code.
+- [x] Treat sanitizer findings as release blockers.
 
 ### R14.3 Dependency and image security
 
-- [ ] Run Rust advisory checks.
-- [ ] Run license/source policy checks.
-- [ ] Scan controller image.
-- [ ] Scan desktop image.
-- [ ] Define blocked severity levels.
-- [ ] Define exceptions process.
-- [ ] Generate SBOM or equivalent inventory.
-- [ ] Record LibVNCClient version in build metadata.
-- [ ] Verify no secrets introduced in repository history by this implementation.
+- [x] Run Rust advisory checks.
+- [x] Run license/source policy checks.
+- [x] Scan controller image.
+- [x] Scan desktop image.
+- [x] Define blocked severity levels.
+- [x] Define exceptions process.
+- [x] Generate SBOM or equivalent inventory.
+- [x] Record LibVNCClient version in build metadata.
+- [x] Verify no secrets introduced in repository history by this implementation.
 
 ### R14.4 Integration CI
 
-- [ ] Run Compose smoke tests on Linux.
-- [ ] Run real VNC integration suite.
-- [ ] Run public API E2E suite.
-- [ ] Upload sanitized logs and test reports on failure.
-- [ ] Do not upload screenshots unless fixtures are guaranteed non-sensitive.
-- [ ] Set bounded workflow timeout.
+- [x] Run Compose smoke tests on Linux.
+- [x] Run real VNC integration suite.
+- [x] Run public API E2E suite.
+- [x] Upload sanitized logs and test reports on failure.
+- [x] Do not upload screenshots unless fixtures are guaranteed non-sensitive.
+- [x] Set bounded workflow timeout.
 
 Evidence:
 
 ```text
-CI hardening commit:
-Quality gates:
-Native safety jobs:
-Security scans:
-Integration CI:
-CI run:
+Release candidate: dd3b14917ad5e239573d584238ff67ded8138203
+CI run 31029834071: success
+Release Gates run 31029833868: success
+Coverage: fmt, Clippy, tests, rustdoc, ShellCheck, actionlint, Docker/Compose checks, cargo-deny, Gitleaks history, ASan, TSan, Miri, Trivy exact VEX, CycloneDX SBOMs, and real VNC/HTTP/Compose E2E
+Policy: docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md
+VEX revalidation: issue #7; expires 2026-09-04
 ```
 
 ---
@@ -1052,118 +1052,104 @@ Do not mark v0.1 complete until every item below has exact evidence on the same 
 
 ### R16.1 Architecture and isolation
 
-- [ ] Exactly one desktop session is implemented.
-- [ ] Desktop and controller are separate containers.
-- [ ] TigerVNC reachable only on private network in production Compose.
-- [ ] Optional raw VNC debug access binds only to `127.0.0.1`.
-- [ ] Desktop runs non-root.
-- [ ] Controller runs non-root.
-- [ ] Raw LibVNCClient state confined to adapter and one worker thread.
+- [x] Exactly one desktop session is implemented.
+- [x] Desktop and controller are separate containers.
+- [x] TigerVNC reachable only on private network in production Compose.
+- [x] Optional raw VNC debug access binds only to `127.0.0.1`.
+- [x] Desktop runs non-root.
+- [x] Controller runs non-root.
+- [x] Raw LibVNCClient state confined to adapter and one worker thread.
 
 ### R16.2 Observation
 
-- [ ] Controller receives complete framebuffer.
-- [ ] Display metadata is correct.
-- [ ] PNG screenshots are coherent.
-- [ ] Screenshot ETags work.
-- [ ] Conditional requests work.
-- [ ] Old framebuffer data invalidated on reconnect.
-- [ ] Revision events delivered over authenticated WebSocket.
+- [x] Controller receives complete framebuffer.
+- [x] Display metadata is correct.
+- [x] PNG screenshots are coherent.
+- [x] Screenshot ETags work.
+- [x] Conditional requests work.
+- [x] Old framebuffer data invalidated on reconnect.
+- [x] Revision events delivered over authenticated WebSocket.
 
 ### R16.3 Control
 
-- [ ] Pointer move works.
-- [ ] Button down/up works.
-- [ ] Left click works.
-- [ ] Middle click works.
-- [ ] Right click works.
-- [ ] Double-click works atomically.
-- [ ] Vertical scrolling works.
-- [ ] Horizontal scrolling works and is tested, or is removed from v0.1 API/spec.
-- [ ] Key down/up works.
-- [ ] Chords press/release in required order.
-- [ ] Supported text enters exactly.
-- [ ] Unsupported text fails before partial input.
-- [ ] Outbound clipboard works as documented.
-- [ ] Inbound clipboard works as documented.
+- [x] Pointer move works.
+- [x] Button down/up works.
+- [x] Left click works.
+- [x] Middle click works.
+- [x] Right click works.
+- [x] Double-click works atomically.
+- [x] Vertical scrolling works.
+- [x] Nonzero horizontal scrolling is explicitly rejected and tested as unsupported in v0.1.
+- [x] Key down/up works.
+- [x] Chords press/release in required order.
+- [x] Supported text enters exactly.
+- [x] Unsupported text fails before partial input.
+- [x] Outbound clipboard works as documented.
+- [x] Inbound clipboard works as documented.
 
 ### R16.4 Reliability
 
-- [ ] Automatic reconnect works after desktop restart.
-- [ ] Authentication failure visible and backoff-safe.
-- [ ] Worker queue saturation visible.
-- [ ] Requests are time-bounded.
-- [ ] Shutdown is time-bounded.
-- [ ] Slow WebSocket clients cannot consume unbounded memory.
-- [ ] Worker failure causes readiness failure.
-- [ ] No command silently dropped.
+- [x] Automatic reconnect works after desktop restart.
+- [x] Authentication failure visible and backoff-safe.
+- [x] Worker queue saturation visible.
+- [x] Requests are time-bounded.
+- [x] Shutdown is time-bounded.
+- [x] Slow WebSocket clients cannot consume unbounded memory.
+- [x] Worker failure causes readiness failure.
+- [x] No command silently dropped.
 
 ### R16.5 Security
 
-- [ ] API bearer token required on all `/v1/*` routes.
-- [ ] VNC authentication mandatory.
-- [ ] Tokens/passwords come from secrets, not image layers.
-- [ ] No bearer token appears in logs.
-- [ ] No VNC password appears in logs.
-- [ ] No typed text appears in logs.
-- [ ] No clipboard content appears in logs.
-- [ ] No framebuffer content appears in logs.
-- [ ] No public raw VNC binding exists in production configuration.
-- [ ] Container capabilities/resource limits applied.
-- [ ] Dependency/image scans satisfy release policy.
+- [x] API bearer token required on all `/v1/*` routes.
+- [x] VNC authentication mandatory.
+- [x] Tokens/passwords come from secrets, not image layers.
+- [x] No bearer token appears in logs.
+- [x] No VNC password appears in logs.
+- [x] No typed text appears in logs.
+- [x] No clipboard content appears in logs.
+- [x] No framebuffer content appears in logs.
+- [x] No public raw VNC binding exists in production configuration.
+- [x] Container capabilities/resource limits applied.
+- [x] Dependency/image scans satisfy release policy.
 
 ### R16.6 Quality evidence
 
-- [ ] Formatting passes.
-- [ ] Clippy passes with warnings denied.
-- [ ] Unit tests pass.
-- [ ] Adapter safety tests pass.
-- [ ] Desktop smoke passes.
-- [ ] Compose smoke passes.
-- [ ] Integration tests pass.
-- [ ] End-to-end tests pass.
-- [ ] Sanitizer jobs pass.
-- [ ] Security scans pass.
-- [ ] README matches behavior.
-- [ ] API docs match behavior.
-- [ ] Exact release commit SHA is recorded.
+- [x] Formatting passes.
+- [x] Clippy passes with warnings denied.
+- [x] Unit tests pass.
+- [x] Adapter safety tests pass.
+- [x] Desktop smoke passes.
+- [x] Compose smoke passes.
+- [x] Integration tests pass.
+- [x] End-to-end tests pass.
+- [x] Sanitizer jobs pass.
+- [x] Security scans pass.
+- [x] README matches behavior.
+- [x] API docs match behavior.
+- [x] Exact release commit SHA is recorded.
 
 ### R16.7 Final evidence record
 
 ```text
-Release candidate commit:
+Release candidate commit: dd3b14917ad5e239573d584238ff67ded8138203
 
-Toolchain versions:
-- Rust:
-- Debian base digest:
-- TigerVNC:
-- LibVNCClient:
-- Docker:
+Toolchain: Rust 1.97.1; nightly 1.99.0-nightly; Debian 13.6 slim pinned digest; TigerVNC 1.15.0+dfsg-2.1~deb13u1; release LibVNCClient 0.9.15+dfsg-1+deb13u2; Docker 28.0.4
 
-Validation commands:
+Validation:
+- CI run 31029834071 — success
+- Quality job 92387470896 — success
+- Desktop/integration job 92387470858 — success
+- Release Gates run 31029833868 — success
+- Static/security job 92387653372 — success
+- Image/SBOM job 92387653399 — success
+- Native sanitizer/Miri job 92387653418 — success
 
-Results:
-- Formatting:
-- Clippy:
-- Unit tests:
-- Desktop smoke:
-- Adapter safety tests:
-- Compose smoke:
-- Integration tests:
-- End-to-end tests:
-- Sanitizers:
-- Security scans:
+Results: formatting, warning-denied Clippy, unit/rustdoc, desktop/native/Compose smoke, integration/E2E, ASan, TSan, Miri, cargo-deny, Gitleaks history, Trivy exact VEX, and SBOM gates all passed.
 
-GitHub Actions:
-- CI run:
-- Quality job:
-- Desktop job:
-- Integration job:
-- Security job:
+Known limitations: one project-owned desktop; no arbitrary VNC targets, multi-user auth, noVNC, OCR, accessibility automation, Playwright, or AI planning; reverse proxy required for TLS beyond localhost; horizontal scroll unsupported; typed text limited to tab/CR/LF and printable ASCII; inbound RFB clipboard must be valid UTF-8; distribution LibVNCClient is not sanitizer-rebuilt; VEX determinations expire 2026-09-04.
 
-Known v0.1 limitations:
-
-Release decision:
+Release decision: ACCEPTED FOR v0.1
+Evidence: docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md
 ```
 
 ---

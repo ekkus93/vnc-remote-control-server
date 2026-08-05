@@ -1,6 +1,7 @@
 # VNC Remote Control Server
 
 [![CI/CD](https://github.com/ekkus93/vnc-remote-control-server/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ekkus93/vnc-remote-control-server/actions/workflows/ci.yml)
+[![Release Gates](https://github.com/ekkus93/vnc-remote-control-server/actions/workflows/release-gates.yml/badge.svg?branch=master)](https://github.com/ekkus93/vnc-remote-control-server/actions/workflows/release-gates.yml)
 
 VNC Remote Control Server is a containerized Rust service that observes and controls one isolated Debian graphical desktop through the VNC Remote Framebuffer protocol.
 
@@ -43,7 +44,7 @@ The authoritative plan remains:
 - [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md)
 - [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md)
 
-The service is not yet declared a final v0.1 release. Security hardening and the final same-SHA acceptance gate remain separate milestones.
+v0.1 is accepted on release-candidate commit `dd3b14917ad5e239573d584238ff67ded8138203`. Both permanent `CI` and `Release Gates` workflows passed on that exact SHA. See [`docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md`](docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md) for the acceptance matrix, retained artifacts, security determinations, and known limitations.
 
 ## Quick start
 
