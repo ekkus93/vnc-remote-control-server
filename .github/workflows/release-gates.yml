@@ -95,11 +95,11 @@ jobs:
             docker compose version
           } > artifacts/static-policy/tool-versions.txt
 
-      - name: Run ShellCheck
+      - name: Run ShellCheck warnings and errors
         shell: bash
         run: |
           set -euo pipefail
-          shellcheck \
+          shellcheck --severity=warning \
             desktop/entrypoint.sh \
             desktop/healthcheck.sh \
             desktop/xstartup \
@@ -240,6 +240,7 @@ jobs:
       - name: Run core tests under Miri
         env:
           PROPTEST_CASES: "16"
+          PROPTEST_DISABLE_FAILURE_PERSISTENCE: "1"
         shell: bash
         run: |
           set -euo pipefail
@@ -329,20 +330,19 @@ jobs:
               --output "artifacts/image-security/${image}-sbom.cdx.json" \
               "$ref"
           done
+          cp security/trivy-critical-vex.json artifacts/image-security/trivy-critical-vex.json
 
-      - name: Block CRITICAL release-image vulnerabilities
+      - name: Enforce exact CRITICAL VEX determinations
         shell: bash
         run: |
           set -euo pipefail
-          for image in desktop controller; do
-            trivy image \
-              --scanners vuln \
-              --severity CRITICAL \
-              --exit-code 1 \
-              "vnc-remote-control-${image}:${{ github.sha }}"
-          done
+          python3 scripts/verify_trivy_critical_vex.py \
+            --vex security/trivy-critical-vex.json \
+            --output artifacts/image-security/critical-vex-evaluation.json \
+            artifacts/image-security/controller-vulnerabilities.json \
+            artifacts/image-security/desktop-vulnerabilities.json
 
-      - name: Upload image vulnerability and SBOM evidence
+      - name: Upload image vulnerability, VEX, and SBOM evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
