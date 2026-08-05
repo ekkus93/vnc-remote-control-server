@@ -15,6 +15,14 @@ if [[ "$mode" == "live" ]]; then
 fi
 
 [[ "$mode" == "ready" ]] || exit 2
-[[ -f "$readiness_file" ]] || exit 1
-nc -z 127.0.0.1 5901
-xdpyinfo -display :1 >/dev/null 2>&1
+
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if [[ -f "$readiness_file" ]] \
+        && nc -z -w 1 127.0.0.1 5901 \
+        && timeout 1s xdpyinfo -display :1 >/dev/null 2>&1; then
+        exit 0
+    fi
+    sleep 0.1
+done
+
+exit 1
