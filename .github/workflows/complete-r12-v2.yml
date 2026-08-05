@@ -76,10 +76,54 @@ jobs:
           new_build = """    build:\n      context: ../desktop\n      dockerfile: Dockerfile\n"""
           if compose_text.count(old_build) != 1:
               raise SystemExit("deploy/compose.yaml desktop build patch did not match exactly once")
-          compose_path.write_text(compose_text.replace(old_build, new_build, 1), encoding="utf-8")
+          compose_text = compose_text.replace(old_build, new_build, 1)
+          old_controller_networks = """    networks:\n      - desktop_control\n    read_only: true\n"""
+          new_controller_networks = """    networks:\n      - desktop_control\n      - api_ingress\n    read_only: true\n"""
+          if compose_text.count(old_controller_networks) != 1:
+              raise SystemExit("controller network patch did not match exactly once")
+          compose_text = compose_text.replace(
+              old_controller_networks,
+              new_controller_networks,
+              1,
+          )
+          old_network_definitions = """networks:\n  desktop_control:\n    internal: true\n"""
+          new_network_definitions = """networks:\n  api_ingress: {}\n  desktop_control:\n    internal: true\n"""
+          if compose_text.count(old_network_definitions) != 1:
+              raise SystemExit("Compose network definitions patch did not match exactly once")
+          compose_path.write_text(
+              compose_text.replace(
+                  old_network_definitions,
+                  new_network_definitions,
+                  1,
+              ),
+              encoding="utf-8",
+          )
 
           compose_smoke = Path("tests/compose/run.sh")
           compose_smoke_text = compose_smoke.read_text(encoding="utf-8")
+          old_network_contract = '''if not production["networks"]["desktop_control"].get("internal"):
+              raise SystemExit("desktop_control network is not internal")
+          if not controller.get("read_only"):
+          '''
+          new_network_contract = '''desktop_networks = set(desktop.get("networks", {}))
+          controller_networks = set(controller.get("networks", {}))
+          if desktop_networks != {"desktop_control"}:
+              raise SystemExit(f"desktop has unexpected networks: {desktop_networks!r}")
+          if controller_networks != {"desktop_control", "api_ingress"}:
+              raise SystemExit(f"controller has unexpected networks: {controller_networks!r}")
+          if not production["networks"]["desktop_control"].get("internal"):
+              raise SystemExit("desktop_control network is not internal")
+          if production["networks"]["api_ingress"].get("internal"):
+              raise SystemExit("api_ingress network is unexpectedly internal")
+          if not controller.get("read_only"):
+          '''
+          if compose_smoke_text.count(old_network_contract) != 1:
+              raise SystemExit("Compose rendered-network contract patch did not match exactly once")
+          compose_smoke_text = compose_smoke_text.replace(
+              old_network_contract,
+              new_network_contract,
+              1,
+          )
           old_secret_mode = 'chmod 0600 "$api_secret" "$vnc_secret"\n'
           new_secret_mode = '''# Local Compose implements file-backed secrets as read-only bind mounts and
           # preserves the host file owner. Keep the containing directory private while
@@ -113,6 +157,22 @@ jobs:
 
           deploy_readme = Path("deploy/README.md")
           deploy_text = deploy_readme.read_text(encoding="utf-8")
+          old_deploy_intro = (
+              '`compose.yaml` is the production topology. It builds a non-root controller image '
+              'and the Debian/TigerVNC desktop image, connects them through an internal Docker '
+              'network, and publishes only the controller API. The default API binding is '
+              'loopback-only at `127.0.0.1:8080`.'
+          )
+          new_deploy_intro = (
+              '`compose.yaml` is the production topology. It builds a non-root controller image '
+              'and the Debian/TigerVNC desktop image. Both services share an internal '
+              'desktop-control network; only the controller also joins a separate API-ingress '
+              'bridge so Docker can publish the controller API. The default API binding is '
+              'loopback-only at `127.0.0.1:8080`.'
+          )
+          if deploy_text.count(old_deploy_intro) != 1:
+              raise SystemExit("deployment README network introduction did not match exactly once")
+          deploy_text = deploy_text.replace(old_deploy_intro, new_deploy_intro, 1)
           old_readme_mode = 'chmod 0600 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt'
           new_readme_mode = 'chmod 0700 deploy/secrets\nchmod 0444 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt'
           if deploy_text.count(old_readme_mode) != 1:
@@ -161,6 +221,28 @@ jobs:
               raise SystemExit("secrets README mode patch did not match exactly once")
           secrets_readme.write_text(
               secrets_text.replace(old_secrets_text, new_secrets_text, 1),
+              encoding="utf-8",
+          )
+
+          evidence = Path("docs/VNC_REMOTE_CONTROL_SERVER_R12_EVIDENCE_2026-08-04.md")
+          evidence_text = evidence.read_text(encoding="utf-8")
+          old_evidence_networks = '''- Desktop-controller traffic uses an internal Docker network.
+          - Desktop VNC is internal-only through `expose: 5901`.
+          - Only the controller API is published, loopback-only by default.
+          '''
+          new_evidence_networks = '''- Desktop-controller traffic uses an internal desktop-control network.
+          - Only the controller also joins a separate API-ingress bridge, allowing Docker to publish the API without exposing the desktop network.
+          - Desktop VNC is internal-only through `expose: 5901`.
+          - Only the controller API is published, loopback-only by default.
+          '''
+          if evidence_text.count(old_evidence_networks) != 1:
+              raise SystemExit("R12 evidence network description did not match exactly once")
+          evidence.write_text(
+              evidence_text.replace(
+                  old_evidence_networks,
+                  new_evidence_networks,
+                  1,
+              ),
               encoding="utf-8",
           )
           PYFIX
