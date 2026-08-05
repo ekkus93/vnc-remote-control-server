@@ -24,7 +24,7 @@ const WHEEL_DOWN_MASK: u8 = 1 << 4;
 // TigerVNC feeds RFB key messages into the X input queue asynchronously.
 // A short bounded interval preserves modifier transition order without
 // allowing another worker command to interleave with the chord.
-const CHORD_EVENT_SETTLE_INTERVAL: Duration = Duration::from_millis(5);
+const CHORD_EVENT_SETTLE_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Narrow native event surface required by the input controller.
 pub(crate) trait InputSink {
