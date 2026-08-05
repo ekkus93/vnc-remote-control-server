@@ -714,7 +714,14 @@ root.destroy()
         ("/v1/pointer/move", {"x": 320, "y": 240}),
         ("/v1/pointer/button", {"x": 330, "y": 250, "button": "left", "pressed": True}),
         ("/v1/pointer/button", {"x": 330, "y": 250, "button": "left", "pressed": False}),
-        ("/v1/pointer/click", {"x": 420, "y": 430, "button": "left"}),
+        (
+            "/v1/pointer/click",
+            {
+                "x": int(controls["increment"]["x"]),
+                "y": int(controls["increment"]["y"]),
+                "button": "left",
+            },
+        ),
         ("/v1/pointer/click", {"x": 440, "y": 430, "button": "middle"}),
         ("/v1/pointer/click", {"x": 460, "y": 430, "button": "right"}),
         ("/v1/pointer/double-click", {"x": 480, "y": 430, "button": "left", "interval_ms": 20}),
@@ -735,6 +742,7 @@ root.destroy()
         scroll_down = sum(event.get("type") == "scroll" and event.get("delta_y") == -1 for event in events)
         return (
             value.get("pointer") == {"x": 500, "y": 430}
+            and value.get("counter") == 1
             and value.get("buttons") == {"left": False, "middle": False, "right": False}
             and left_down >= 4
             and left_up >= 4
