@@ -77,6 +77,92 @@ jobs:
           if compose_text.count(old_build) != 1:
               raise SystemExit("deploy/compose.yaml desktop build patch did not match exactly once")
           compose_path.write_text(compose_text.replace(old_build, new_build, 1), encoding="utf-8")
+
+          compose_smoke = Path("tests/compose/run.sh")
+          compose_smoke_text = compose_smoke.read_text(encoding="utf-8")
+          old_secret_mode = 'chmod 0600 "$api_secret" "$vnc_secret"\n'
+          new_secret_mode = '''# Local Compose implements file-backed secrets as read-only bind mounts and
+          # preserves the host file owner. Keep the containing directory private while
+          # making each mounted file readable by the non-root service UID.
+          chmod 0700 "$temp_dir"
+          chmod 0444 "$api_secret" "$vnc_secret"
+          '''
+          if compose_smoke_text.count(old_secret_mode) != 1:
+              raise SystemExit("Compose smoke secret-mode patch did not match exactly once")
+          compose_smoke_text = compose_smoke_text.replace(
+              old_secret_mode,
+              new_secret_mode,
+              1,
+          )
+          first_base_up = '''"${base[@]}" up --detach
+          wait_healthy base desktop
+          '''
+          diagnosed_base_up = '''if ! "${base[@]}" up --detach; then
+              "${base[@]}" ps --all >&2 || true
+              "${base[@]}" logs --no-color >&2 || true
+              fail "production stack failed before health checks"
+          fi
+          wait_healthy base desktop
+          '''
+          if compose_smoke_text.count(first_base_up) < 1:
+              raise SystemExit("Compose startup diagnostic patch did not find the base startup")
+          compose_smoke.write_text(
+              compose_smoke_text.replace(first_base_up, diagnosed_base_up, 1),
+              encoding="utf-8",
+          )
+
+          deploy_readme = Path("deploy/README.md")
+          deploy_text = deploy_readme.read_text(encoding="utf-8")
+          old_readme_mode = 'chmod 0600 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt'
+          new_readme_mode = 'chmod 0700 deploy/secrets\nchmod 0444 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt'
+          if deploy_text.count(old_readme_mode) != 1:
+              raise SystemExit("deployment README secret-mode patch did not match exactly once")
+          old_readme_explanation = (
+              'The secret directory ignores all credential files. The controller reads both '
+              'credentials from `/run/secrets`; the desktop reads the VNC password from '
+              '`/run/secrets`. The generated TigerVNC credential file is stored only in '
+              '`/tmp/vnc-runtime/passwd`, never under the persistent home directory.'
+          )
+          new_readme_explanation = (
+              'The secret directory ignores all credential files. Keep the directory at mode '
+              '`0700`; the files use mode `0444` because local Docker Compose mounts file-backed '
+              'secrets read-only while preserving their host ownership, and both services run as '
+              'dedicated non-root UIDs. The private parent directory prevents other host users from '
+              'traversing to the files. The controller reads both credentials from `/run/secrets`; '
+              'the desktop reads the VNC password from `/run/secrets`. The generated TigerVNC '
+              'credential file is stored only in `/tmp/vnc-runtime/passwd`, never under the '
+              'persistent home directory.'
+          )
+          if deploy_text.count(old_readme_explanation) != 1:
+              raise SystemExit("deployment README explanation patch did not match exactly once")
+          deploy_readme.write_text(
+              deploy_text.replace(old_readme_mode, new_readme_mode, 1).replace(
+                  old_readme_explanation,
+                  new_readme_explanation,
+                  1,
+              ),
+              encoding="utf-8",
+          )
+
+          secrets_readme = Path("deploy/secrets/README.md")
+          secrets_text = secrets_readme.read_text(encoding="utf-8")
+          old_secrets_text = (
+              'Place `api_token.txt` and `vnc_password.txt` here with mode `0600`. '
+              'Their contents are intentionally ignored by Git. Never commit real credentials.'
+          )
+          new_secrets_text = (
+              'Keep this directory at mode `0700`. Place `api_token.txt` and '
+              '`vnc_password.txt` here with mode `0444`; local Docker Compose mounts them '
+              'read-only while preserving host ownership, so the dedicated non-root service '
+              'UIDs require the read bits. Their contents are intentionally ignored by Git. '
+              'Never commit real credentials.'
+          )
+          if secrets_text.count(old_secrets_text) != 1:
+              raise SystemExit("secrets README mode patch did not match exactly once")
+          secrets_readme.write_text(
+              secrets_text.replace(old_secrets_text, new_secrets_text, 1),
+              encoding="utf-8",
+          )
           PYFIX
 
       - name: Check formatting
