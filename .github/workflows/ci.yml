@@ -84,7 +84,8 @@ jobs:
             tests/worker-text-clipboard-e2e/run.sh \
             tests/http-e2e/run.sh \
             controller/healthcheck.sh \
-            tests/compose/run.sh
+            tests/compose/run.sh \
+            tests/integration/run.sh
 
       - name: Build CI evidence
         env:
@@ -136,7 +137,7 @@ jobs:
   desktop:
     name: Secured Debian desktop and native adapter
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -248,3 +249,18 @@ jobs:
 
       - name: Run controller image, Compose, and persistence smoke test
         run: bash tests/compose/run.sh
+
+      - name: Run R13 Compose integration and E2E validation
+        id: r13_integration
+        env:
+          R13_FAILURE_ARTIFACT_DIR: artifacts/r13-integration-failure
+        run: bash tests/integration/run.sh
+
+      - name: Upload R13 integration failure diagnostics
+        if: ${{ failure() && steps.r13_integration.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: r13-integration-failure-${{ github.run_id }}
+          path: artifacts/r13-integration-failure
+          if-no-files-found: error
+          retention-days: 14
