@@ -213,7 +213,21 @@ jobs:
         run: bash tests/http-e2e/run.sh
 
       - name: Run controller image, Compose, and persistence smoke
-        run: bash tests/compose/run.sh
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/r12-compose-diagnostics
+          bash -x tests/compose/run.sh 2>&1 \
+            | tee /tmp/r12-compose-diagnostics/compose-trace.log
+
+      - name: Upload Compose failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r12-compose-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/r12-compose-diagnostics
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Commit validated R12 directly to master
         shell: bash
