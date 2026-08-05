@@ -59,6 +59,18 @@ jobs:
           echo '536cb06f9cf3cda2a015beac239fd7805a46613aed6b67ab96911bbd2388906e  /tmp/r12_apply.py' | sha256sum --check --strict
           python3 -m py_compile /tmp/r12_apply.py
           python3 /tmp/r12_apply.py
+          python3 - <<'PYFIX'
+          from pathlib import Path
+
+          path = Path("tests/desktop/run.sh")
+          text = path.read_text(encoding="utf-8")
+          old = '[[ "$(docker exec "$container_name" stat -c \'%a\' /home/desktop/.vnc/passwd)" == "600" ]] || fail "encoded VNC password permissions are not 0600"'
+          new = '[[ "$(docker exec "$container_name" stat -c \'%a\' /tmp/vnc-runtime/passwd)" == "600" ]] || fail "encoded VNC password permissions are not 0600"\ndocker exec "$container_name" test ! -e /home/desktop/.vnc/passwd || fail "generated VNC password was written into persistent home"'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f"desktop smoke credential-path patch expected one match, found {count}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PYFIX
 
       - name: Check formatting
         run: cargo fmt --all --check
