@@ -629,18 +629,23 @@ root.destroy()
         clipboard_reader,
         OUTBOUND_CLIPBOARD,
     )
-    for keys in (["CTRL_LEFT", "a"], ["CTRL_LEFT", "v"]):
-        response = post_json(harness, "/v1/keyboard/chord", {"keys": keys})
-        require(response.status == 202, f"clipboard paste chord failed: {response.status}")
+    def select_all_entry() -> None:
+        # Tk on X11 maps Ctrl+A to cursor-home rather than select-all. Use
+        # the portable Home then Shift+End sequence through the public API.
+        for keys, label in ((["HOME"], "home"), (["SHIFT_LEFT", "END"], "shift-end")):
+            selection = post_json(harness, "/v1/keyboard/chord", {"keys": keys})
+            require(selection.status == 202, f"{label} selection chord failed: {selection.status}")
+
+    select_all_entry()
+    response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "v"]})
+    require(response.status == 202, f"clipboard paste chord failed: {response.status}")
     harness.wait_desktop_state(lambda value: value.get("text") == OUTBOUND_CLIPBOARD)
 
-    response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "a"]})
-    require(response.status == 202, "select-all before copy setup failed")
+    select_all_entry()
     response = post_json(harness, "/v1/keyboard/text", {"text": INBOUND_CLIPBOARD})
     require(response.status == 202, "copy fixture typing failed")
     harness.wait_desktop_state(lambda value: value.get("text") == INBOUND_CLIPBOARD)
-    response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "a"]})
-    require(response.status == 202, "select-all before copy failed")
+    select_all_entry()
     response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "c"]})
     require(response.status == 202, "copy chord failed")
 
