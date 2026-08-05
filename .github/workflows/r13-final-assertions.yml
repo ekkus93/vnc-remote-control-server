@@ -1,0 +1,87 @@
+name: Validate Final R13 Assertions
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r13-final-assertions.yml
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Tighten and validate final R13 assertions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Add exact click counts and horizontal rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/integration/r13_integration.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              '            and left_down >= 4\n            and left_up >= 4\n            and middle_down >= 1\n            and right_down >= 1\n            and scroll_up >= 2\n            and scroll_down >= 1\n': (
+                  '            and left_down == 4\n'
+                  '            and left_up == 4\n'
+                  '            and middle_down == 1\n'
+                  '            and right_down == 1\n'
+                  '            and scroll_up == 2\n'
+                  '            and scroll_down == 1\n'
+              ),
+              '    require(scroll.status == 422 and error_code(scroll) == "scroll_too_large", "scroll limit was not explicit")\n\n': (
+                  '    require(scroll.status == 422 and error_code(scroll) == "scroll_too_large", "scroll limit was not explicit")\n'
+                  '    horizontal = post_json(\n'
+                  '        harness,\n'
+                  '        "/v1/pointer/scroll",\n'
+                  '        {"x": 1, "y": 1, "delta_x": 1, "delta_y": 0},\n'
+                  '    )\n'
+                  '    require(\n'
+                  '        horizontal.status == 422 and error_code(horizontal) == "invalid_request",\n'
+                  '        "unsupported horizontal scrolling was not rejected explicitly",\n'
+                  '    )\n\n'
+              ),
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one R13 assertion block, found {text.count(old)}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+
+          contract = Path('tests/test_integration_contract.py')
+          tests = contract.read_text(encoding='utf-8')
+          old = '            "scroll_too_large",\n'
+          new = '            "scroll_too_large",\n            "unsupported horizontal scrolling was not rejected explicitly",\n'
+          if tests.count(old) != 1:
+              raise SystemExit('R13 contract scroll marker was not unique')
+          contract.write_text(tests.replace(old, new), encoding='utf-8')
+          PY
+          python3 -m compileall -q tests/integration tests/test_integration_contract.py
+          python3 -m unittest tests.test_integration_contract -v
+          git diff --check
+
+      - name: Run full real-Compose R13 suite
+        env:
+          R13_FAILURE_ARTIFACT_DIR: artifacts/r13-final-assertion-failure
+        run: bash tests/integration/run.sh
+
+      - name: Commit validated assertions directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add tests/integration/r13_integration.py tests/test_integration_contract.py
+          git commit -m 'test: finalize exact R13 input assertions'
+          git push origin HEAD:master
