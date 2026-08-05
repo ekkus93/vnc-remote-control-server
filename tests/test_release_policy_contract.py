@@ -7,6 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 CI = ROOT / ".github/workflows/ci.yml"
 RELEASE = ROOT / ".github/workflows/release-gates.yml"
 POLICY = ROOT / "docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md"
+GITLEAKS_IGNORE = ROOT / ".gitleaksignore"
+EXPECTED_GITLEAKS_FALSE_POSITIVE = (
+    "309364caf5d44d316557aa585ad7d92d043b0a47:"
+    "docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md:"
+    "generic-api-key:95"
+)
 
 
 class ReleasePolicyContractTests(unittest.TestCase):
@@ -55,6 +61,21 @@ class ReleasePolicyContractTests(unittest.TestCase):
         )
         self.assertNotIn("actions/cache@v", text)
         self.assertIn("fetch-depth: 0", text)
+
+    def test_gitleaks_ignore_is_exact_false_positive_fingerprint_only(self):
+        lines = [
+            line.strip()
+            for line in GITLEAKS_IGNORE.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        self.assertEqual(lines, [EXPECTED_GITLEAKS_FALSE_POSITIVE])
+        fingerprint = lines[0]
+        self.assertNotIn("*", fingerprint)
+        self.assertNotIn("...", fingerprint)
+        self.assertRegex(
+            fingerprint,
+            r"^[0-9a-f]{40}:docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03\.md:generic-api-key:95$",
+        )
 
     def test_security_policy_forbids_silent_exceptions(self):
         text = POLICY.read_text(encoding="utf-8")
