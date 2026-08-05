@@ -834,94 +834,98 @@ Final implementation SHA and ordinary CI: appended after exact master validation
 
 ### R13.1 Integration harness
 
-- [ ] Create scripts or Rust tests that launch real Compose stack.
-- [ ] Allocate collision-free host API ports in CI.
-- [ ] Generate ephemeral test secrets.
-- [ ] Wait on readiness with bounded deadline.
-- [ ] Capture container logs on failure.
-- [ ] Always tear down containers, volumes, and networks.
+- [x] Create scripts or Rust tests that launch real Compose stack.
+- [x] Allocate collision-free host API ports in CI.
+- [x] Generate ephemeral test secrets.
+- [x] Wait on readiness with bounded deadline.
+- [x] Capture container logs on failure.
+- [x] Always tear down containers, volumes, and networks.
 
 ### R13.2 Connection tests
 
-- [ ] Successful authentication reaches `connected`.
-- [ ] Wrong VNC password reaches `authentication_failed`.
-- [ ] Missing VNC secret fails startup closed.
-- [ ] Desktop restart causes disconnect detection.
-- [ ] Automatic reconnect succeeds.
-- [ ] Old framebuffer becomes unavailable during reconnect.
-- [ ] Full framebuffer returns before readiness.
-- [ ] Repeated restart cycles do not materially leak threads/memory.
+- [x] Successful authentication reaches `connected`.
+- [x] Wrong VNC password reaches `authentication_failed`.
+- [x] Missing VNC secret fails startup closed.
+- [x] Desktop restart causes disconnect detection.
+- [x] Automatic reconnect succeeds.
+- [x] Old framebuffer becomes unavailable during reconnect.
+- [x] Full framebuffer returns before readiness.
+- [x] Repeated restart cycles do not materially leak threads/memory.
 
 ### R13.3 Display/screenshot tests
 
-- [ ] Display reports `1280x800`.
-- [ ] Initial PNG is valid.
-- [ ] Initial PNG has exact dimensions.
-- [ ] ETag changes after visible update.
-- [ ] Conditional GET returns `304` for unchanged revision.
-- [ ] Screenshot unavailable before first complete frame.
-- [ ] Concurrent screenshots remain bounded.
+- [x] Display reports `1280x800`.
+- [x] Initial PNG is valid.
+- [x] Initial PNG has exact dimensions.
+- [x] ETag changes after visible update.
+- [x] Conditional GET returns `304` for unchanged revision.
+- [x] Screenshot unavailable before first complete frame.
+- [x] Concurrent screenshots remain bounded.
 
 ### R13.4 Public API input tests
 
-- [ ] Move pointer to known coordinates and verify test-app result.
-- [ ] Left-click known control and verify state change.
-- [ ] Middle-click target.
-- [ ] Right-click target.
-- [ ] Double-click target and verify exactly two clicks.
-- [ ] Scroll vertically in both directions.
-- [ ] Scroll horizontally in both directions if supported.
-- [ ] Send individual key down/up and verify order.
-- [ ] Send chord and verify press/release ordering.
-- [ ] Type supported text and verify exact field contents.
-- [ ] Submit unsupported text and verify no partial mutation.
+- [x] Move pointer to known coordinates and verify test-app result.
+- [x] Left-click known control and verify state change.
+- [x] Middle-click target.
+- [x] Right-click target.
+- [x] Double-click target and verify exactly two clicks.
+- [x] Scroll vertically in both directions.
+- [x] Scroll horizontally in both directions if supported.
+- [x] Send individual key down/up and verify order.
+- [x] Send chord and verify press/release ordering.
+- [x] Type supported text and verify exact field contents.
+- [x] Submit unsupported text and verify no partial mutation.
 
 ### R13.5 Public API clipboard tests
 
-- [ ] Set desktop clipboard through API.
-- [ ] Paste into test app and verify exact value.
-- [ ] Copy from test app.
-- [ ] Retrieve last-known clipboard snapshot through API.
-- [ ] Verify clipboard revision.
-- [ ] Verify clipboard timestamp.
-- [ ] Verify `clipboard_unavailable` before first inbound update.
-- [ ] Verify oversized input rejection.
+- [x] Set desktop clipboard through API.
+- [x] Paste into test app and verify exact value.
+- [x] Copy from test app.
+- [x] Retrieve last-known clipboard snapshot through API.
+- [x] Verify clipboard revision.
+- [x] Verify clipboard timestamp.
+- [x] Verify `clipboard_unavailable` before first inbound update.
+- [x] Verify oversized input rejection.
 
 ### R13.6 Auth and abuse tests
 
-- [ ] Verify all `/v1/*` routes reject no token.
-- [ ] Verify all `/v1/*` routes reject wrong token.
-- [ ] Verify WebSocket rejects unauthenticated upgrades.
-- [ ] Verify token cannot be supplied through query string.
-- [ ] Verify oversized JSON body rejection.
-- [ ] Verify coordinate limit rejection.
-- [ ] Verify scroll limit rejection.
-- [ ] Verify queue saturation is explicit.
-- [ ] Verify reconnect rate limiting.
-- [ ] Verify secrets/payloads absent from captured logs.
+- [x] Verify all `/v1/*` routes reject no token.
+- [x] Verify all `/v1/*` routes reject wrong token.
+- [x] Verify WebSocket rejects unauthenticated upgrades.
+- [x] Verify token cannot be supplied through query string.
+- [x] Verify oversized JSON body rejection.
+- [x] Verify coordinate limit rejection.
+- [x] Verify scroll limit rejection.
+- [x] Verify queue saturation is explicit.
+- [x] Verify reconnect rate limiting.
+- [x] Verify secrets/payloads absent from captured logs.
 
 ### R13.7 Shutdown tests
 
-- [ ] Send SIGTERM to controller while idle.
-- [ ] Send SIGTERM with queued commands.
-- [ ] Confirm new commands rejected during shutdown.
-- [ ] Confirm worker connection closes.
-- [ ] Confirm worker thread joins.
-- [ ] Confirm process exits within bounded deadline.
-- [ ] Stop desktop and confirm child processes terminate.
+- [x] Send SIGTERM to controller while idle.
+- [x] Send SIGTERM with queued commands.
+- [x] Confirm new commands rejected during shutdown.
+- [x] Confirm worker connection closes.
+- [x] Confirm worker thread joins.
+- [x] Confirm process exits within bounded deadline.
+- [x] Stop desktop and confirm child processes terminate.
 
 Evidence:
 
 ```text
-Integration commit:
-Harness command:
-Connection tests:
-Screenshot tests:
-Input tests:
-Clipboard tests:
-Auth/abuse tests:
-Shutdown tests:
-CI run:
+Integration commit: 9323b09dcd0f13dbe0576a599926dd8b13d263b1
+Harness command: bash tests/integration/run.sh
+Connection tests: real Compose/TigerVNC auth failure, fail-closed secret, disconnect, reconnect, stale-frame invalidation, repeated restart/resource bounds
+Screenshot tests: 1280x800 PNG, coherent readiness, ETag/304, visible revision change, unavailable during reconnect, bounded concurrent encoding
+Input tests: exact pointer/button/double-click/vertical-scroll counts, explicit horizontal rejection, key/chord ordering, exact text and atomic unsupported-text rejection
+Clipboard tests: unavailable-before-first-update, API-to-desktop paste, desktop-to-API copy, revision/timestamp, oversized rejection
+Auth/abuse tests: all protected routes, WebSocket/query-token rejection, body/coordinate/scroll/queue/reconnect bounds, log and diagnostic redaction
+Shutdown tests: idle and queued SIGTERM, new-work rejection, worker connection close/thread join, bounded process exit, desktop child termination
+Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R13_EVIDENCE_2026-08-05.md
+R13 candidate run: 30973938130 (success)
+Final assertion/API validation run: 30993609334 (success)
+Temporary workflow cleanup commit: 039ac05828f75119b6177c36a91a85bc5c952bb0
+Final documentation SHA and ordinary CI: validated after this checklist commit
 ```
 
 ---
