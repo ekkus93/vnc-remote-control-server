@@ -994,47 +994,54 @@ CI run:
 
 ### R15.1 README/operator docs
 
-- [ ] Explain product boundary.
-- [ ] Include architecture diagram.
-- [ ] List prerequisites.
-- [ ] Document secret generation.
-- [ ] Document local build/startup.
-- [ ] Document authenticated API examples without real secrets.
-- [ ] Document screenshot usage.
-- [ ] Document WebSocket usage.
-- [ ] Document production reverse-proxy/TLS expectations.
-- [ ] Document disposable mode.
-- [ ] Document persistent mode.
-- [ ] Document loopback-only debug VNC.
-- [ ] Document shutdown behavior.
-- [ ] Document recovery behavior.
-- [ ] Document known text limitations.
-- [ ] Document known clipboard encoding limitations.
-- [ ] Document resource limits/tuning.
-- [ ] Document troubleshooting for desktop startup.
-- [ ] Document troubleshooting for VNC auth.
-- [ ] Document troubleshooting for controller connection.
-- [ ] Document troubleshooting for framebuffer readiness.
+- [x] Explain product boundary.
+- [x] Include architecture diagram.
+- [x] List prerequisites.
+- [x] Document secret generation.
+- [x] Document local build/startup.
+- [x] Document authenticated API examples without real secrets.
+- [x] Document screenshot usage.
+- [x] Document WebSocket usage.
+- [x] Document production reverse-proxy/TLS expectations.
+- [x] Document disposable mode.
+- [x] Document persistent mode.
+- [x] Document loopback-only debug VNC.
+- [x] Document shutdown behavior.
+- [x] Document recovery behavior.
+- [x] Document known text limitations.
+- [x] Document known clipboard encoding limitations.
+- [x] Document resource limits/tuning.
+- [x] Document troubleshooting for desktop startup.
+- [x] Document troubleshooting for VNC auth.
+- [x] Document troubleshooting for controller connection.
+- [x] Document troubleshooting for framebuffer readiness.
 
 ### R15.2 API documentation
 
-- [ ] Add OpenAPI document for HTTP routes.
-- [ ] Document bearer authentication.
-- [ ] Document every request schema.
-- [ ] Document every response schema.
-- [ ] Document error codes/statuses.
-- [ ] Document asynchronous `202` semantics.
-- [ ] Document WebSocket event envelope separately if needed.
-- [ ] Add tested curl examples.
-- [ ] Ensure docs match actual behavior.
+- [x] Add OpenAPI document for HTTP routes.
+- [x] Document bearer authentication.
+- [x] Document every request schema.
+- [x] Document every response schema.
+- [x] Document error codes/statuses.
+- [x] Document asynchronous `202` semantics.
+- [x] Document WebSocket event envelope separately if needed.
+- [x] Add tested curl examples.
+- [x] Ensure docs match actual behavior.
 
 Evidence:
 
 ```text
-Docs commit:
-OpenAPI validation:
-Curl example tests:
-CI run:
+Operator guide commit: 8eb2b2eb832359e30be2b8072eca220ac13d3903
+README/OpenAPI/curl-test commit: d913218f12bf91477f2306c15dbd281fb3f0ca54
+Evidence record commit: 2c8bc8d6a898a248301c6db12921bb5753930e60
+Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R15_EVIDENCE_2026-08-05.md
+OpenAPI validation: python3 -m json.tool docs/openapi.json; tests.test_documentation_contract
+Curl example tests: tests/http-e2e/run.sh against production controller and real TigerVNC
+Focused validation: run 31009207323, job 92316720636, success
+Clean-head CI: run 31009513801 on e55bf28d4dd90259b1c43f90135577393545b150, success
+Quality job: 92317766142, success
+Secured desktop/native job: 92317766230, success
+CI artifact: ci-evidence-31009513801, id 8931824284
 ```
 
 ---
