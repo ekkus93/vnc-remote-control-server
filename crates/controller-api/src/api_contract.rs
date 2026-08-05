@@ -200,6 +200,11 @@ pub struct PointerScrollRequest {
 impl PointerScrollRequest {
     /// Converts a completely validated request into a worker command.
     pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
+        if self.delta_x != 0 {
+            return Err(DesktopError::Configuration(
+                "horizontal scrolling is not supported by v0.1".to_owned(),
+            ));
+        }
         validate_scroll(self.delta_x, self.delta_y)?;
         Ok(WorkerCommand::Scroll {
             coordinate: display.validate_coordinate(self.x, self.y)?,
@@ -537,6 +542,7 @@ mod tests {
             PointerScrollRequest {
                 x: 0,
                 y: 0,
+                delta_x: 0,
                 delta_y: remote_desktop_core::MAX_SCROLL_STEPS,
             }
             .into_command(display)
@@ -546,6 +552,7 @@ mod tests {
             PointerScrollRequest {
                 x: 0,
                 y: 0,
+                delta_x: 0,
                 delta_y: remote_desktop_core::MAX_SCROLL_STEPS + 1,
             }
             .into_command(display),
