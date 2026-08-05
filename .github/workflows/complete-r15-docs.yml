@@ -1,5 +1,5 @@
 name: Complete R15 Documentation
-# Retry after the WebSocket snapshot event label was made explicit.
+# Retry after the documented reconnect example was made rate-limit aware.
 
 on:
   push:
@@ -60,6 +60,24 @@ jobs:
           echo 'cf43d096126f16ca23c3dcd7f7bc20a483620595bcfd7df27e1dee4854bcc0e0  /tmp/r15_apply.py' | sha256sum --check --strict
           python3 -m py_compile /tmp/r15_apply.py
           python3 /tmp/r15_apply.py
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/http-e2e/run.sh')
+          text = path.read_text(encoding='utf-8')
+          marker = 'log "verifying the documented curl reconnect example"\n'
+          replacement = (
+              'log "verifying the documented curl reconnect example"\n'
+              '# The WebSocket lifecycle probe above performs a manual reconnect.\n'
+              '# Wait past the documented 2-second admission interval before\n'
+              '# validating the standalone curl example.\n'
+              'sleep 2.1\n'
+          )
+          if text.count(marker) != 1:
+              raise SystemExit('expected exactly one documented reconnect marker')
+          path.write_text(text.replace(marker, replacement, 1), encoding='utf-8')
+          PY
 
       - name: Validate OpenAPI and documentation contracts
         shell: bash
