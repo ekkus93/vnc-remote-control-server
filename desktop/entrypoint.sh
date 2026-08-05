@@ -7,7 +7,6 @@ readonly vnc_port="$((5900 + display_number))"
 readonly password_file="${VNC_PASSWORD_FILE:-/run/secrets/vnc_password}"
 readonly geometry="${VNC_GEOMETRY:-1280x800}"
 readonly depth="${VNC_DEPTH:-24}"
-readonly home_dir="${HOME:-/home/desktop}"
 readonly vnc_runtime_dir=/tmp/vnc-runtime
 readonly encoded_password_file="${vnc_runtime_dir}/passwd"
 readonly readiness_file=/tmp/vnc-desktop-ready

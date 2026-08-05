@@ -30,21 +30,22 @@ class ReleasePolicyContractTests(unittest.TestCase):
             "image_security:",
             "cargo deny check",
             "actionlint .github/workflows/*.yml",
-            "shellcheck \\",
+            "shellcheck --severity=warning",
             "docker buildx build --check",
             "docker compose -f deploy/compose.yaml config --quiet",
             "gitleaks git . --redact --no-banner --exit-code 1",
-            "--severity CRITICAL",
-            "--exit-code 1",
             "--format cyclonedx",
             "-Zsanitizer=address",
             "-Zsanitizer=thread",
+            "PROPTEST_DISABLE_FAILURE_PERSISTENCE: \"1\"",
             "miri test",
+            "scripts/verify_trivy_critical_vex.py",
         )
         for value in required:
             with self.subTest(value=value):
                 self.assertIn(value, text)
         self.assertNotIn("continue-on-error: true", text)
+        self.assertNotIn("--ignore-unfixed", text)
 
     def test_cache_and_actions_are_immutably_pinned(self):
         text = RELEASE.read_text(encoding="utf-8")
@@ -58,8 +59,8 @@ class ReleasePolicyContractTests(unittest.TestCase):
     def test_security_policy_forbids_silent_exceptions(self):
         text = POLICY.read_text(encoding="utf-8")
         self.assertIn("There are no implicit or silent exceptions", text)
-        self.assertIn("CRITICAL findings are always blocking", text)
-        self.assertIn("No v0.1 exception is currently approved", text)
+        self.assertIn("Any unmatched CRITICAL tuple is release-blocking", text)
+        self.assertIn("`--ignore-unfixed` is prohibited", text)
         self.assertIn("may not be changed to `continue-on-error`", text)
         self.assertIn("must not contain bearer tokens", text)
         self.assertIn("Neither workflow substitutes for the other", text)

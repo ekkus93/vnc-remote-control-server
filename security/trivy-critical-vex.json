@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-08-05",
+  "expires_at": "2026-09-04",
+  "tracking_issue": 7,
+  "entries": [
+    {
+      "id": "CVE-2026-13221",
+      "decision": "not_exploitable",
+      "installed_version": "5.40.1-6",
+      "packages": {
+        "controller": ["perl-base"],
+        "desktop": ["libperl5.40", "perl", "perl-base", "perl-modules-5.40"]
+      },
+      "rationale": "The shipped Rust controller, VNC adapter, desktop launcher, and deterministic test application do not invoke Perl or compile attacker-controlled Perl regular expressions. The vulnerable trie construction therefore has no reachable application input path.",
+      "source": "https://security-tracker.debian.org/tracker/CVE-2026-13221"
+    },
+    {
+      "id": "CVE-2026-42496",
+      "decision": "not_exploitable",
+      "installed_version": "5.40.1-6",
+      "packages": {
+        "controller": ["perl-base"],
+        "desktop": ["libperl5.40", "perl", "perl-base", "perl-modules-5.40"]
+      },
+      "rationale": "No HTTP, WebSocket, LibVNCClient, startup, health-check, or deterministic desktop path extracts attacker-provided archives through Perl Archive::Tar. The vulnerable symlink extraction function is not reachable from service inputs.",
+      "source": "https://security-tracker.debian.org/tracker/CVE-2026-42496"
+    },
+    {
+      "id": "CVE-2026-57433",
+      "decision": "not_exploitable",
+      "installed_version": "5.40.1-6",
+      "packages": {
+        "controller": ["perl-base"],
+        "desktop": ["libperl5.40", "perl", "perl-base", "perl-modules-5.40"]
+      },
+      "rationale": "The production services do not invoke Perl Storable and do not deserialize attacker-provided Storable records. The crafted SX_HOOK input required by the issue is absent from every exposed application path.",
+      "source": "https://security-tracker.debian.org/tracker/CVE-2026-57433"
+    },
+    {
+      "id": "CVE-2026-8376",
+      "decision": "not_affected",
+      "installed_version": "5.40.1-6",
+      "packages": {
+        "controller": ["perl-base"],
+        "desktop": ["libperl5.40", "perl", "perl-base", "perl-modules-5.40"]
+      },
+      "rationale": "The vulnerability is limited to 32-bit Perl builds. Both release jobs build and inspect linux/amd64 images, so the affected integer-width condition is not present in the shipped artifacts.",
+      "source": "https://security-tracker.debian.org/tracker/CVE-2026-8376"
+    },
+    {
+      "id": "CVE-2026-58016",
+      "decision": "not_exploitable",
+      "installed_version": "2.84.4-3~deb13u3",
+      "packages": {
+        "desktop": ["libglib2.0-0t64"]
+      },
+      "rationale": "No HTTP, WebSocket, LibVNCClient, startup, health-check, or deterministic desktop application input accepts D-Bus introspection XML. The malformed introspection document required for the GLib denial of service is not reachable from the remote-control API.",
+      "source": "https://security-tracker.debian.org/tracker/CVE-2026-58016"
+    },
+    {
+      "id": "CVE-2026-6653",
+      "decision": "not_exploitable",
+      "installed_version": "2.12.7+dfsg+really2.9.14-2.1+deb13u3",
+      "packages": {
+        "desktop": ["libxml2"]
+      },
+      "rationale": "The controller, VNC adapter, startup scripts, and deterministic desktop application expose no XML input or libxml2 parsing operation. The crafted XML document required for the denial of service is not accepted by any service endpoint.",
+      "source": "https://security-tracker.debian.org/tracker/CVE-2026-6653"
+    }
+  ]
+}

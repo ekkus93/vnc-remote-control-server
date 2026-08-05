@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly root_dir
 cd "$root_dir"
 
 command -v docker >/dev/null 2>&1 || {
