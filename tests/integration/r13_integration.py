@@ -744,12 +744,12 @@ root.destroy()
             value.get("pointer") == {"x": 500, "y": 430}
             and value.get("counter") == 1
             and value.get("buttons") == {"left": False, "middle": False, "right": False}
-            and left_down >= 4
-            and left_up >= 4
-            and middle_down >= 1
-            and right_down >= 1
-            and scroll_up >= 2
-            and scroll_down >= 1
+            and left_down == 4
+            and left_up == 4
+            and middle_down == 1
+            and right_down == 1
+            and scroll_up == 2
+            and scroll_down == 1
         )
 
     final_state = harness.wait_desktop_state(input_complete)
@@ -776,6 +776,15 @@ def assert_abuse_and_concurrency(harness: Harness) -> None:
     require(invalid_coordinate.status == 422 and error_code(invalid_coordinate) == "invalid_coordinate", "coordinate limit was not explicit")
     scroll = post_json(harness, "/v1/pointer/scroll", {"x": 1, "y": 1, "delta_y": 101})
     require(scroll.status == 422 and error_code(scroll) == "scroll_too_large", "scroll limit was not explicit")
+    horizontal = post_json(
+        harness,
+        "/v1/pointer/scroll",
+        {"x": 1, "y": 1, "delta_x": 1, "delta_y": 0},
+    )
+    require(
+        horizontal.status == 422 and error_code(horizontal) == "invalid_request",
+        "unsupported horizontal scrolling was not rejected explicitly",
+    )
 
     barrier = threading.Barrier(12)
 

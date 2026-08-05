@@ -36,6 +36,7 @@ class R13IntegrationContractTests(unittest.TestCase):
             "unsupported_text",
             "button_down",
             "scroll_too_large",
+            "unsupported horizontal scrolling was not rejected explicitly",
             "clipboard_unavailable",
             "clipboard_too_large",
             "command_queue_full",

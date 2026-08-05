@@ -190,6 +190,9 @@ pub struct PointerScrollRequest {
     pub x: u32,
     /// Vertical coordinate in the current display.
     pub y: u32,
+    /// Signed horizontal wheel steps. Nonzero values are rejected in v0.1.
+    #[serde(default)]
+    pub delta_x: i32,
     /// Signed vertical wheel steps.
     pub delta_y: i32,
 }
@@ -197,10 +200,10 @@ pub struct PointerScrollRequest {
 impl PointerScrollRequest {
     /// Converts a completely validated request into a worker command.
     pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {
-        validate_scroll(0, self.delta_y)?;
+        validate_scroll(self.delta_x, self.delta_y)?;
         Ok(WorkerCommand::Scroll {
             coordinate: display.validate_coordinate(self.x, self.y)?,
-            delta_x: 0,
+            delta_x: self.delta_x,
             delta_y: self.delta_y,
         })
     }
@@ -364,6 +367,29 @@ mod tests {
         assert!(matches!(
             request.into_domain(),
             Err(DesktopError::ChordTooLong { .. })
+        ));
+    }
+
+    #[test]
+    fn horizontal_scroll_is_recognized_and_rejected_explicitly() {
+        let display = DisplayInfo {
+            width: 1280,
+            height: 800,
+            depth: 24,
+            revision: 1,
+            complete: true,
+        };
+        let vertical: PointerScrollRequest =
+            serde_json::from_str(r#"{"x":1,"y":1,"delta_y":1}"#).expect("vertical request parses");
+        assert_eq!(vertical.delta_x, 0);
+        assert!(vertical.into_command(display).is_ok());
+
+        let horizontal: PointerScrollRequest =
+            serde_json::from_str(r#"{"x":1,"y":1,"delta_x":1,"delta_y":0}"#)
+                .expect("horizontal field is recognized");
+        assert!(matches!(
+            horizontal.into_command(display),
+            Err(DesktopError::Configuration(_))
         ));
     }
 
