@@ -227,7 +227,7 @@ impl EventHub {
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 value.checked_add(1)
             })
-            .unwrap_or(u64::MAX);
+            .expect("worker event sequence exhausted");
         ServerEvent {
             sequence,
             timestamp_unix_ms: unix_milliseconds(observed_at),
@@ -421,6 +421,20 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden));
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "worker event sequence exhausted")]
+    fn sequence_overflow_panics_instead_of_reusing_max_sequence() {
+        let hub = EventHub::detached(
+            4,
+            2,
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+            Metrics::default(),
+        );
+        hub.sequence.store(u64::MAX, Ordering::Release);
+        let _ = hub.publish_test(EventPayload::ProtocolError);
     }
 
     #[tokio::test]
