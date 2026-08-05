@@ -46,6 +46,12 @@ The authoritative plan remains:
 
 v0.1 is accepted on release-candidate commit `dd3b14917ad5e239573d584238ff67ded8138203`. Both permanent `CI` and `Release Gates` workflows passed on that exact SHA. See [`docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md`](docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md) for the acceptance matrix, retained artifacts, security determinations, and known limitations.
 
+## Security revalidation reminder
+
+**Before September 4, 2026**, rebuild both container images from current Debian base images, refresh the pinned base-image digests as appropriate, run the repository's Trivy-backed Release Gates, and re-review every remaining CRITICAL finding recorded in [`security/trivy-critical-vex.json`](security/trivy-critical-vex.json).
+
+Running `apt update` and `apt upgrade` inside an existing container is not sufficient. Produce new images from updated base images and package indexes, rescan those exact images, remove resolved VEX entries, and renew only the remaining determinations that are still demonstrably non-exploitable. An expired or mismatched determination must continue to fail closed. [Issue #7](https://github.com/ekkus93/vnc-remote-control-server/issues/7) tracks this maintenance work.
+
 ## Quick start
 
 ### Prerequisites
