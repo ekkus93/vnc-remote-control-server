@@ -669,11 +669,20 @@ root.destroy()
         and any(event.get("type") == "paste" for event in value.get("events", []))
     )
 
+    reset_point = controls["reset"]
     click_control("reset")
     harness.wait_desktop_state(
         lambda value: value.get("text") == ""
-        and value.get("events") == []
+        and value.get("counter") == 0
         and value.get("clipboard_revision") == 0
+        and value.get("keys_down") == []
+        and all(
+            event.get("type") == "button_up"
+            and event.get("button") == "left"
+            and event.get("x") == int(reset_point["x"])
+            and event.get("y") == int(reset_point["y"])
+            for event in value.get("events", [])
+        )
     )
     response = post_json(harness, "/v1/keyboard/text", {"text": INBOUND_CLIPBOARD})
     require(response.status == 202, "copy fixture typing failed")
