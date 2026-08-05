@@ -29,9 +29,9 @@ Every server text frame is one JSON object:
 
 Sequences are process-local. A controller restart creates a new sequence domain. Clients must not compare sequence numbers across process restarts.
 
-## Initial snapshot
+## Initial `snapshot`
 
-The first text frame after a successful upgrade is always a snapshot:
+The first text frame after a successful upgrade is always a `snapshot`:
 
 ```json
 {
