@@ -601,6 +601,28 @@ def assert_input_and_clipboard(harness: Harness, initial_etag: str) -> None:
     response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "SHIFT_LEFT", "F6"]})
     require(response.status == 202, f"chord failed: {response.status}")
 
+    expected_keys = [
+        ("key_down", "F5"),
+        ("key_up", "F5"),
+        ("key_down", "Control_L"),
+        ("key_down", "Shift_L"),
+        ("key_down", "F6"),
+        ("key_up", "F6"),
+        ("key_up", "Shift_L"),
+        ("key_up", "Control_L"),
+    ]
+    key_state = harness.wait_desktop_state(
+        lambda value: any(
+            event.get("type") == "key_up" and event.get("key") == "Control_L"
+            for event in value.get("events", [])
+        )
+    )
+    key_index = 0
+    for event in key_state["events"]:
+        if key_index < len(expected_keys) and (event.get("type"), event.get("key")) == expected_keys[key_index]:
+            key_index += 1
+    require(key_index == len(expected_keys), "key/chord event order was not observed")
+
     response = harness.request("PUT", "/v1/clipboard", {"text": OUTBOUND_CLIPBOARD})
     require(response.status == 202, f"outbound clipboard failed: {response.status}")
     clipboard_reader = r'''
@@ -629,25 +651,37 @@ root.destroy()
         clipboard_reader,
         OUTBOUND_CLIPBOARD,
     )
-    def select_all_entry() -> None:
-        # Tk on X11 maps Ctrl+A to cursor-home rather than select-all. Use
-        # the portable Home then Shift+End sequence through the public API.
-        for keys, label in ((["HOME"], "home"), (["SHIFT_LEFT", "END"], "shift-end")):
-            selection = post_json(harness, "/v1/keyboard/chord", {"keys": keys})
-            require(selection.status == 202, f"{label} selection chord failed: {selection.status}")
+    controls = harness.desktop_state().get("controls", {})
+    require(set(controls) >= {"copy", "paste", "reset"}, f"missing deterministic controls: {controls!r}")
 
-    select_all_entry()
-    response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "v"]})
-    require(response.status == 202, f"clipboard paste chord failed: {response.status}")
-    harness.wait_desktop_state(lambda value: value.get("text") == OUTBOUND_CLIPBOARD)
+    def click_control(name: str) -> None:
+        point = controls[name]
+        click = post_json(
+            harness,
+            "/v1/pointer/click",
+            {"x": int(point["x"]), "y": int(point["y"]), "button": "left"},
+        )
+        require(click.status == 202, f"{name} control click failed: {click.status}")
 
-    select_all_entry()
+    click_control("paste")
+    harness.wait_desktop_state(
+        lambda value: value.get("text") == OUTBOUND_CLIPBOARD
+        and any(event.get("type") == "paste" for event in value.get("events", []))
+    )
+
+    click_control("reset")
+    harness.wait_desktop_state(
+        lambda value: value.get("text") == ""
+        and value.get("events") == []
+        and value.get("clipboard_revision") == 0
+    )
     response = post_json(harness, "/v1/keyboard/text", {"text": INBOUND_CLIPBOARD})
     require(response.status == 202, "copy fixture typing failed")
     harness.wait_desktop_state(lambda value: value.get("text") == INBOUND_CLIPBOARD)
-    select_all_entry()
-    response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "c"]})
-    require(response.status == 202, "copy chord failed")
+    click_control("copy")
+    harness.wait_desktop_state(
+        lambda value: any(event.get("type") == "copy" for event in value.get("events", []))
+    )
 
     inbound: dict[str, Any] | None = None
     deadline = time.monotonic() + 12
@@ -702,23 +736,6 @@ root.destroy()
         )
 
     final_state = harness.wait_desktop_state(input_complete)
-    events = final_state["events"]
-    expected_keys = [
-        ("key_down", "F5"),
-        ("key_up", "F5"),
-        ("key_down", "Control_L"),
-        ("key_down", "Shift_L"),
-        ("key_down", "F6"),
-        ("key_up", "F6"),
-        ("key_up", "Shift_L"),
-        ("key_up", "Control_L"),
-    ]
-    index = 0
-    for event in events:
-        if index < len(expected_keys) and (event.get("type"), event.get("key")) == expected_keys[index]:
-            index += 1
-    require(index == len(expected_keys), "key/chord event order was not observed")
-
     def etag_changed() -> bool:
         response = harness.request("GET", "/v1/screenshot.png")
         return response.status == 200 and response.headers.get("etag") not in {None, initial_etag}

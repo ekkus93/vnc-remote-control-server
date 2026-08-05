@@ -52,10 +52,16 @@ class TestApplication:
 
         controls = tk.Frame(self.root)
         controls.pack(pady=8)
-        tk.Button(controls, text="Increment", width=14, command=self._increment).grid(row=0, column=0, padx=6)
-        tk.Button(controls, text="Copy", width=14, command=self._copy).grid(row=0, column=1, padx=6)
-        tk.Button(controls, text="Paste", width=14, command=self._paste).grid(row=0, column=2, padx=6)
-        tk.Button(controls, text="Reset", width=14, command=self._reset).grid(row=0, column=3, padx=6)
+        self.control_widgets: dict[str, tk.Button] = {}
+        for name, label, column, command in (
+            ("increment", "Increment", 0, self._increment),
+            ("copy", "Copy", 1, self._copy),
+            ("paste", "Paste", 2, self._paste),
+            ("reset", "Reset", 3, self._reset),
+        ):
+            button = tk.Button(controls, text=label, width=14, command=command)
+            button.grid(row=0, column=column, padx=6)
+            self.control_widgets[name] = button
 
         self.click_target = tk.Label(
             self.root,
@@ -69,6 +75,7 @@ class TestApplication:
             borderwidth=4,
         )
         self.click_target.pack(pady=24)
+        self.root.update_idletasks()
 
     def _bind_events(self) -> None:
         self.root.bind_all("<Motion>", self._motion, add=True)
@@ -189,11 +196,21 @@ class TestApplication:
         self.click_target.configure(bg="#336699")
         self._write_state()
 
+    def _control_centers(self) -> dict[str, dict[str, int]]:
+        return {
+            name: {
+                "x": int(widget.winfo_rootx() + widget.winfo_width() // 2),
+                "y": int(widget.winfo_rooty() + widget.winfo_height() // 2),
+            }
+            for name, widget in self.control_widgets.items()
+        }
+
     def _write_state(self) -> None:
         payload = {
             "schema_version": 1,
             "ready": True,
             "pointer": self.pointer,
+            "controls": self._control_centers(),
             "buttons": self.buttons,
             "scroll": self.scroll,
             "keys_down": self.keys_down,
