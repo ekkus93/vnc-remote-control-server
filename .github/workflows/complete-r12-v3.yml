@@ -155,10 +155,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/r12_payload_*.b64 .github/workflows/complete-r12*.yml
           git config user.name 'ekkus93'
           git config user.email '1386709+ekkus93@users.noreply.github.com'
+
+          # Validate only the generated product tree while the unchanged executor
+          # files are still present. Deleted executor files may contain historical
+          # whitespace that must not mask a fully validated product commit.
           git add -A
           git diff --cached --check
+
+          rm -f .github/r12_payload_*.b64 .github/workflows/complete-r12*.yml
+          git add -A
           git commit -m 'Complete R12 controller image Compose and persistence'
           git push origin HEAD:master
