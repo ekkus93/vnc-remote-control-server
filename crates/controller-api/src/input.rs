@@ -21,6 +21,10 @@ pub const MAX_DOUBLE_CLICK_INTERVAL_MS: u64 = 1_000;
 
 const WHEEL_UP_MASK: u8 = 1 << 3;
 const WHEEL_DOWN_MASK: u8 = 1 << 4;
+// TigerVNC feeds RFB key messages into the X input queue asynchronously.
+// A short bounded interval preserves modifier transition order without
+// allowing another worker command to interleave with the chord.
+const CHORD_EVENT_SETTLE_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Narrow native event surface required by the input controller.
 pub(crate) trait InputSink {
@@ -187,6 +191,9 @@ impl InputController {
     }
 
     /// Presses keys in order and releases newly pressed keys in reverse order.
+    ///
+    /// Each native transition is separated by a small bounded interval so
+    /// TigerVNC/X observes the same ordering that was written to the RFB stream.
     pub(crate) fn chord<S: InputSink>(
         &mut self,
         sink: &mut S,
@@ -216,6 +223,7 @@ impl InputController {
             }
             self.pressed_keys.push(*key);
             newly_pressed.push(*key);
+            thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
         }
 
         let mut first_error = None;
@@ -225,6 +233,7 @@ impl InputController {
                 Err(error) if first_error.is_none() => first_error = Some(error),
                 Err(_) => {}
             }
+            thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
         }
         first_error.map_or(Ok(()), |error| Err(error.into()))
     }
@@ -276,6 +285,7 @@ impl InputController {
             if sink.send_key(*key, false).is_ok() {
                 self.remove_pressed_key(*key);
             }
+            thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
         }
     }
 
