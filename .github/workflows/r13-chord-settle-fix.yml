@@ -24,6 +24,16 @@ jobs:
         with:
           ref: master
 
+      - name: Install native build dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libvncserver-dev \
+            pkg-config
+
       - name: Add bounded modifier-chord settling
         shell: bash
         run: |
