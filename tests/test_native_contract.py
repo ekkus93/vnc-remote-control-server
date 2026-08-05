@@ -45,6 +45,19 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("impl Drop for NativeClient", adapter)
         self.assertNotIn("pub fn raw", adapter)
 
+    def test_native_framebuffer_updates_rearm_incremental_delivery(self):
+        source = SHIM_SOURCE.read_text(encoding="utf-8")
+        callback_start = source.index("static void vrc_finished_framebuffer_update")
+        callback_end = source.index("static void vrc_store_clipboard", callback_start)
+        callback = source[callback_start:callback_end]
+        self.assertIn("SendFramebufferUpdateRequest(", callback)
+        self.assertIn("native->width", callback)
+        self.assertIn("native->height", callback)
+        self.assertIn("TRUE", callback)
+        self.assertIn("incremental framebuffer request failed", callback)
+        self.assertIn("client->complete = 0;", callback)
+        self.assertIn("client->connected = 0;", callback)
+
     def test_native_initialization_keeps_one_cleanup_owner(self):
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         self.assertNotIn("rfbInitClient(", source)

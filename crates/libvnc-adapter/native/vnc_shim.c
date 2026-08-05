@@ -139,6 +139,17 @@ static void vrc_finished_framebuffer_update(rfbClient *native) {
     }
     client->revision += 1U;
     client->complete = 1;
+    if (!SendFramebufferUpdateRequest(
+            native,
+            0,
+            0,
+            native->width,
+            native->height,
+            TRUE)) {
+        vrc_set_error(client, "incremental framebuffer request failed");
+        client->complete = 0;
+        client->connected = 0;
+    }
 }
 
 static void vrc_store_clipboard(vrc_client *client, const char *text, int text_length) {
