@@ -37,7 +37,7 @@ class ReleasePolicyContractTests(unittest.TestCase):
             "--format cyclonedx",
             "-Zsanitizer=address",
             "-Zsanitizer=thread",
-            "PROPTEST_DISABLE_FAILURE_PERSISTENCE: \"1\"",
+            "MIRIFLAGS: -Zmiri-disable-isolation",
             "miri test",
             "scripts/verify_trivy_critical_vex.py",
         )

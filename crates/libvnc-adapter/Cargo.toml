@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Narrow LibVNCClient adapter for the VNC remote control server"
 
 [dependencies]
-remote-desktop-core = { path = "../remote-desktop-core" }
+remote-desktop-core = { version = "=0.1.0", path = "../remote-desktop-core" }
 
 [lints]
 workspace = true

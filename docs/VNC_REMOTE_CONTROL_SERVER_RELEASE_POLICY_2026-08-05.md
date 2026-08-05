@@ -33,7 +33,7 @@ AddressSanitizer instruments the Rust LibVNCClient adapter and its boundary test
 
 These limitations must remain visible in the release evidence. A sanitizer command may not be changed to `continue-on-error`, wrapped in an unconditional success fallback, or replaced by a compile-only check without an explicit policy update.
 
-Miri disables only Proptest's filesystem failure-persistence feature because Miri does not support that host filesystem attachment path. Test generation, shrinking, assertions, and the complete pure-Rust core test target remain enabled.
+Miri runs the pure-Rust core test target with `-Zmiri-disable-isolation` because Proptest resolves failure-persistence paths through the host current working directory. This permits host filesystem and environment access but does not disable Miri's undefined-behavior, validity, provenance, leak, or data-race checks. The Miri target contains no native FFI or network operations. Test generation, shrinking, assertions, and the complete pure-Rust core test target remain enabled.
 
 ## Image and artifact evidence
 

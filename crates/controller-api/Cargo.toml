@@ -12,9 +12,9 @@ axum.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-libvnc-adapter = { path = "../libvnc-adapter" }
+libvnc-adapter = { version = "=0.1.0", path = "../libvnc-adapter" }
 png.workspace = true
-remote-desktop-core = { path = "../remote-desktop-core" }
+remote-desktop-core = { version = "=0.1.0", path = "../remote-desktop-core" }
 serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
