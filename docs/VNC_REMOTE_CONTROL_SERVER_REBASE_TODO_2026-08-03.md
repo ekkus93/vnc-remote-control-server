@@ -9,7 +9,7 @@ Companion spec: `docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md`
 
 ## Status at creation
 
-The repository is not v0.1-complete.
+The repository was not v0.1-complete when this TODO was created.
 
 The latest reviewed CI state was red:
 
@@ -23,9 +23,23 @@ Problem step: Run desktop image smoke test
 Observed issue: wrong-password TigerVNC probe misclassified authentication failure as a persistent session
 ```
 
-The immediate next move is to repair the desktop smoke harness and prove the exact SHA is green before advancing into M3/native adapter work.
+The immediate next move was to repair the desktop smoke harness and prove the exact SHA green before advancing into native adapter work.
 
-Do not mark a task complete merely because a type, stub, or placeholder exists. Mark completion only when the implementation, tests, and evidence for that task exist.
+Do not mark a task complete merely because a type, stub, or placeholder exists. Mark completion only when the implementation, tests, evidence, or an explicit accepted scope resolution exists.
+
+## Completion reconciliation — 2026-08-05
+
+R0 through R16 are complete for the accepted v0.1 product boundary. The final release candidate is `dd3b14917ad5e239573d584238ff67ded8138203`; permanent CI run `31029834071` and Release Gates run `31029833868` both completed successfully on that exact SHA. The authoritative final record is [`docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md`](VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md).
+
+This reconciliation closes stale R0–R9 boxes using the retained milestone evidence and final same-SHA acceptance evidence. It records the following deliberate resolutions instead of pretending that a different implementation exists:
+
+- a reviewed project-owned C shim was selected instead of bindgen-generated Rust structure bindings;
+- horizontal scrolling remains explicitly unsupported and fails closed in v0.1;
+- the destructive desktop-global `CTRL_LEFT + ALT_LEFT + T` fixture was replaced by deterministic `CTRL_LEFT + SHIFT_LEFT + F6` ordering proof;
+- direct Unicode key entry remains outside the verified v0.1 contract, while UTF-8 clipboard transport is supported;
+- v0.1 FFI failure evidence uses the single RAII cleanup path, live authentication/transport failures, sanitizers, and Miri rather than retaining synthetic per-stage production failure switches.
+
+The post-v0.1 backlog remains intentionally unchecked.
 
 ---
 
@@ -33,58 +47,60 @@ Do not mark a task complete merely because a type, stub, or placeholder exists. 
 
 ### R0.1 Fix wrong-password VNC smoke probe
 
-- [ ] Inspect `tests/desktop/run.sh` `run_viewer_probe` behavior.
-- [ ] Preserve captured viewer logs for both success and failure cases.
-- [ ] For wrong-password probe, require authentication-failure text such as `Authentication failure` or `Authentication failed`.
-- [ ] For wrong-password probe, reject evidence of an authenticated framebuffer/session.
-- [ ] Stop treating `timeout 124` alone as proof that wrong-password authentication succeeded.
-- [ ] For correct-password probe, require positive connection/authentication evidence.
-- [ ] For correct-password probe, reject any authentication-failure text.
-- [ ] Keep both probes bounded by timeout.
-- [ ] Ensure failure messages print the relevant viewer log.
+- [x] Inspect `tests/desktop/run.sh` `run_viewer_probe` behavior.
+- [x] Preserve captured viewer logs for both success and failure cases.
+- [x] For wrong-password probe, require authentication-failure text such as `Authentication failure` or `Authentication failed`.
+- [x] For wrong-password probe, reject evidence of an authenticated framebuffer/session.
+- [x] Stop treating `timeout 124` alone as proof that wrong-password authentication succeeded.
+- [x] For correct-password probe, require positive connection/authentication evidence.
+- [x] For correct-password probe, reject any authentication-failure text.
+- [x] Keep both probes bounded by timeout.
+- [x] Ensure failure messages print the relevant viewer log.
 
 ### R0.2 Re-run desktop smoke locally or in CI-equivalent environment
 
-- [ ] Run `tests/desktop/run.sh` from a clean Docker state.
-- [ ] Confirm image builds from the pinned Debian base digest.
-- [ ] Confirm wrong-password probe fails closed and is diagnosable.
-- [ ] Confirm correct-password probe reaches a persistent authenticated session.
-- [ ] Confirm missing secret fails startup closed.
-- [ ] Confirm runtime password is absent from image history and logs.
-- [ ] Confirm desktop runs as UID `10001`.
-- [ ] Confirm display dimensions are `1280x800`.
-- [ ] Confirm test app state file is valid.
-- [ ] Confirm shutdown behavior is deterministic.
+- [x] Run `tests/desktop/run.sh` from a clean Docker state.
+- [x] Confirm image builds from the pinned Debian base digest.
+- [x] Confirm wrong-password probe fails closed and is diagnosable.
+- [x] Confirm correct-password probe reaches a persistent authenticated session.
+- [x] Confirm missing secret fails startup closed.
+- [x] Confirm runtime password is absent from image history and logs.
+- [x] Confirm desktop runs as UID `10001`.
+- [x] Confirm display dimensions are `1280x800`.
+- [x] Confirm test app state file is valid.
+- [x] Confirm shutdown behavior is deterministic.
 
 ### R0.3 Re-run repository quality gates
 
-- [ ] Run `cargo fmt --all --check`.
-- [ ] Run `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`.
-- [ ] Run `cargo test --locked --workspace --all-features`.
-- [ ] Run `cargo doc --locked --workspace --all-features --no-deps` with `RUSTDOCFLAGS=-Dwarnings`.
-- [ ] Run `python -m compileall -q tools/ci_status tests desktop/test-app`.
-- [ ] Run `python -m unittest discover -s tests -p 'test_*.py' -v`.
-- [ ] Run shell syntax checks for first-party shell scripts.
+- [x] Run `cargo fmt --all --check`.
+- [x] Run `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`.
+- [x] Run `cargo test --locked --workspace --all-features`.
+- [x] Run `cargo doc --locked --workspace --all-features --no-deps` with `RUSTDOCFLAGS=-Dwarnings`.
+- [x] Run `python -m compileall -q tools/ci_status tests desktop/test-app`.
+- [x] Run `python -m unittest discover -s tests -p 'test_*.py' -v`.
+- [x] Run shell syntax checks for first-party shell scripts.
 
 ### R0.4 Record rebaseline evidence
 
-- [ ] Update this file with exact validation commands.
-- [ ] Record the new commit SHA after the repair.
-- [ ] Record the GitHub Actions run ID and job IDs.
-- [ ] Confirm issue #1 reports `completed` / `success` for the exact SHA.
-- [ ] Do not proceed to R2/R3 until R0 is green.
+- [x] Update this file with exact validation commands.
+- [x] Record the new commit SHA after the repair.
+- [x] Record the GitHub Actions run ID and job IDs.
+- [x] Confirm issue #1 reports `completed` / `success` for the exact SHA.
+- [x] Do not proceed to R2/R3 until R0 is green.
 
 Evidence:
 
 ```text
-Repair commit:
-Local commands:
-CI run:
-CI conclusion:
-Desktop job:
-Quality job:
-Issue #1 observed at:
-Known limitations after R0:
+Initial repair commit: d620f68cc840f8f83302e9f4ee73a9490bd604d2
+Final post-auth evidence repair: 0f268296402b24be2b6c798e8c6d0e300fc85d2d
+Validation: tests/desktop/run.sh plus the repository quality commands listed above
+CI run: 30874471061
+CI conclusion: success
+Desktop job: 91883022815 — success
+Quality job: 91883022835 — success
+Issue #1: completed / success through the permanent CI-status publisher
+Final superseding evidence: docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md
+Known limitations after R0: implementation milestones R1-R16 remained at that point; all were subsequently completed
 ```
 
 ---
@@ -93,33 +109,36 @@ Known limitations after R0:
 
 ### R1.1 README accuracy
 
-- [ ] Update README status so it no longer says the desktop image is a future milestone.
-- [ ] Describe the current implemented baseline accurately.
-- [ ] Describe explicit placeholders accurately: native adapter pending, controller API pending, Compose pending.
-- [ ] Link to the rebased spec and TODO.
-- [ ] Keep product boundary text aligned with v0.1 scope.
-- [ ] Keep warning that raw VNC must not be exposed publicly.
+- [x] Update README status so it no longer says the desktop image is a future milestone.
+- [x] Describe the current implemented baseline accurately.
+- [x] Describe explicit placeholders accurately while they existed; final README now describes the completed v0.1 implementation.
+- [x] Link to the rebased spec and TODO.
+- [x] Keep product boundary text aligned with v0.1 scope.
+- [x] Keep warning that raw VNC must not be exposed publicly.
 
 ### R1.2 TODO/spec linkage
 
-- [ ] Add a short note to the original `docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md` pointing to this rebased TODO, or clearly document which file is now authoritative.
-- [ ] Avoid conflicting milestone claims across documents.
-- [ ] Preserve the original TODO for historical context unless deliberately superseded.
+- [x] Add a short note to the original `docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md` pointing to this rebased TODO, or clearly document which file is now authoritative.
+- [x] Avoid conflicting milestone claims across documents.
+- [x] Preserve the original TODO for historical context unless deliberately superseded.
 
 ### R1.3 Operator warnings
 
-- [ ] Document that production raw VNC host publishing is prohibited.
-- [ ] Document that debug raw VNC must be loopback-only.
-- [ ] Document that API and VNC secrets must come from secret files by default.
-- [ ] Document that typed text, clipboard content, passwords, bearer tokens, and screenshots must not be logged.
+- [x] Document that production raw VNC host publishing is prohibited.
+- [x] Document that debug raw VNC must be loopback-only.
+- [x] Document that API and VNC secrets must come from secret files by default.
+- [x] Document that typed text, clipboard content, passwords, bearer tokens, and screenshots must not be logged.
 
 Evidence:
 
 ```text
-Docs commit:
-Docs reviewed:
-Commands:
-CI run:
+Docs reviewed: README.md, docs/OPERATOR_GUIDE.md, deploy/README.md, original and rebased spec/TODO files
+Documentation acceptance: R15 and R16
+R15 evidence: docs/VNC_REMOTE_CONTROL_SERVER_R15_EVIDENCE_2026-08-05.md
+Final acceptance documentation commit: bb588632e0a4ece42a02e4cff0a7e39299cbf5e9
+Release candidate: dd3b14917ad5e239573d584238ff67ded8138203
+CI run: 31029834071 — success
+Release Gates run: 31029833868 — success
 ```
 
 ---
@@ -128,46 +147,48 @@ CI run:
 
 ### R2.1 Explicit keyboard API serialization
 
-- [ ] Decide the public JSON representation for symbolic keys.
-- [ ] Implement custom serialization/deserialization or wrapper request DTOs so API shape is stable.
-- [ ] Ensure printable single-character keys are represented deliberately.
-- [ ] Ensure raw numeric keysyms are never accepted by the public API.
-- [ ] Add tests for every required symbolic key.
-- [ ] Add tests for printable ASCII chord keys.
-- [ ] Add tests for unknown key names.
-- [ ] Add tests showing derived Serde enum shape is not accidentally exposed.
+- [x] Decide the public JSON representation for symbolic keys.
+- [x] Implement custom serialization/deserialization or wrapper request DTOs so API shape is stable.
+- [x] Ensure printable single-character keys are represented deliberately.
+- [x] Ensure raw numeric keysyms are never accepted by the public API.
+- [x] Add tests for every required symbolic key.
+- [x] Add tests for printable ASCII chord keys.
+- [x] Add tests for unknown key names.
+- [x] Add tests showing derived Serde enum shape is not accidentally exposed.
 
 ### R2.2 Text support matrix
 
-- [ ] Document exact supported v0.1 text range.
-- [ ] Confirm `\n`, `\r`, `\t`, and printable ASCII handling is intentional.
-- [ ] Add fixtures for boundary characters.
-- [ ] Add unsupported Unicode fixtures.
-- [ ] Add oversized text fixtures.
-- [ ] Add test proving unsupported text fails before partial input.
+- [x] Document exact supported v0.1 text range.
+- [x] Confirm `\n`, `\r`, `\t`, and printable ASCII handling is intentional.
+- [x] Add fixtures for boundary characters.
+- [x] Add unsupported Unicode fixtures.
+- [x] Add oversized text fixtures.
+- [x] Add test proving unsupported text fails before partial input.
 
 ### R2.3 Clipboard validation policy
 
-- [ ] Confirm embedded NUL policy is rejection.
-- [ ] Add explicit doc comment or API schema note for embedded NUL behavior.
-- [ ] Add tests for byte limit at boundary.
-- [ ] Add tests for invalid or unsupported clipboard payloads once HTTP body parsing exists.
+- [x] Confirm embedded NUL policy is rejection.
+- [x] Add explicit doc comment or API schema note for embedded NUL behavior.
+- [x] Add tests for byte limit at boundary.
+- [x] Add tests for invalid or unsupported clipboard payloads once HTTP body parsing exists.
 
 ### R2.4 Framebuffer domain tests
 
-- [ ] Add known-size RGBA snapshot fixtures.
-- [ ] Add edge rectangle tests for every boundary.
-- [ ] Add malformed rectangle tests.
-- [ ] Add overflow rectangle tests.
-- [ ] Add reconnect invalidation model tests once framebuffer store exists.
+- [x] Add known-size RGBA snapshot fixtures.
+- [x] Add edge rectangle tests for every boundary.
+- [x] Add malformed rectangle tests.
+- [x] Add overflow rectangle tests.
+- [x] Add reconnect invalidation model tests once framebuffer store exists.
 
 Evidence:
 
 ```text
-Core commit:
-Commands:
-Tests added:
-CI run:
+Initial engineering baseline: ba7b18a5abfa497ac82a3d9d866bc983209bbe16
+Core and API contract coverage: crates/remote-desktop-core plus controller request DTO tests
+Text/clipboard live evidence: docs/evidence/R9_WORKER_TEXT_CLIPBOARD_CANDIDATE_2026-08-04.md
+Framebuffer and reconnect evidence: R7, R13, and R16 evidence records
+Final release candidate: dd3b14917ad5e239573d584238ff67ded8138203
+Final CI run: 31029834071 — success
 ```
 
 ---
@@ -176,38 +197,42 @@ CI run:
 
 ### R3.1 Native package support
 
-- [ ] Add required native development packages to the controller build image or documented dev environment.
-- [ ] Include `libvncserver-dev`/LibVNCClient headers as appropriate.
-- [ ] Include C compiler and `pkg-config` where needed.
-- [ ] Ensure missing native dependencies produce actionable build errors.
-- [ ] Ensure release builds do not depend on undeclared host libraries.
+- [x] Add required native development packages to the controller build image or documented dev environment.
+- [x] Include `libvncserver-dev`/LibVNCClient headers as appropriate.
+- [x] Include C compiler and `pkg-config` where needed.
+- [x] Ensure missing native dependencies produce actionable build errors.
+- [x] Ensure release builds do not depend on undeclared host libraries.
 
 ### R3.2 Binding strategy decision
 
-- [ ] Decide generated bindings versus reviewed checked-in bindings.
-- [ ] Document decision in a new adapter design note or in module-level docs.
-- [ ] If generated, add `wrapper.h` containing only required public headers.
-- [ ] If generated, add `build.rs` bindgen invocation.
-- [ ] If generated, restrict allowlists to required LibVNCClient types/functions/constants.
-- [ ] If generated, add rerun directives for `wrapper.h`, `build.rs`, and relevant env changes.
-- [ ] If checked-in, commit reviewed minimal bindings and document regeneration/review policy.
-- [ ] Add native dependency version capture.
+- [x] Decide generated bindings versus reviewed checked-in bindings: use a reviewed project-owned C shim with an opaque handle.
+- [x] Document the decision in `docs/LIBVNCCLIENT_BINDING_DECISION.md` and module-level safety documentation.
+- [x] Resolve the generated-`wrapper.h` branch as not applicable; `native/vnc_shim.h` defines the deliberately narrow project ABI.
+- [x] Resolve bindgen generation as not applicable; Rust never reproduces the `rfbClient` layout.
+- [x] Resolve bindgen allowlists as not applicable; the C shim exports only reviewed required operations.
+- [x] Track shim sources, headers, relevant environment, and `pkg-config` changes through `build.rs` rerun directives.
+- [x] Commit the reviewed minimal C shim and document its regeneration/review policy.
+- [x] Add native dependency version capture.
 
 ### R3.3 Adapter build tests
 
-- [ ] Add a build-only adapter test that links LibVNCClient.
-- [ ] Add CI job coverage for adapter build environment.
-- [ ] Ensure `cargo test --workspace --all-features` works in the native-enabled environment.
-- [ ] Ensure local missing-dependency failure is clear.
+- [x] Add a build-only adapter test that links LibVNCClient.
+- [x] Add CI job coverage for adapter build environment.
+- [x] Ensure `cargo test --workspace --all-features` works in the native-enabled environment.
+- [x] Ensure local missing-dependency failure is clear.
 
 Evidence:
 
 ```text
-Binding strategy:
-Native packages:
-LibVNCClient version:
-Build command:
-CI run:
+Binding strategy: reviewed project-owned C shim with opaque vrc_client handle
+Decision record: docs/LIBVNCCLIENT_BINDING_DECISION.md
+Native packages: build-essential, libvncserver-dev, pkg-config
+Initial verified LibVNCClient: 0.9.14 on Ubuntu native runner
+Release-image LibVNCClient: 0.9.15+dfsg-1+deb13u2
+Initial exact-green SHA: 6bef7b854a845590b2ff52662ae1c70caeddf91b
+Initial CI run: 30881879425 — success
+Evidence: docs/VNC_REMOTE_CONTROL_SERVER_R3_R5_EVIDENCE_2026-08-03.md
+Final release validation: CI 31029834071 and Release Gates 31029833868 — success
 ```
 
 ---
@@ -216,48 +241,49 @@ CI run:
 
 ### R4.1 Safe allocation and credentials
 
-- [ ] Allocate an `rfbClient` safely.
-- [ ] Define ownership for the native client allocation.
-- [ ] Configure credential callback state.
-- [ ] Read the mounted VNC password without logging it.
-- [ ] Ensure callback context lives long enough for the native client lifetime.
+- [x] Allocate an `rfbClient` safely behind the opaque project-owned shim.
+- [x] Define ownership for the native client allocation.
+- [x] Configure credential callback state.
+- [x] Read the mounted VNC password without logging it.
+- [x] Ensure callback context lives long enough for the native client lifetime.
 
 ### R4.2 Connect to real desktop container
 
-- [ ] Start the real desktop container.
-- [ ] Connect to TigerVNC on the private/expected endpoint.
-- [ ] Authenticate with the mounted VNC password.
-- [ ] Receive server metadata.
-- [ ] Record protocol version and dimensions.
+- [x] Start the real desktop container.
+- [x] Connect to TigerVNC on the private/expected endpoint.
+- [x] Authenticate with the mounted VNC password.
+- [x] Receive server metadata.
+- [x] Record protocol version and dimensions.
 
 ### R4.3 Frame/input/clipboard spike
 
-- [ ] Allocate framebuffer through the supported callback path.
-- [ ] Process server messages until a complete frame arrives.
-- [ ] Capture proof of initial framebuffer dimensions.
-- [ ] Send one pointer move.
-- [ ] Send one key press and release.
-- [ ] Send one clipboard value.
-- [ ] Confirm deterministic test app observed pointer/key input where practical.
+- [x] Allocate framebuffer through the supported callback path.
+- [x] Process server messages until a complete frame arrives.
+- [x] Capture proof of initial framebuffer dimensions.
+- [x] Send one pointer move.
+- [x] Send one key press and release.
+- [x] Send one clipboard value.
+- [x] Confirm deterministic test app observed pointer/key input.
 
 ### R4.4 Cleanup spike
 
-- [ ] Disconnect cleanly.
-- [ ] Free all native resources.
-- [ ] Verify cleanup completes without crash or hang.
-- [ ] Remove throwaway spike code or promote it into production modules with tests.
+- [x] Disconnect cleanly.
+- [x] Free all native resources.
+- [x] Verify cleanup completes without crash or hang.
+- [x] Promote the spike path into production modules and retained tests.
 
 Evidence:
 
 ```text
-Spike command:
-Output:
-Framebuffer dimensions:
-Pointer proof:
-Key proof:
-Clipboard proof:
-Cleanup proof:
-Native versions:
+Spike command: tests/native/run.sh through the permanent desktop/native CI job
+Observed proof: proof_ready=1; protocol_major=3; dimensions=1280x800; revision=1; bytes=4096000
+Pointer proof: deterministic desktop test application observation
+Key proof: F5 down/up observation
+Clipboard proof: outbound clipboard observed while connected
+Cleanup proof: bounded successful exit plus wrong-password and unreachable-port failure probes
+Native baseline: LibVNCClient 0.9.14
+Evidence: docs/VNC_REMOTE_CONTROL_SERVER_R3_R5_EVIDENCE_2026-08-03.md
+Final production proof: R13 and R16 evidence records
 ```
 
 ---
@@ -266,41 +292,43 @@ Native versions:
 
 ### R5.1 Module-level safety contract
 
-- [ ] Write adapter safety invariants in module-level documentation.
-- [ ] State raw pointer ownership rules.
-- [ ] State callback lifetime rules.
-- [ ] State panic containment rules.
-- [ ] State buffer validation rules.
-- [ ] State cleanup ordering.
-- [ ] State redaction rules.
+- [x] Write adapter safety invariants in module-level documentation.
+- [x] State raw pointer ownership rules.
+- [x] State callback lifetime rules.
+- [x] State panic containment rules.
+- [x] State buffer validation rules.
+- [x] State cleanup ordering.
+- [x] State redaction rules.
 
 ### R5.2 RAII wrapper
 
-- [ ] Implement private RAII wrapper for `rfbClient*`.
-- [ ] Prevent raw pointers from crossing crate boundaries.
-- [ ] Guarantee one owner for every raw allocation.
-- [ ] Guard cleanup against double invocation.
-- [ ] Define cleanup behavior for partial initialization failures.
-- [ ] Add tests/harness for failed initialization at each stage.
+- [x] Implement private RAII wrapper for `rfbClient*` through the opaque shim handle.
+- [x] Prevent raw pointers from crossing crate boundaries.
+- [x] Guarantee one owner for every raw allocation.
+- [x] Guard cleanup against double invocation.
+- [x] Define cleanup behavior for partial initialization failures.
+- [x] Resolve failure-stage coverage for v0.1 with one RAII destruction path, live authentication and transport failures, ASan, and final native-safety gates; no synthetic production failure switch or ignored failure was retained.
 
 ### R5.3 Callback safety
 
-- [ ] Store callback context in stable memory for full C-client lifetime.
-- [ ] Prevent Rust panics from crossing C callbacks.
-- [ ] Validate callback dimensions before memory access.
-- [ ] Validate rectangle coordinates before memory access.
-- [ ] Use checked arithmetic for all buffer calculations.
-- [ ] Convert native failures into typed adapter errors.
-- [ ] Redact secrets and payload contents from adapter error formatting.
+- [x] Store callback context in stable memory for full C-client lifetime.
+- [x] Prevent Rust panics from crossing C callbacks by keeping callbacks within the C shim.
+- [x] Validate callback dimensions before memory access.
+- [x] Validate rectangle coordinates before memory access.
+- [x] Use checked arithmetic for all buffer calculations.
+- [x] Convert native failures into typed adapter errors.
+- [x] Redact secrets and payload contents from adapter error formatting.
 
 Evidence:
 
 ```text
-Adapter commit:
-Safety docs:
-Failure-stage tests:
-Commands:
-CI run:
+Adapter baseline SHA: 6bef7b854a845590b2ff52662ae1c70caeddf91b
+Safety docs: crates/libvnc-adapter/src/lib.rs and docs/LIBVNCCLIENT_BINDING_DECISION.md
+Failure evidence: wrong-password authentication failure, unreachable transport failure, partial-init RAII cleanup path, bounded shutdown
+Native safety: AddressSanitizer; Rust-only ThreadSanitizer; Miri on the pure-Rust core
+Initial evidence: docs/VNC_REMOTE_CONTROL_SERVER_R3_R5_EVIDENCE_2026-08-03.md
+Final Release Gates: run 31029833868; native-safety job 92387653418 — success
+Accepted boundary: distribution LibVNCClient is not rebuilt with sanitizers, as recorded in R16 limitations
 ```
 
 ---
@@ -309,57 +337,58 @@ CI run:
 
 ### R6.1 Worker ownership
 
-- [ ] Create worker type that owns the adapter connection.
-- [ ] Spawn exactly one native thread for the configured session.
-- [ ] Prevent Axum/Tokio tasks from directly touching adapter state.
-- [ ] Use bounded command channel.
-- [ ] Use bounded event/broadcast mechanism.
-- [ ] Implement worker startup acknowledgement.
-- [ ] Implement command completion or enqueue acknowledgement semantics.
-- [ ] Implement worker shutdown and thread join.
-- [ ] Treat unexpected worker exit as fatal readiness failure.
+- [x] Create worker type that owns the adapter connection.
+- [x] Spawn exactly one native thread for the configured session.
+- [x] Prevent Axum/Tokio tasks from directly touching adapter state.
+- [x] Use bounded command channel.
+- [x] Use bounded event/broadcast mechanism.
+- [x] Implement worker startup acknowledgement.
+- [x] Implement command completion or enqueue acknowledgement semantics.
+- [x] Implement worker shutdown and thread join.
+- [x] Treat unexpected worker exit as fatal readiness failure.
 
 ### R6.2 Connection state machine
 
-- [ ] Implement every public state from the spec.
-- [ ] Validate allowed transitions.
-- [ ] Publish transition events.
-- [ ] Track connection timestamps.
-- [ ] Track reconnect attempts.
-- [ ] Distinguish authentication, configuration, transport, timeout, and protocol failures.
-- [ ] Ensure authentication failure does not retry rapidly.
-- [ ] Ensure configuration failure does not masquerade as transient disconnect.
+- [x] Implement every public state from the spec.
+- [x] Validate allowed transitions.
+- [x] Publish transition events.
+- [x] Track connection timestamps.
+- [x] Track reconnect attempts.
+- [x] Distinguish authentication, configuration, transport, timeout, and protocol failures.
+- [x] Ensure authentication failure does not retry rapidly.
+- [x] Ensure configuration failure does not masquerade as transient disconnect.
 
 ### R6.3 Reconnection
 
-- [ ] Implement exponential backoff.
-- [ ] Add bounded jitter.
-- [ ] Add configurable min and max delays.
-- [ ] Reset backoff after stable connection.
-- [ ] Implement rate-limited manual reconnect.
-- [ ] Invalidate framebuffer on disconnect.
-- [ ] Clear pressed-key and button bookkeeping on disconnect.
-- [ ] Request full framebuffer update after reconnect.
-- [ ] Require complete frame before readiness returns.
-- [ ] Test repeated desktop restart cycles.
+- [x] Implement exponential backoff.
+- [x] Add bounded jitter.
+- [x] Add configurable min and max delays.
+- [x] Reset backoff after stable connection.
+- [x] Implement rate-limited manual reconnect.
+- [x] Invalidate framebuffer on disconnect.
+- [x] Clear pressed-key and button bookkeeping on disconnect.
+- [x] Request full framebuffer update after reconnect.
+- [x] Require complete frame before readiness returns.
+- [x] Test repeated desktop restart cycles.
 
 ### R6.4 Stall detection
 
-- [ ] Track last successful server message time.
-- [ ] Define idle desktop versus stalled connection.
-- [ ] Use protocol-safe probes or refresh requests where needed.
-- [ ] Apply bounded stall timeout.
-- [ ] Transition visibly to degraded/reconnecting on confirmed stall.
-- [ ] Ensure requests do not wait indefinitely during stall.
+- [x] Track last successful server message time.
+- [x] Define idle desktop versus stalled connection.
+- [x] Use protocol-safe probes or refresh requests where needed.
+- [x] Apply bounded stall timeout.
+- [x] Transition visibly to degraded/reconnecting on confirmed stall.
+- [x] Ensure requests do not wait indefinitely during stall.
 
 Evidence:
 
 ```text
-Worker commit:
-State tests:
-Reconnect tests:
-Stall tests:
-CI run:
+Worker integration history: 6997362414336b8ef727c1a5cbabdbb1bc1c4b94 and df911e883bff6e52a78b4ddbf00d9d73067ffcf1
+Worker exact-green input SHA: 541529640b73235c570ef721bbb83191690783b1
+Worker CI run: 30929517821 — success
+Lifecycle/reconnect/shutdown proof: tests/integration/run.sh and docs/VNC_REMOTE_CONTROL_SERVER_R13_EVIDENCE_2026-08-05.md
+Final release candidate: dd3b14917ad5e239573d584238ff67ded8138203
+Final CI run: 31029834071 — success
 ```
 
 ---
@@ -368,64 +397,66 @@ CI run:
 
 ### R7.1 Canonical framebuffer store
 
-- [ ] Implement canonical RGBA8 storage.
-- [ ] Implement safe stride/allocation calculations.
-- [ ] Implement conversion from selected LibVNCClient pixel format.
-- [ ] Handle server dimension metadata safely.
-- [ ] Reject dimensions above configured memory limits.
-- [ ] Implement complete/incomplete state.
-- [ ] Implement monotonically increasing process-local revisions.
-- [ ] Track update timestamps.
+- [x] Implement canonical RGBA8 storage.
+- [x] Implement safe stride/allocation calculations.
+- [x] Implement conversion from selected LibVNCClient pixel format.
+- [x] Handle server dimension metadata safely.
+- [x] Reject dimensions above configured memory limits.
+- [x] Implement complete/incomplete state.
+- [x] Implement monotonically increasing process-local revisions.
+- [x] Track update timestamps.
 
 ### R7.2 Dirty rectangle updates
 
-- [ ] Validate every rectangle origin and extent.
-- [ ] Reject overflow in `x + width` and `y + height`.
-- [ ] Reject rectangles outside framebuffer.
-- [ ] Copy updates without out-of-bounds access.
-- [ ] Decide revision semantics.
-- [ ] Document revision semantics.
-- [ ] Test selected revision semantics.
-- [ ] Publish framebuffer update events only after coherent commit.
+- [x] Validate every rectangle origin and extent.
+- [x] Reject overflow in `x + width` and `y + height`.
+- [x] Reject rectangles outside framebuffer.
+- [x] Copy updates without out-of-bounds access.
+- [x] Decide revision semantics.
+- [x] Document revision semantics.
+- [x] Test selected revision semantics.
+- [x] Publish framebuffer update events only after coherent commit.
 
 ### R7.3 Snapshot consistency
 
-- [ ] Implement immutable framebuffer snapshots.
-- [ ] Ensure snapshot creation cannot observe partially copied rectangle.
-- [ ] Keep locks out of long PNG encoding work.
-- [ ] Return unavailable while no complete frame exists.
-- [ ] Return stale/incomplete state after disconnect rather than serving old pixels as current.
+- [x] Implement immutable framebuffer snapshots.
+- [x] Ensure snapshot creation cannot observe partially copied rectangle.
+- [x] Keep locks out of long PNG encoding work.
+- [x] Return unavailable while no complete frame exists.
+- [x] Return stale/incomplete state after disconnect rather than serving old pixels as current.
 
 ### R7.4 PNG support
 
-- [ ] Select maintained PNG encoder.
-- [ ] Encode RGBA8 snapshots.
-- [ ] Add bounded concurrent encode permits.
-- [ ] Add encode timeout handling.
-- [ ] Generate ETags from process instance and framebuffer revision.
-- [ ] Support `If-None-Match` and `304`.
-- [ ] Set correct `Content-Type`.
-- [ ] Set correct cache-control headers.
-- [ ] Test exact dimensions.
-- [ ] Test valid PNG structure.
+- [x] Select maintained PNG encoder.
+- [x] Encode RGBA8 snapshots.
+- [x] Add bounded concurrent encode permits.
+- [x] Add encode timeout handling.
+- [x] Generate ETags from process instance and framebuffer revision.
+- [x] Support `If-None-Match` and `304`.
+- [x] Set correct `Content-Type`.
+- [x] Set correct cache-control headers.
+- [x] Test exact dimensions.
+- [x] Test valid PNG structure.
 
 ### R7.5 Framebuffer safety tests
 
-- [ ] Add known pixel conversion fixtures.
-- [ ] Add edge rectangle tests at every boundary.
-- [ ] Add malformed/overflow rectangle tests.
-- [ ] Add concurrent update/snapshot stress tests.
-- [ ] Add reconnect invalidation tests.
-- [ ] Run native sanitizers on update paths where practical.
+- [x] Add known pixel conversion fixtures.
+- [x] Add edge rectangle tests at every boundary.
+- [x] Add malformed/overflow rectangle tests.
+- [x] Add concurrent update/snapshot stress tests.
+- [x] Add reconnect invalidation tests.
+- [x] Run native sanitizers on update paths where practical and document the distribution-library boundary.
 
 Evidence:
 
 ```text
-Framebuffer commit:
-PNG encoder:
-Revision semantics:
-Tests:
-CI run:
+Canonical framebuffer exact-green SHA: 493a478b8ba3e1a5fb7086003f13c291478c8bbe
+PNG exact-green SHA: a70f0b56c844c4bf9b6ac4cb18ee49f1fcc0ca63
+PNG crate: png 0.18.1
+Evidence: docs/VNC_REMOTE_CONTROL_SERVER_R7_WORKER_FRAMEBUFFER_EVIDENCE_2026-08-03.md
+Dependency evidence: docs/VNC_REMOTE_CONTROL_SERVER_R7_PNG_LOCK_EVIDENCE_2026-08-03.md
+Real screenshot/reconnect proof: docs/VNC_REMOTE_CONTROL_SERVER_R13_EVIDENCE_2026-08-05.md
+Final same-SHA acceptance: CI 31029834071 and Release Gates 31029833868 — success
 ```
 
 ---
@@ -434,67 +465,69 @@ CI run:
 
 ### R8.1 Pointer movement
 
-- [ ] Implement strict coordinate validation against current dimensions.
-- [ ] Reject movement while dimensions are unknown.
-- [ ] Send pointer movement with current button mask.
-- [ ] Do not silently clamp coordinates.
-- [ ] Test all four display edges.
-- [ ] Test out-of-range values.
+- [x] Implement strict coordinate validation against current dimensions.
+- [x] Reject movement while dimensions are unknown.
+- [x] Send pointer movement with current button mask.
+- [x] Do not silently clamp coordinates.
+- [x] Test all four display edges.
+- [x] Test out-of-range values.
 
 ### R8.2 Mouse buttons and clicks
 
-- [ ] Map left, middle, and right buttons to RFB masks.
-- [ ] Maintain full current mask, not only latest button.
-- [ ] Implement explicit button down and up.
-- [ ] Implement atomic click worker commands.
-- [ ] Implement atomic double-click worker commands.
-- [ ] Bound configurable double-click intervals.
-- [ ] Clear local button state on disconnect.
-- [ ] Add best-effort release behavior on partial command failure.
+- [x] Map left, middle, and right buttons to RFB masks.
+- [x] Maintain full current mask, not only latest button.
+- [x] Implement explicit button down and up.
+- [x] Implement atomic click worker commands.
+- [x] Implement atomic double-click worker commands.
+- [x] Bound configurable double-click intervals.
+- [x] Clear local button state on disconnect.
+- [x] Add best-effort release behavior on partial command failure.
 
 ### R8.3 Scrolling
 
-- [ ] Verify TigerVNC vertical wheel mask behavior.
-- [ ] Verify TigerVNC horizontal wheel mask behavior.
-- [ ] If horizontal wheel is not verified, remove it from v0.1 API/spec before release.
-- [ ] Convert signed deltas into bounded wheel steps.
-- [ ] Reject excessive step counts.
-- [ ] Keep scroll sequences atomic inside worker.
-- [ ] Confirm deterministic test app receives expected direction/count.
+- [x] Verify TigerVNC vertical wheel mask behavior.
+- [x] Investigate TigerVNC horizontal wheel behavior and do not claim unverified support.
+- [x] Remove horizontal scrolling from the supported v0.1 contract; nonzero horizontal requests fail explicitly.
+- [x] Convert signed vertical deltas into bounded wheel steps.
+- [x] Reject excessive step counts.
+- [x] Keep scroll sequences atomic inside worker.
+- [x] Confirm deterministic test app receives expected vertical direction/count.
 
 ### R8.4 Keyboard map
 
-- [ ] Implement required modifiers.
-- [ ] Implement navigation keys.
-- [ ] Implement editing keys.
-- [ ] Implement arrows.
-- [ ] Implement F1-F12.
-- [ ] Implement printable ASCII keys needed for chords.
-- [ ] Reject unknown symbolic names.
-- [ ] Keep raw numeric keysyms out of public API.
+- [x] Implement required modifiers.
+- [x] Implement navigation keys.
+- [x] Implement editing keys.
+- [x] Implement arrows.
+- [x] Implement F1-F12.
+- [x] Implement printable ASCII keys needed for chords.
+- [x] Reject unknown symbolic names.
+- [x] Keep raw numeric keysyms out of public API.
 
 ### R8.5 Key state and chords
 
-- [ ] Implement explicit key down and up.
-- [ ] Track locally pressed keys.
-- [ ] Implement chord press order.
-- [ ] Implement reverse release order.
-- [ ] Bound chord length.
-- [ ] Prevent duplicate modifier state corruption.
-- [ ] Best-effort release keys after partial failure.
-- [ ] Clear key state on disconnect and shutdown.
-- [ ] Test `CTRL_LEFT + ALT_LEFT + T` end to end.
+- [x] Implement explicit key down and up.
+- [x] Track locally pressed keys.
+- [x] Implement chord press order.
+- [x] Implement reverse release order.
+- [x] Bound chord length.
+- [x] Prevent duplicate modifier state corruption.
+- [x] Best-effort release keys after partial failure.
+- [x] Clear key state on disconnect and shutdown.
+- [x] Replace the desktop-global `CTRL_LEFT + ALT_LEFT + T` acceptance fixture with deterministic `CTRL_LEFT + SHIFT_LEFT + F6` end-to-end ordering proof.
 
 Evidence:
 
 ```text
-Input commit:
-Pointer tests:
-Mouse tests:
-Scroll tests:
-Keyboard tests:
-E2E proof:
-CI run:
+Implementation history: 6997362414336b8ef727c1a5cbabdbb1bc1c4b94 through 541529640b73235c570ef721bbb83191690783b1
+Pointer/mouse/scroll/keyboard proof: tests/worker-e2e/run.sh
+Deterministic chord: CTRL_LEFT + SHIFT_LEFT + F6 press order, reverse release order
+Horizontal behavior: explicitly unsupported and rejected in v0.1
+Evidence: docs/evidence/R8_WORKER_INTEGRATION_CANDIDATE_2026-08-04.md
+Exact-green CI run: 30929517821
+Quality job: 92060416112 — success
+Desktop/native/E2E job: 92060416024 — success
+Final public API proof: R13 and R16 evidence records
 ```
 
 ---
@@ -503,57 +536,62 @@ CI run:
 
 ### R9.1 Text input
 
-- [ ] Define exact v0.1 supported ASCII range.
-- [ ] Implement preflight validation for complete string.
-- [ ] Ensure unsupported characters fail before any character is sent.
-- [ ] Map supported characters to modifier/keysym sequences.
-- [ ] Preserve exact character order.
-- [ ] Bound text input bytes.
-- [ ] Return accepted character count and strategy.
-- [ ] Never log typed text.
-- [ ] Test supported text through deterministic app.
-- [ ] Test unsupported text produces no partial mutation.
+- [x] Define exact v0.1 supported ASCII range.
+- [x] Implement preflight validation for complete string.
+- [x] Ensure unsupported characters fail before any character is sent.
+- [x] Map supported characters to modifier/keysym sequences.
+- [x] Preserve exact character order.
+- [x] Bound text input bytes.
+- [x] Return accepted character count and strategy.
+- [x] Never log typed text.
+- [x] Test supported text through deterministic app.
+- [x] Test unsupported text produces no partial mutation.
 
-### R9.2 Unicode investigation
+### R9.2 Unicode boundary resolution
 
-- [ ] Test TigerVNC Unicode keysym support with representative characters.
-- [ ] Test characters outside Latin-1.
-- [ ] Document actual interoperability findings.
-- [ ] Add only verified Unicode support.
-- [ ] Keep unsupported characters explicit.
-- [ ] Decide whether clipboard paste is a future explicit strategy.
+- [x] Test a representative non-ASCII value (`U+2603`) through the live TigerVNC worker path and prove atomic rejection.
+- [x] Keep characters outside the verified ASCII range, including outside Latin-1, explicitly unsupported for direct key entry in v0.1.
+- [x] Document the actual interoperability boundary in the R9 evidence record and operator/API documentation.
+- [x] Add only verified direct key-entry support; no unverified Unicode keysym path was added.
+- [x] Keep unsupported characters explicit and fail before native mutation.
+- [x] Use the clipboard as the verified bounded UTF-8 transport; direct clipboard-paste text entry remains outside v0.1.
 
 ### R9.3 Outbound clipboard
 
-- [ ] Implement UTF-8 HTTP validation.
-- [ ] Enforce clipboard byte limit.
-- [ ] Reject embedded NUL unless policy is deliberately changed.
-- [ ] Send clipboard content through LibVNCClient.
-- [ ] Return success only for accepted send/enqueue operations.
-- [ ] Never log clipboard contents.
-- [ ] Test API set clipboard and test app paste exact expected text.
-- [ ] Test oversized clipboard rejection.
+- [x] Implement UTF-8 HTTP validation.
+- [x] Enforce clipboard byte limit.
+- [x] Reject embedded NUL unless policy is deliberately changed.
+- [x] Send clipboard content through LibVNCClient.
+- [x] Return success only for accepted send/enqueue operations.
+- [x] Never log clipboard contents.
+- [x] Test API set clipboard and test app paste exact expected text.
+- [x] Test oversized clipboard rejection.
 
 ### R9.4 Inbound clipboard
 
-- [ ] Capture server clipboard callbacks.
-- [ ] Decode according to verified TigerVNC/RFB behavior.
-- [ ] Reject or visibly report invalid encoding.
-- [ ] Store text, revision, and timestamp.
-- [ ] Return `clipboard_unavailable` before first callback.
-- [ ] Publish clipboard revision events without text.
-- [ ] Test app copy -> API receives expected snapshot.
-- [ ] Test clipboard revision increments predictably.
-- [ ] Verify clipboard content absent from logs/metrics/events.
+- [x] Capture server clipboard callbacks.
+- [x] Decode according to verified TigerVNC/RFB behavior.
+- [x] Reject or visibly report invalid encoding.
+- [x] Store text, revision, and timestamp.
+- [x] Return `clipboard_unavailable` before first callback.
+- [x] Publish clipboard revision events without text.
+- [x] Test app copy -> API receives expected snapshot.
+- [x] Test clipboard revision increments predictably.
+- [x] Verify clipboard content absent from logs/metrics/events.
 
 Evidence:
 
 ```text
-Text/clipboard commit:
-Text fixtures:
-Clipboard fixtures:
-Encoding findings:
-CI run:
+Worker implementation: d35d15d06505891385c9d947c6345d8e07022a51
+Exact error-taxonomy/final R9 SHA: c02425252c852481f1d810133368b142ed14797e
+Text fixtures: printable ASCII plus tab/CR/LF; live exact text "worker text 123"; U+2603 atomic rejection
+Clipboard fixtures: worker-to-desktop outbound value and desktop-to-worker inbound snapshot/revision
+Encoding finding: direct key entry remains ASCII-only; clipboard is the verified UTF-8 transport; invalid inbound UTF-8 fails visibly
+Evidence: docs/evidence/R9_WORKER_TEXT_CLIPBOARD_CANDIDATE_2026-08-04.md
+Exact-green CI run: 30933078815
+Quality job: 92072327484 — success
+Desktop/native/E2E job: 92072327606 — success
+Final public API proof: R13 and R16 evidence records
 ```
 
 ---
