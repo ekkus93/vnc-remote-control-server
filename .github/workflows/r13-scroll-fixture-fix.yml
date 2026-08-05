@@ -27,7 +27,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends build-essential libvncserver-dev pkg-config
 
-      - name: Add explicit zero horizontal delta to vertical fixtures
+      - name: Reject horizontal scrolling before queueing and repair fixtures
         shell: bash
         run: |
           set -euo pipefail
@@ -36,34 +36,54 @@ jobs:
 
           path = Path('crates/controller-api/src/api_contract.rs')
           text = path.read_text(encoding='utf-8')
-          old = (
+
+          old_command = (
+              '    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {\n'
+              '        validate_scroll(self.delta_x, self.delta_y)?;\n'
+              '        Ok(WorkerCommand::Scroll {\n'
+          )
+          new_command = (
+              '    pub fn into_command(self, display: DisplayInfo) -> Result<WorkerCommand, DesktopError> {\n'
+              '        if self.delta_x != 0 {\n'
+              '            return Err(DesktopError::Configuration(\n'
+              '                "horizontal scrolling is not supported by v0.1".to_owned(),\n'
+              '            ));\n'
+              '        }\n'
+              '        validate_scroll(self.delta_x, self.delta_y)?;\n'
+              '        Ok(WorkerCommand::Scroll {\n'
+          )
+          if text.count(old_command) != 1:
+              raise SystemExit(f'expected one public scroll conversion block, found {text.count(old_command)}')
+          text = text.replace(old_command, new_command)
+
+          old_fixture = (
               '            PointerScrollRequest {\n'
               '                x: 0,\n'
               '                y: 0,\n'
               '                delta_y:'
           )
-          new = (
+          new_fixture = (
               '            PointerScrollRequest {\n'
               '                x: 0,\n'
               '                y: 0,\n'
               '                delta_x: 0,\n'
               '                delta_y:'
           )
-          if text.count(old) != 2:
-              raise SystemExit(f'expected two vertical scroll fixtures, found {text.count(old)}')
-          path.write_text(text.replace(old, new), encoding='utf-8')
+          if text.count(old_fixture) != 2:
+              raise SystemExit(f'expected two vertical scroll fixtures, found {text.count(old_fixture)}')
+          path.write_text(text.replace(old_fixture, new_fixture), encoding='utf-8')
           PY
           cargo fmt --all --check
           RUSTFLAGS=-Dwarnings cargo clippy --locked -p controller-api --all-targets --all-features -- -D warnings
           RUSTFLAGS=-Dwarnings cargo test --locked -p controller-api --all-features
           git diff --check
 
-      - name: Commit fixture repair directly to master
+      - name: Commit validated preflight repair directly to master
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'ekkus93'
           git config user.email '1386709+ekkus93@users.noreply.github.com'
           git add crates/controller-api/src/api_contract.rs
-          git commit -m 'test: initialize horizontal scroll delta explicitly'
+          git commit -m 'fix: reject horizontal scroll before queueing'
           git push origin HEAD:master
