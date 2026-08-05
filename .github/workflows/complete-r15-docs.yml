@@ -1,4 +1,5 @@
 name: Complete R15 Documentation
+# Retry after the WebSocket snapshot event label was made explicit.
 
 on:
   push:
