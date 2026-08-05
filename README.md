@@ -4,67 +4,120 @@
 
 VNC Remote Control Server is a containerized Rust service that observes and controls one isolated Debian graphical desktop through the VNC Remote Framebuffer protocol.
 
-The v0.1 architecture uses:
+## Product boundary
 
-- a Debian 13 desktop container running XFCE and TigerVNC `Xvnc`;
-- a separate Rust controller using a narrow LibVNCClient adapter;
-- an authenticated HTTP and WebSocket API for screenshots, input, clipboard state, connection state, and revision events;
-- a private container network that never publishes raw VNC in production.
+v0.1 provides pixel observation and remote-desktop input primitives for exactly one project-owned Debian desktop. It exposes authenticated HTTP and WebSocket APIs for connection state, display metadata, PNG screenshots, pointer input, keyboard input, clipboard state, reconnect requests, metrics, and revision events.
 
-## Status
+OCR, Playwright, accessibility-tree automation, AI planning, multiple sessions, arbitrary external VNC servers, and a browser viewer are outside the v0.1 scope.
 
-Implementation is in progress on `master` under the authoritative rebased plan:
+## Architecture
+
+```mermaid
+flowchart LR
+    Client[Trusted API client] -->|HTTPS / WSS through trusted proxy| Proxy[Reverse proxy / TLS boundary]
+    Proxy -->|HTTP / WebSocket on trusted ingress| Controller[Rust controller container]
+    Controller -->|RFB + VncAuth on internal Docker network| Desktop[Debian XFCE + TigerVNC container]
+    Controller --> Framebuffer[Bounded RGBA framebuffer + PNG encoder]
+    Controller --> Worker[Single native worker thread]
+    Worker --> Adapter[Reviewed LibVNCClient adapter]
+    Desktop -. optional named volume .-> Home[(desktop-home)]
+```
+
+Production Compose keeps raw VNC on an internal-only network. Only the controller joins the API-ingress network. The controller API binds to `127.0.0.1:8080` on the host by default.
+
+## Current status
+
+The implementation on `master` includes:
+
+- a warning-denied Rust workspace with a reviewed LibVNCClient adapter;
+- a single-owner native worker with bounded queues, reconnect, stall detection, and graceful shutdown;
+- coherent framebuffer snapshots, PNG encoding, ETags, conditional requests, and revision events;
+- complete v0.1 pointer, keyboard, text, and clipboard control;
+- authenticated HTTP and WebSocket APIs with bounded overload behavior and payload-free observability;
+- non-root desktop and controller images;
+- production Compose with file-mounted secrets, internal-only raw VNC, a read-only controller filesystem, bounded temporary storage, and optional desktop-home persistence;
+- real TigerVNC, HTTP/WebSocket, Compose, reconnect, resource-bound, and shutdown E2E validation.
+
+The authoritative plan remains:
 
 - [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md)
 - [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md)
 
-Implemented and validated so far:
+The service is not yet declared a final v0.1 release. Security hardening and the final same-SHA acceptance gate remain separate milestones.
 
-- pinned, warning-denied Rust workspace and committed lockfile;
-- safe core model, LibVNCClient adapter, dedicated worker, reconnect/stall behavior, framebuffer store, screenshots, and complete input/clipboard control;
-- authenticated HTTP and WebSocket APIs with structured tracing, bounded metrics, and overload controls;
-- digest-pinned Debian 13 XFCE/TigerVNC desktop image and deterministic graphical test application;
-- multi-stage non-root controller image with only runtime LibVNCClient dependencies;
-- production Compose with internal-only raw VNC, file-mounted secrets, read-only controller root filesystem, and bounded temporary storage;
-- explicit loopback-only VNC debug override;
-- disposable-by-default desktop state plus an opt-in persistent desktop-home volume;
-- real desktop, adapter, worker, HTTP/WebSocket, controller-image, Compose, and persistence smoke tests;
-- ChatGPT-readable CI status publishing through GitHub issue `#1`.
+## Quick start
 
-Remaining release work is tracked in R13 and later milestones: broader integration/restart stress, native safety tooling, dependency and image security gates, API documentation, packaging, and final acceptance evidence.
+### Prerequisites
 
-The original [`docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md`](docs/VNC_REMOTE_CONTROL_SERVER_V01_TODO.md) is retained as historical planning context. The dated rebased TODO above is authoritative for current implementation work.
+- Linux with Docker Engine and Docker Compose v2;
+- `curl` for API examples;
+- `openssl` for local secret generation;
+- free loopback port `8080`, or set `VRC_API_HOST_PORT` to another port.
 
-## Product boundary
+Create local secrets:
 
-v0.1 provides pixel observation and remote-desktop input primitives for exactly one project-owned Debian desktop. OCR, Playwright, accessibility-tree automation, AI planning, multiple sessions, arbitrary external VNC servers, and a browser viewer are outside the v0.1 scope.
+```bash
+install -d -m 0700 deploy/secrets
+umask 077
+openssl rand -hex 32 > deploy/secrets/api_token.txt
+openssl rand -hex 4 > deploy/secrets/vnc_password.txt
+chmod 0444 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt
+```
 
-## Quality policy
+Start the disposable production topology:
 
-Every first-party compiler warning, Clippy warning, lint finding, test failure, shell finding, Dockerfile finding, and workflow-contract violation is treated as a defect. Warnings are fixed at their source rather than suppressed, hidden, downgraded, or ignored.
+```bash
+docker compose -f deploy/compose.yaml up --build --detach --wait
+```
+
+Check health and authenticated status:
+
+```bash
+BASE_URL=http://127.0.0.1:8080
+API_TOKEN="$(cat deploy/secrets/api_token.txt)"
+
+curl --fail-with-body "$BASE_URL/health/live"
+curl --fail-with-body \
+  --header "Authorization: Bearer $API_TOKEN" \
+  "$BASE_URL/v1/status"
+```
+
+Stop the stack and remove disposable state:
+
+```bash
+docker compose -f deploy/compose.yaml down --volumes --remove-orphans
+```
+
+## Documentation
+
+- [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, and troubleshooting.
+- [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for every HTTP route.
+- [`docs/WEBSOCKET_EVENTS.md`](docs/WEBSOCKET_EVENTS.md): event envelope, event types, heartbeat behavior, and close codes.
+- [`deploy/README.md`](deploy/README.md): Compose topology and mode-specific commands.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): development prerequisites and quality commands.
+- [`SECURITY.md`](SECURITY.md): vulnerability-reporting policy.
+
+## Security boundaries
+
+- Never publish raw VNC port `5901` from production Compose.
+- Use the debug VNC override only on a local development machine; it binds to loopback.
+- Keep API and VNC credentials in files. Do not put secret values in environment variables, images, source control, command history, or URLs.
+- Do not log typed text, clipboard contents, VNC passwords, bearer tokens, or screenshots.
+- Keep the API on loopback or behind a trusted TLS reverse proxy. The controller does not terminate TLS itself.
 
 ## Development
 
-The supported Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Run:
+The supported Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Common commands:
 
 ```bash
 make fmt
 make lint
 make test
 make build
+make integration-test
 ```
 
-Production and development deployment commands are documented in [`deploy/README.md`](deploy/README.md). The production topology is `deploy/compose.yaml`; raw VNC requires the explicit development-only override. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for prerequisites and the current command surface.
-
-## Security and operator boundaries
-
-- Production must never publish raw VNC port `5901` to the host or public network.
-- Development-only raw VNC access must bind to loopback, for example `127.0.0.1:5901:5901`.
-- API and VNC credentials must come from secret files by default and must never be baked into images or committed to source control.
-- Typed text, clipboard contents, VNC passwords, bearer tokens, and framebuffer screenshots must never be written to application logs, metrics, or event payloads.
-- Terminate TLS at a trusted reverse proxy or another explicitly documented trusted network boundary before exposing the future controller API beyond localhost.
-
-Report suspected vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md).
+Warnings and failing gates are defects. Fix their causes; do not suppress, downgrade, or silently bypass them.
 
 ## License
 

@@ -1,0 +1,1827 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "VNC Remote Control Server API",
+    "version": "0.1.0",
+    "description": "Authenticated HTTP API for observing and controlling one project-owned Debian desktop. All /v1 routes require one process-wide bearer token loaded from a secret file. Command endpoints use bounded asynchronous HTTP 202 semantics: validation, worker execution, and worker acknowledgement complete before the response, but target application semantics are not guaranteed. The HTTP/1 runtime may close incomplete headers at the transport level and may return empty 400, 408, or 413 responses before Axum routing.",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "Default loopback binding; use TLS at a trusted reverse proxy beyond localhost."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Public liveness and fail-closed readiness."
+    },
+    {
+      "name": "Observation",
+      "description": "Status, display, screenshots, clipboard snapshots, metrics, and events."
+    },
+    {
+      "name": "Pointer",
+      "description": "Strictly bounded pointer and mouse commands."
+    },
+    {
+      "name": "Keyboard",
+      "description": "Key transitions, atomic chords, and fully preflighted ASCII text."
+    },
+    {
+      "name": "Clipboard",
+      "description": "UTF-8 clipboard snapshots and outbound updates."
+    },
+    {
+      "name": "Connection",
+      "description": "Rate-limited manual reconnect."
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "summary": "Process liveness",
+        "operationId": "getLiveness",
+        "tags": [
+          "Health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "HTTP process is alive.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "alive"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Fail-closed readiness",
+        "operationId": "getReadiness",
+        "tags": [
+          "Health"
+        ],
+        "security": [],
+        "description": "Ready only when shutdown has not begun, the worker is connected and nonfatal, and a complete current framebuffer with dimensions and timestamp exists.",
+        "responses": {
+          "200": {
+            "description": "Controller can serve current desktop operations.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "status": "ready"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Controller is starting, reconnecting, lacks a current complete framebuffer, has a fatal worker exit, or is shutting down.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "summary": "Get controller status",
+        "operationId": "getStatus",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Redacted worker lifecycle snapshot.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "tags": [
+          "Observation"
+        ]
+      }
+    },
+    "/v1/display": {
+      "get": {
+        "summary": "Get current display metadata",
+        "operationId": "getDisplay",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current complete display metadata.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DisplayResponse"
+                },
+                "example": {
+                  "status": "current",
+                  "width": 1280,
+                  "height": 800,
+                  "depth": 24,
+                  "revision": 42,
+                  "updated_at_unix_ms": 1785949200000,
+                  "complete": true
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        },
+        "tags": [
+          "Observation"
+        ]
+      }
+    },
+    "/v1/screenshot.png": {
+      "get": {
+        "summary": "Capture current PNG screenshot",
+        "operationId": "getScreenshot",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Coherent RGBA framebuffer encoded as PNG.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            },
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "contentEncoding": "binary"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "If-None-Match matched the current process-instance and framebuffer revision.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              },
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/CacheControl"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Observation"
+        ],
+        "description": "Supports If-None-Match. Screenshot work uses bounded concurrent permits and a bounded encode deadline."
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "summary": "Open bounded event WebSocket",
+        "operationId": "openEventsWebSocket",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade accepted. The first text frame is a snapshot, followed by payload-free revision and lifecycle events."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "description": "Configured WebSocket client capacity is exhausted.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Observation"
+        ],
+        "description": "OpenAPI describes the HTTP upgrade only. See docs/WEBSOCKET_EVENTS.md for the exact event envelope, heartbeat behavior, and close codes.",
+        "x-websocket-events-doc": "docs/WEBSOCKET_EVENTS.md"
+      }
+    },
+    "/v1/metrics": {
+      "get": {
+        "summary": "Get bounded Prometheus metrics",
+        "operationId": "getMetrics",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition with bounded labels and no payload or secret values.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        },
+        "tags": [
+          "Observation"
+        ]
+      }
+    },
+    "/v1/pointer/move": {
+      "post": {
+        "summary": "Move pointer",
+        "operationId": "movePointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Pointer"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointerMoveRequest"
+              },
+              "example": {
+                "x": 640,
+                "y": 400
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pointer/button": {
+      "post": {
+        "summary": "Set mouse-button state",
+        "operationId": "setPointerButton",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Pointer"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointerButtonRequest"
+              },
+              "example": {
+                "x": 640,
+                "y": 400,
+                "button": "left",
+                "pressed": true
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pointer/click": {
+      "post": {
+        "summary": "Execute atomic click",
+        "operationId": "clickPointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Pointer"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointerClickRequest"
+              },
+              "example": {
+                "x": 640,
+                "y": 400,
+                "button": "left"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pointer/double-click": {
+      "post": {
+        "summary": "Execute atomic double-click",
+        "operationId": "doubleClickPointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Pointer"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointerDoubleClickRequest"
+              },
+              "example": {
+                "x": 640,
+                "y": 400,
+                "button": "left",
+                "interval_ms": 100
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pointer/scroll": {
+      "post": {
+        "summary": "Execute bounded vertical scroll",
+        "operationId": "scrollPointer",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Pointer"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointerScrollRequest"
+              },
+              "example": {
+                "x": 640,
+                "y": 400,
+                "delta_y": -1
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/keyboard/key": {
+      "post": {
+        "summary": "Set one key state",
+        "operationId": "setKeyboardKey",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Keyboard"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyRequest"
+              },
+              "example": {
+                "key": "ENTER",
+                "action": "down"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/keyboard/chord": {
+      "post": {
+        "summary": "Execute atomic key chord",
+        "operationId": "sendKeyboardChord",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Keyboard"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChordRequest"
+              },
+              "example": {
+                "keys": [
+                  "CTRL_LEFT",
+                  "a"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/keyboard/text": {
+      "post": {
+        "summary": "Type fully preflighted text",
+        "operationId": "typeKeyboardText",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Keyboard"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextRequest"
+              },
+              "example": {
+                "text": "documented ASCII text"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/clipboard": {
+      "get": {
+        "summary": "Get last inbound clipboard snapshot",
+        "operationId": "getClipboard",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Last valid inbound UTF-8 clipboard value.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClipboardResponse"
+                },
+                "example": {
+                  "text": "desktop clipboard",
+                  "revision": 7,
+                  "updated_at_unix_ms": 1785949200000
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          }
+        },
+        "tags": [
+          "Clipboard"
+        ]
+      },
+      "put": {
+        "summary": "Set outbound clipboard",
+        "operationId": "setClipboard",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          }
+        },
+        "tags": [
+          "Clipboard"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClipboardRequest"
+              },
+              "example": {
+                "text": "documented clipboard value"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/connection/reconnect": {
+      "post": {
+        "summary": "Request rate-limited reconnect",
+        "operationId": "requestReconnect",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                },
+                "example": {
+                  "command_id": 17,
+                  "status": "accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/InvalidJson"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestBodyTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "502": {
+            "$ref": "#/components/responses/DesktopOperationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/WorkerUnavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/CommandTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/ReconnectRateLimited"
+          }
+        },
+        "tags": [
+          "Connection"
+        ],
+        "description": "No request body. Automatic reconnect remains active for transport loss; this endpoint is not a polling mechanism."
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque",
+        "description": "Opaque process-wide token read by the controller from VRC_API_TOKEN_FILE. Never place it in URLs or logs."
+      }
+    },
+    "headers": {
+      "XRequestId": {
+        "description": "Accepted client request ID or a controller-generated process-local ID.",
+        "schema": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        }
+      },
+      "ETag": {
+        "description": "Process-instance and framebuffer-revision ETag.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CacheControl": {
+        "description": "Screenshot cache policy.",
+        "schema": {
+          "type": "string",
+          "example": "private, no-cache, max-age=0"
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "alive",
+              "ready"
+            ]
+          }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "started_at_unix_ms",
+          "connected_at_unix_ms",
+          "last_message_at_unix_ms",
+          "reconnect_attempts",
+          "last_failure",
+          "framebuffer_revision",
+          "rejected_commands",
+          "dropped_events",
+          "fatal_exit",
+          "shutting_down"
+        ],
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/ConnectionState"
+          },
+          "started_at_unix_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "connected_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "last_message_at_unix_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "reconnect_attempts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_failure": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WorkerFailure"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "framebuffer_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "rejected_commands": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dropped_events": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fatal_exit": {
+            "type": "boolean"
+          },
+          "shutting_down": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DisplayResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "width",
+          "height",
+          "depth",
+          "revision",
+          "updated_at_unix_ms",
+          "complete"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "current"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "depth": {
+            "type": "integer",
+            "const": 24
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "complete": {
+            "type": "boolean",
+            "const": true
+          }
+        }
+      },
+      "CommandAcceptedResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command_id",
+          "status"
+        ],
+        "properties": {
+          "command_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "const": "accepted"
+          }
+        }
+      },
+      "ClipboardResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "revision",
+          "updated_at_unix_ms"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "Last valid inbound UTF-8 clipboard value."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updated_at_unix_ms": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthorized",
+              "not_ready",
+              "framebuffer_unavailable",
+              "shutting_down",
+              "payload_too_large",
+              "invalid_json",
+              "internal_error",
+              "websocket_capacity",
+              "screenshot_busy",
+              "screenshot_timeout",
+              "invalid_coordinate",
+              "invalid_rectangle",
+              "chord_too_long",
+              "text_too_large",
+              "clipboard_too_large",
+              "unsupported_text",
+              "invalid_clipboard",
+              "scroll_too_large",
+              "command_queue_full",
+              "worker_unavailable",
+              "clipboard_unavailable",
+              "command_timeout",
+              "reconnect_rate_limited",
+              "invalid_request",
+              "desktop_operation_failed"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ConnectionState": {
+        "type": "string",
+        "enum": [
+          "starting",
+          "connecting",
+          "connected",
+          "degraded",
+          "reconnecting",
+          "disconnected",
+          "authentication_failed",
+          "stopped"
+        ]
+      },
+      "WorkerFailure": {
+        "type": "string",
+        "enum": [
+          "authentication",
+          "configuration",
+          "transport",
+          "timeout",
+          "protocol",
+          "native"
+        ]
+      },
+      "MouseButton": {
+        "type": "string",
+        "enum": [
+          "left",
+          "middle",
+          "right"
+        ]
+      },
+      "KeyAction": {
+        "type": "string",
+        "enum": [
+          "down",
+          "up"
+        ]
+      },
+      "ApiKeyboardKey": {
+        "description": "A documented symbolic key name or exactly one printable ASCII character. Raw numeric keysyms are invalid.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "CTRL_LEFT",
+              "ALT_LEFT",
+              "SHIFT_LEFT",
+              "META_LEFT",
+              "ENTER",
+              "TAB",
+              "ESCAPE",
+              "BACKSPACE",
+              "DELETE",
+              "HOME",
+              "END",
+              "PAGE_UP",
+              "PAGE_DOWN",
+              "ARROW_UP",
+              "ARROW_DOWN",
+              "ARROW_LEFT",
+              "ARROW_RIGHT",
+              "F1",
+              "F2",
+              "F3",
+              "F4",
+              "F5",
+              "F6",
+              "F7",
+              "F8",
+              "F9",
+              "F10",
+              "F11",
+              "F12"
+            ]
+          },
+          {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1,
+            "pattern": "^[ -~]$"
+          }
+        ]
+      },
+      "PointerMoveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "PointerButtonRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "x",
+          "y",
+          "button",
+          "pressed"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "button": {
+            "$ref": "#/components/schemas/MouseButton"
+          },
+          "pressed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PointerClickRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "x",
+          "y",
+          "button"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "button": {
+            "$ref": "#/components/schemas/MouseButton"
+          }
+        }
+      },
+      "PointerDoubleClickRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "x",
+          "y",
+          "button",
+          "interval_ms"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "button": {
+            "$ref": "#/components/schemas/MouseButton"
+          },
+          "interval_ms": {
+            "type": "integer",
+            "minimum": 20,
+            "maximum": 1000
+          }
+        }
+      },
+      "PointerScrollRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "x",
+          "y",
+          "delta_y"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "y": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "delta_x": {
+            "type": "integer",
+            "enum": [
+              0
+            ],
+            "default": 0,
+            "description": "Horizontal scrolling is not supported in v0.1; nonzero values return 422 invalid_request."
+          },
+          "delta_y": {
+            "type": "integer",
+            "minimum": -100,
+            "maximum": 100
+          }
+        }
+      },
+      "KeyRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "action"
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/ApiKeyboardKey"
+          },
+          "action": {
+            "$ref": "#/components/schemas/KeyAction"
+          }
+        }
+      },
+      "ChordRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "keys"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyboardKey"
+            },
+            "description": "Pressed in array order and released in reverse order without interleaving another worker command."
+          }
+        }
+      },
+      "TextRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 16384,
+            "pattern": "^[\\t\\r\\n -~]*$",
+            "description": "Maximum 16 KiB. Supports tab, CR, LF, and printable ASCII only. The complete value is preflighted before input begins."
+          }
+        }
+      },
+      "ClipboardRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 1048576,
+            "pattern": "^[^\\u0000]*$",
+            "description": "Valid UTF-8, maximum 1 MiB measured in encoded bytes, with no embedded NUL."
+          }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or incorrect bearer token. Authentication failures are deliberately indistinguishable.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "InvalidJson": {
+        "description": "Malformed JSON or an invalid JSON media payload.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "Global JSON body limit or operation-specific text/clipboard limit exceeded. A pre-router runtime rejection may close the connection with an empty 413 body.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "RequestBodyTimeout": {
+        "description": "The complete request body was not received within VRC_HTTP_BODY_TIMEOUT_MS. The runtime closes the connection and returns an empty 408 response."
+      },
+      "InvalidRequest": {
+        "description": "The request failed complete preflight, including coordinates, unsupported values, or operation-specific constraints.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Unexpected internal failure. The response and logs remain payload-free.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "DesktopOperationFailed": {
+        "description": "The VNC transport, authentication, protocol, or native operation failed.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "WorkerUnavailable": {
+        "description": "Worker, framebuffer, clipboard, queue, screenshot capacity, readiness, or shutdown state prevents the operation.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "CommandTimeout": {
+        "description": "Worker acknowledgement or screenshot encoding exceeded its configured deadline.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ReconnectRateLimited": {
+        "description": "Manual reconnect was requested before the configured interval elapsed.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    }
+  }
+}

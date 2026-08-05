@@ -8,6 +8,8 @@ readonly vnc_password='http-e2e-vnc-password'
 readonly api_token='http-e2e-api-token'
 readonly typed_secret='R11-TYPED-PAYLOAD-MUST-NOT-LOG'
 readonly clipboard_secret='R11-CLIPBOARD-PAYLOAD-MUST-NOT-LOG'
+readonly documented_text='R15-DOCUMENTED-CURL-TEXT'
+readonly documented_clipboard='R15-DOCUMENTED-CURL-CLIPBOARD'
 temporary_directory=""
 controller_pid=""
 controller_log=""
@@ -127,6 +129,74 @@ env \
     target/debug/controller-api >"$controller_log" 2>&1 &
 controller_pid=$!
 wait_for_controller
+
+# R15_DOCUMENTED_CURL_EXAMPLES
+log "verifying R15 documented curl examples against the real controller"
+base_url="http://127.0.0.1:${api_port}"
+authorization_header="Authorization: Bearer ${api_token}"
+
+curl --fail-with-body --silent --show-error \
+    --output "$temporary_directory/documented-live.json" \
+    "$base_url/health/live"
+curl --fail-with-body --silent --show-error \
+    --header "$authorization_header" \
+    --output "$temporary_directory/documented-status.json" \
+    "$base_url/v1/status"
+curl --fail-with-body --silent --show-error \
+    --header "$authorization_header" \
+    --output "$temporary_directory/documented-display.json" \
+    "$base_url/v1/display"
+curl --fail-with-body --silent --show-error \
+    --header "$authorization_header" \
+    --dump-header "$temporary_directory/documented-screenshot.headers" \
+    --output "$temporary_directory/documented-screenshot.png" \
+    "$base_url/v1/screenshot.png"
+curl --fail-with-body --silent --show-error \
+    --request POST \
+    --header "$authorization_header" \
+    --header 'Content-Type: application/json' \
+    --data '{"x":401,"y":251}' \
+    --output "$temporary_directory/documented-pointer.json" \
+    "$base_url/v1/pointer/move"
+curl --fail-with-body --silent --show-error \
+    --request POST \
+    --header "$authorization_header" \
+    --header 'Content-Type: application/json' \
+    --data "{\"text\":\"${documented_text}\"}" \
+    --output "$temporary_directory/documented-text.json" \
+    "$base_url/v1/keyboard/text"
+curl --fail-with-body --silent --show-error \
+    --request PUT \
+    --header "$authorization_header" \
+    --header 'Content-Type: application/json' \
+    --data "{\"text\":\"${documented_clipboard}\"}" \
+    --output "$temporary_directory/documented-clipboard.json" \
+    "$base_url/v1/clipboard"
+python3 - "$temporary_directory" <<'PYDOC'
+import json
+import struct
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+if json.loads((root / "documented-live.json").read_text())["status"] != "alive":
+    raise SystemExit("documented liveness example returned unexpected content")
+if json.loads((root / "documented-status.json").read_text())["state"] != "connected":
+    raise SystemExit("documented status example was not connected")
+display = json.loads((root / "documented-display.json").read_text())
+if (display["width"], display["height"], display["complete"]) != (1280, 800, True):
+    raise SystemExit("documented display example returned unexpected metadata")
+png = (root / "documented-screenshot.png").read_bytes()
+if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+    raise SystemExit("documented screenshot example did not return PNG")
+width, height = struct.unpack(">II", png[16:24])
+if (width, height) != (1280, 800):
+    raise SystemExit("documented screenshot dimensions are wrong")
+for name in ("documented-pointer.json", "documented-text.json", "documented-clipboard.json"):
+    payload = json.loads((root / name).read_text())
+    if payload.get("status") != "accepted" or not isinstance(payload.get("command_id"), int):
+        raise SystemExit(f"{name} did not return accepted command semantics")
+PYDOC
 
 log "verifying bearer authentication fails closed"
 status="$(curl --silent --output "$temporary_directory/unauthorized.json" --write-out '%{http_code}' \
@@ -387,11 +457,25 @@ for metric in \
     vrc_protocol_errors_total; do
     grep -Fq "$metric" "$temporary_directory/metrics.txt" || fail "metrics omitted $metric"
 done
-for secret in "$api_token" "$vnc_password" "$typed_secret" "$clipboard_secret"; do
+for secret in "$api_token" "$vnc_password" "$typed_secret" "$clipboard_secret" "$documented_text" "$documented_clipboard"; do
     if grep -Fq "$secret" "$temporary_directory/metrics.txt"; then
         fail "metrics exposed prohibited payload or secret data"
     fi
 done
+
+log "verifying the documented curl reconnect example"
+# The WebSocket lifecycle probe above performs a manual reconnect.
+# Wait past the documented 2-second admission interval before
+# validating the standalone curl example.
+sleep 2.1
+curl --fail-with-body --silent --show-error \
+    --request POST \
+    --header "$authorization_header" \
+    --output "$temporary_directory/documented-reconnect.json" \
+    "$base_url/v1/connection/reconnect"
+grep -Fq '"status":"accepted"' "$temporary_directory/documented-reconnect.json" || \
+    fail "documented reconnect example did not return accepted semantics"
+wait_for_controller
 
 log "requesting signal-driven graceful shutdown"
 kill -TERM "$controller_pid"
@@ -407,7 +491,7 @@ set -e
 controller_pid=""
 [[ "$controller_status" -eq 0 ]] || fail "controller exited with status $controller_status"
 
-for secret in "$vnc_password" "$api_token" "$typed_secret" "$clipboard_secret"; do
+for secret in "$vnc_password" "$api_token" "$typed_secret" "$clipboard_secret" "$documented_text" "$documented_clipboard"; do
     if grep -Fq "$secret" "$controller_log"; then
         fail "controller log exposed prohibited payload or secret data"
     fi
