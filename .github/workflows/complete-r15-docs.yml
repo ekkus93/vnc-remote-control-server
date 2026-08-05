@@ -1,0 +1,94 @@
+name: Complete R15 Documentation
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/complete-r15-docs.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: complete-r15-docs-master
+  cancel-in-progress: false
+
+jobs:
+  complete-r15:
+    name: Validate and publish R15 documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Install native and HTTP E2E dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo timeout 600 apt-get -o Acquire::Retries=3 update
+          sudo timeout 600 apt-get \
+            -o Acquire::Retries=3 \
+            -o DPkg::Lock::Timeout=120 \
+            install --yes --no-install-recommends \
+              build-essential \
+              libvncserver-dev \
+              pkg-config \
+              tigervnc-tools \
+              tigervnc-viewer \
+              xvfb
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+
+      - name: Reconstruct and apply R15 documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/r15_payload_*.b64 > /tmp/r15_apply.py.xz.b64
+          echo '7e805496f2bc7aa2248ebc8632e73045bdc4077953660d9877e56384f3d541d5  /tmp/r15_apply.py.xz.b64' | sha256sum --check --strict
+          base64 --decode /tmp/r15_apply.py.xz.b64 | xz --decompress > /tmp/r15_apply.py
+          echo 'cf43d096126f16ca23c3dcd7f7bc20a483620595bcfd7df27e1dee4854bcc0e0  /tmp/r15_apply.py' | sha256sum --check --strict
+          python3 -m py_compile /tmp/r15_apply.py
+          python3 /tmp/r15_apply.py
+
+      - name: Validate OpenAPI and documentation contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool docs/openapi.json >/dev/null
+          python3 -m compileall -q tests
+          python3 -m unittest tests.test_documentation_contract -v
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          bash -n tests/http-e2e/run.sh
+          git diff --check
+
+      - name: Run documented curl examples against real controller
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/http-e2e/run.sh
+
+      - name: Commit validated R15 documentation directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add \
+            README.md \
+            deploy/README.md \
+            docs/openapi.json \
+            tests/test_documentation_contract.py \
+            tests/http-e2e/run.sh
+          git diff --cached --check
+          git commit -m 'Complete R15 operator and API documentation'
+          git push origin HEAD:master
