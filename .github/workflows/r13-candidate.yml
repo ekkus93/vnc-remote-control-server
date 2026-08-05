@@ -1,0 +1,40 @@
+name: R13 Integration Candidate
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r13-integration-candidate-master
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Real Compose R13 integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Run R13 Compose integration and E2E validation
+        id: r13
+        env:
+          R13_FAILURE_ARTIFACT_DIR: artifacts/r13-integration-failure
+        run: bash tests/integration/run.sh
+
+      - name: Upload sanitized R13 failure diagnostics
+        if: ${{ failure() && steps.r13.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: r13-candidate-failure-${{ github.run_id }}
+          path: artifacts/r13-integration-failure
+          if-no-files-found: error
+          retention-days: 7
