@@ -1,0 +1,100 @@
+name: Apply R13 Chord Settling Fix
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r13-chord-settle-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: r13-chord-settle-fix-master
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Add bounded modifier-chord settling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/controller-api/src/input.rs')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              '''const WHEEL_UP_MASK: u8 = 1 << 3;
+              const WHEEL_DOWN_MASK: u8 = 1 << 4;
+          ''': '''const WHEEL_UP_MASK: u8 = 1 << 3;
+              const WHEEL_DOWN_MASK: u8 = 1 << 4;
+              // TigerVNC feeds RFB key messages into the X input queue asynchronously.
+              // A short bounded interval preserves modifier transition order without
+              // allowing another worker command to interleave with the chord.
+              const CHORD_EVENT_SETTLE_INTERVAL: Duration = Duration::from_millis(5);
+          ''',
+              '''    /// Presses keys in order and releases newly pressed keys in reverse order.
+          ''': '''    /// Presses keys in order and releases newly pressed keys in reverse order.
+              ///
+              /// Each native transition is separated by a small bounded interval so
+              /// TigerVNC/X observes the same ordering that was written to the RFB stream.
+          ''',
+              '''            self.pressed_keys.push(*key);
+                      newly_pressed.push(*key);
+                  }
+          ''': '''            self.pressed_keys.push(*key);
+                      newly_pressed.push(*key);
+                      thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
+                  }
+          ''',
+              '''                Err(error) if first_error.is_none() => first_error = Some(error),
+                          Err(_) => {}
+                      }
+                  }
+          ''': '''                Err(error) if first_error.is_none() => first_error = Some(error),
+                          Err(_) => {}
+                      }
+                      thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
+                  }
+          ''',
+              '''            if sink.send_key(*key, false).is_ok() {
+                          self.remove_pressed_key(*key);
+                      }
+                  }
+          ''': '''            if sink.send_key(*key, false).is_ok() {
+                          self.remove_pressed_key(*key);
+                      }
+                      thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
+                  }
+          ''',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one chord block, found {count}: {old!r}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all --check
+          RUSTFLAGS=-Dwarnings cargo test --locked --workspace --all-features input::tests
+          git diff --check
+
+      - name: Commit repair directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add crates/controller-api/src/input.rs
+          git commit -m 'fix: preserve real VNC chord transition order'
+          git push origin HEAD:master
