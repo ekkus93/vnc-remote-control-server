@@ -50,31 +50,35 @@ jobs:
               raise SystemExit(f'expected 30 unchecked R15 items, found {unchecked}')
           section = section.replace('- [ ]', '- [x]')
 
-          old_evidence = '''Evidence:
-
-```text
-Docs commit:
-OpenAPI validation:
-Curl example tests:
-CI run:
-```
-'''
-          new_evidence = '''Evidence:
-
-```text
-Operator guide commit: 8eb2b2eb832359e30be2b8072eca220ac13d3903
-README/OpenAPI/curl-test commit: d913218f12bf91477f2306c15dbd281fb3f0ca54
-Evidence record commit: 2c8bc8d6a898a248301c6db12921bb5753930e60
-Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R15_EVIDENCE_2026-08-05.md
-OpenAPI validation: python3 -m json.tool docs/openapi.json; tests.test_documentation_contract
-Curl example tests: tests/http-e2e/run.sh against production controller and real TigerVNC
-Focused validation: run 31009207323, job 92316720636, success
-Clean-head CI: run 31009513801 on e55bf28d4dd90259b1c43f90135577393545b150, success
-Quality job: 92317766142, success
-Secured desktop/native job: 92317766230, success
-CI artifact: ci-evidence-31009513801, id 8931824284
-```
-'''
+          old_evidence = '\n'.join([
+              'Evidence:',
+              '',
+              '```text',
+              'Docs commit:',
+              'OpenAPI validation:',
+              'Curl example tests:',
+              'CI run:',
+              '```',
+              '',
+          ])
+          new_evidence = '\n'.join([
+              'Evidence:',
+              '',
+              '```text',
+              'Operator guide commit: 8eb2b2eb832359e30be2b8072eca220ac13d3903',
+              'README/OpenAPI/curl-test commit: d913218f12bf91477f2306c15dbd281fb3f0ca54',
+              'Evidence record commit: 2c8bc8d6a898a248301c6db12921bb5753930e60',
+              'Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R15_EVIDENCE_2026-08-05.md',
+              'OpenAPI validation: python3 -m json.tool docs/openapi.json; tests.test_documentation_contract',
+              'Curl example tests: tests/http-e2e/run.sh against production controller and real TigerVNC',
+              'Focused validation: run 31009207323, job 92316720636, success',
+              'Clean-head CI: run 31009513801 on e55bf28d4dd90259b1c43f90135577393545b150, success',
+              'Quality job: 92317766142, success',
+              'Secured desktop/native job: 92317766230, success',
+              'CI artifact: ci-evidence-31009513801, id 8931824284',
+              '```',
+              '',
+          ])
           if section.count(old_evidence) != 1:
               raise SystemExit('R15 evidence placeholder did not match exactly')
           section = section.replace(old_evidence, new_evidence, 1)
