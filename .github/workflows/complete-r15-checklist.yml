@@ -1,0 +1,111 @@
+name: Complete R15 Checklist
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/complete-r15-checklist.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: complete-r15-checklist-master
+  cancel-in-progress: false
+
+jobs:
+  complete-r15-checklist:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Mark only R15 complete and validate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          todo_path = Path('docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md')
+          evidence_path = Path('docs/VNC_REMOTE_CONTROL_SERVER_R15_EVIDENCE_2026-08-05.md')
+          if not evidence_path.is_file() or evidence_path.stat().st_size == 0:
+              raise SystemExit('R15 evidence file is missing or empty')
+
+          text = todo_path.read_text(encoding='utf-8')
+          start_marker = '## R15 — README, operator docs, and API docs\n'
+          end_marker = '\n---\n\n## R16 — Final v0.1 acceptance gate\n'
+          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+              raise SystemExit('could not isolate the R15 checklist section')
+
+          before, remainder = text.split(start_marker, 1)
+          section, after = remainder.split(end_marker, 1)
+          unchecked = section.count('- [ ]')
+          if unchecked != 30:
+              raise SystemExit(f'expected 30 unchecked R15 items, found {unchecked}')
+          section = section.replace('- [ ]', '- [x]')
+
+          old_evidence = '''Evidence:
+
+```text
+Docs commit:
+OpenAPI validation:
+Curl example tests:
+CI run:
+```
+'''
+          new_evidence = '''Evidence:
+
+```text
+Operator guide commit: 8eb2b2eb832359e30be2b8072eca220ac13d3903
+README/OpenAPI/curl-test commit: d913218f12bf91477f2306c15dbd281fb3f0ca54
+Evidence record commit: 2c8bc8d6a898a248301c6db12921bb5753930e60
+Evidence document: docs/VNC_REMOTE_CONTROL_SERVER_R15_EVIDENCE_2026-08-05.md
+OpenAPI validation: python3 -m json.tool docs/openapi.json; tests.test_documentation_contract
+Curl example tests: tests/http-e2e/run.sh against production controller and real TigerVNC
+Focused validation: run 31009207323, job 92316720636, success
+Clean-head CI: run 31009513801 on e55bf28d4dd90259b1c43f90135577393545b150, success
+Quality job: 92317766142, success
+Secured desktop/native job: 92317766230, success
+CI artifact: ci-evidence-31009513801, id 8931824284
+```
+'''
+          if section.count(old_evidence) != 1:
+              raise SystemExit('R15 evidence placeholder did not match exactly')
+          section = section.replace(old_evidence, new_evidence, 1)
+
+          if '- [ ]' in section:
+              raise SystemExit('R15 still contains unchecked items')
+          if section.count('- [x]') != 30:
+              raise SystemExit('R15 checked-item count is not exactly 30')
+
+          updated = before + start_marker + section + end_marker + after
+          todo_path.write_text(updated, encoding='utf-8')
+          PY
+
+          python3 -m unittest tests.test_documentation_contract -v
+          git diff --check
+          grep -Fq 'Clean-head CI: run 31009513801' \
+            docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md
+          if sed -n '/^## R15 /,/^## R16 /p' \
+            docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md \
+            | grep -Fq -- '- [ ]'; then
+              printf 'R15 contains an unchecked item after completion\n' >&2
+              exit 1
+          fi
+
+      - name: Commit validated R15 checklist directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md
+          git diff --cached --check
+          git commit -m 'Complete R15 documentation checklist and evidence'
+          git push origin HEAD:master
