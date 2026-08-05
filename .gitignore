@@ -46,3 +46,6 @@ __pycache__/
 # Temporary files
 *.tmp
 *.log
+
+# Personal Claude Code settings (not team-shared)
+.claude/settings.local.json
