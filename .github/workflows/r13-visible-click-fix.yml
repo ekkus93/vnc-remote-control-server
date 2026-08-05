@@ -1,0 +1,71 @@
+name: Repair R13 Visible Click Assertion
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/r13-visible-click-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Click deterministic visible control
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/integration/r13_integration.py')
+          text = path.read_text(encoding='utf-8')
+          old_line = '        ("/v1/pointer/click", {"x": 420, "y": 430, "button": "left"}),\n'
+          new_line = (
+              '        (\n'
+              '            "/v1/pointer/click",\n'
+              '            {\n'
+              '                "x": int(controls["increment"]["x"]),\n'
+              '                "y": int(controls["increment"]["y"]),\n'
+              '                "button": "left",\n'
+              '            },\n'
+              '        ),\n'
+          )
+          if text.count(old_line) != 1:
+              raise SystemExit(f'expected one generic left click, found {text.count(old_line)}')
+          text = text.replace(old_line, new_line)
+          old_predicate = (
+              '            value.get("pointer") == {"x": 500, "y": 430}\n'
+              '            and value.get("buttons") == {"left": False, "middle": False, "right": False}\n'
+          )
+          new_predicate = (
+              '            value.get("pointer") == {"x": 500, "y": 430}\n'
+              '            and value.get("counter") == 1\n'
+              '            and value.get("buttons") == {"left": False, "middle": False, "right": False}\n'
+          )
+          if text.count(old_predicate) != 1:
+              raise SystemExit(f'expected one input predicate, found {text.count(old_predicate)}')
+          path.write_text(text.replace(old_predicate, new_predicate), encoding='utf-8')
+          PY
+          python3 -m py_compile tests/integration/r13_integration.py
+          python3 -m unittest tests.test_integration_contract -v
+          git diff --check
+
+      - name: Commit repair directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add tests/integration/r13_integration.py
+          git commit -m 'test: verify visible public click in R13'
+          git push origin HEAD:master
