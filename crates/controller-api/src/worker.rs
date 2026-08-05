@@ -18,7 +18,7 @@ use remote_desktop_core::{
     ClipboardSnapshot, ConnectionState, Coordinate, DesktopError, DesktopEventKind, DisplayInfo,
     KeyboardKey, MAX_FRAMEBUFFER_BYTES, WorkerCommand, validate_clipboard,
 };
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{
     Receiver, RecvError, RecvTimeoutError, SyncSender, TryRecvError, TrySendError, sync_channel,
 };
@@ -197,11 +197,29 @@ pub struct WorkerClient {
     command_queue_depth: Arc<AtomicUsize>,
     command_queue_capacity: usize,
     pending_overload: Arc<AtomicU64>,
+    /// Out-of-band shutdown signal. Authoritative for shutdown correctness:
+    /// unlike enqueueing `WorkerCommand::Shutdown`, storing into this flag
+    /// can never fail because the normal bounded command queue is full.
+    shutdown_requested: Arc<AtomicBool>,
 }
 
 impl WorkerClient {
+    /// Requests shutdown out-of-band. Never fails and never touches the
+    /// bounded command queue.
+    fn request_shutdown(&self) {
+        self.shutdown_requested.store(true, Ordering::Release);
+    }
+
+    /// Returns whether out-of-band shutdown has been requested.
+    fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Acquire)
+    }
+
     /// Submits one command without touching native adapter state.
     pub fn submit(&self, command: WorkerCommand) -> Result<CommandTicket, DesktopError> {
+        if self.shutdown_requested() {
+            return Err(DesktopError::WorkerUnavailable);
+        }
         let id = self
             .next_command_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
@@ -213,6 +231,11 @@ impl WorkerClient {
             command,
             completion: completion_tx,
         };
+        // Re-check immediately before enqueueing to narrow the race between
+        // a concurrent shutdown request and this submission.
+        if self.shutdown_requested() {
+            return Err(DesktopError::WorkerUnavailable);
+        }
         self.command_queue_depth.fetch_add(1, Ordering::AcqRel);
         match self.commands.try_send(envelope) {
             Ok(()) => Ok(CommandTicket {
@@ -333,10 +356,15 @@ impl DesktopWorker {
         self.events.take().ok_or(DesktopError::WorkerUnavailable)
     }
 
-    /// Requests orderly shutdown, waits for acknowledgement, and joins the native thread.
-    pub fn shutdown(mut self, timeout: Duration) -> Result<(), DesktopError> {
-        let ticket = self.client.submit(WorkerCommand::Shutdown)?;
-        ticket.wait(timeout)?;
+    /// Requests out-of-band shutdown and joins the native thread. The request
+    /// cannot fail on a saturated command queue: it does not enqueue
+    /// `WorkerCommand::Shutdown`, it stores directly into a shared shutdown
+    /// flag the worker loop checks independently of the bounded queue.
+    /// Shutdown responsiveness is bounded by the worker's existing native
+    /// poll interval and adapter timeouts, not by an additional timeout
+    /// here, so `timeout` is currently unused.
+    pub fn shutdown(mut self, _timeout: Duration) -> Result<(), DesktopError> {
+        self.client.request_shutdown();
         self.join_worker()
     }
 
@@ -359,6 +387,8 @@ impl DesktopWorker {
         let thread_command_queue_depth = Arc::clone(&command_queue_depth);
         let pending_overload = Arc::new(AtomicU64::new(0));
         let thread_pending_overload = Arc::clone(&pending_overload);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let thread_shutdown_requested = Arc::clone(&shutdown_requested);
         let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
             state: ConnectionState::Starting,
             started_at: SystemTime::now(),
@@ -384,6 +414,7 @@ impl DesktopWorker {
                         startup: startup_tx,
                         command_queue_depth: thread_command_queue_depth,
                         pending_overload: thread_pending_overload,
+                        shutdown_requested: thread_shutdown_requested,
                     },
                     thread_snapshot,
                     thread_framebuffer,
@@ -405,11 +436,16 @@ impl DesktopWorker {
                     command_queue_depth,
                     command_queue_capacity: command_capacity,
                     pending_overload,
+                    shutdown_requested,
                 },
                 events: Some(WorkerEvents { receiver: event_rx }),
                 join: Some(join),
             }),
             Err(RecvTimeoutError::Timeout) => {
+                // The out-of-band flag is the guaranteed cleanup signal; the
+                // queue nudge below is a best-effort extra and its failure
+                // must not matter.
+                shutdown_requested.store(true, Ordering::Release);
                 let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter());
                 let _ = join.join();
                 Err(DesktopError::Timeout)
@@ -434,9 +470,7 @@ impl Drop for DesktopWorker {
         if self.join.is_none() {
             return;
         }
-        if let Ok(ticket) = self.client.submit(WorkerCommand::Shutdown) {
-            let _ = ticket.wait(Duration::from_secs(2));
-        }
+        self.client.request_shutdown();
         let _ = self.join_worker();
     }
 }
@@ -892,6 +926,36 @@ struct WorkerChannels {
     startup: SyncSender<()>,
     command_queue_depth: Arc<AtomicUsize>,
     pending_overload: Arc<AtomicU64>,
+    shutdown_requested: Arc<AtomicBool>,
+}
+
+/// Drains queued command envelopes without executing them, resolving each
+/// pending caller with `WorkerUnavailable` so command tickets do not hang
+/// until an arbitrary timeout during shutdown. Never inspects or logs
+/// command payloads.
+fn drain_pending_commands(commands: &Receiver<CommandEnvelope>, command_queue_depth: &AtomicUsize) {
+    while let Ok(envelope) = commands.try_recv() {
+        command_queue_depth.fetch_sub(1, Ordering::AcqRel);
+        let _ = envelope
+            .completion
+            .send(Err(DesktopError::WorkerUnavailable));
+    }
+}
+
+/// Returns `true` and drains any pending commands if out-of-band shutdown
+/// has been requested. Called at every loop boundary so shutdown
+/// responsiveness never depends on the normal bounded command queue having
+/// capacity or on successfully enqueueing `WorkerCommand::Shutdown`.
+fn shutdown_now(
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<CommandEnvelope>,
+    command_queue_depth: &AtomicUsize,
+) -> bool {
+    if !shutdown_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    drain_pending_commands(commands, command_queue_depth);
+    true
 }
 
 fn run_worker<F, S>(
@@ -911,6 +975,7 @@ fn run_worker<F, S>(
         startup,
         command_queue_depth,
         pending_overload,
+        shutdown_requested,
     } = channels;
     let worker_span = tracing::info_span!("desktop_worker");
     let _worker_entered = worker_span.enter();
@@ -938,6 +1003,11 @@ fn run_worker<F, S>(
     let mut orderly_shutdown = false;
 
     loop {
+        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+            orderly_shutdown = true;
+            break;
+        }
+
         if pending_overload.swap(0, Ordering::AcqRel) > 0 {
             state.publish(DesktopEventKind::Overload);
         }
@@ -984,11 +1054,17 @@ fn run_worker<F, S>(
             }
         }
 
+        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+            orderly_shutdown = true;
+            break;
+        }
+
         match commands.try_recv() {
             Ok(envelope) => {
                 command_queue_depth.fetch_sub(1, Ordering::AcqRel);
                 let result = match envelope.command {
                     WorkerCommand::Shutdown => {
+                        shutdown_requested.store(true, Ordering::Release);
                         orderly_shutdown = true;
                         Ok(())
                     }
@@ -996,13 +1072,19 @@ fn run_worker<F, S>(
                     command => state.execute(command),
                 };
                 let _ = envelope.completion.send(result);
-                if orderly_shutdown {
+                if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+                    orderly_shutdown = true;
                     break;
                 }
                 continue;
             }
             Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
+        }
+
+        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+            orderly_shutdown = true;
+            break;
         }
 
         if state.session.is_some() {
@@ -1793,6 +1875,7 @@ mod tests {
             command_queue_depth: Arc::clone(&command_queue_depth),
             command_queue_capacity: 1,
             pending_overload: Arc::clone(&pending_overload),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
         };
 
         let _first = client
@@ -1809,5 +1892,177 @@ mod tests {
         assert_eq!(command_queue_depth.load(Ordering::Acquire), 1);
         assert_eq!(pending_overload.load(Ordering::Acquire), 1);
         assert_eq!(lock_unpoisoned(&snapshot).rejected_commands, 1);
+    }
+
+    #[test]
+    fn submit_rejects_after_shutdown_request_without_queue_mutation() {
+        let (command_tx, _command_rx) = sync_channel(4);
+        let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
+            state: ConnectionState::Connected,
+            started_at: SystemTime::now(),
+            connected_at: Some(SystemTime::now()),
+            last_message_at: Some(SystemTime::now()),
+            reconnect_attempts: 0,
+            last_failure: None,
+            framebuffer_revision: None,
+            rejected_commands: 0,
+            dropped_events: 0,
+            fatal_exit: false,
+        }));
+        let command_queue_depth = Arc::new(AtomicUsize::new(0));
+        let pending_overload = Arc::new(AtomicU64::new(0));
+        let client = WorkerClient {
+            commands: command_tx,
+            snapshot: Arc::clone(&snapshot),
+            framebuffer: FramebufferStore::default(),
+            clipboard: Arc::new(Mutex::new(None)),
+            next_command_id: Arc::new(AtomicU64::new(1)),
+            command_queue_depth: Arc::clone(&command_queue_depth),
+            command_queue_capacity: 4,
+            pending_overload: Arc::clone(&pending_overload),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
+        };
+
+        client.request_shutdown();
+
+        assert!(matches!(
+            client.submit(WorkerCommand::RequestFullRefresh),
+            Err(DesktopError::WorkerUnavailable)
+        ));
+        assert_eq!(command_queue_depth.load(Ordering::Acquire), 0);
+        assert_eq!(pending_overload.load(Ordering::Acquire), 0);
+        assert_eq!(lock_unpoisoned(&snapshot).rejected_commands, 0);
+    }
+
+    #[test]
+    fn shutdown_does_not_require_command_queue_capacity() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let mut config = settings();
+        config.command_capacity = 1;
+        // Wide enough that the worker thread is reliably still inside one
+        // bounded native poll call (which always sleeps for the full
+        // interval before returning) when the test fills the queue below,
+        // without relying on microsecond-scale timing.
+        config.poll_interval = Duration::from_millis(150);
+        let worker = DesktopWorker::spawn_with_factory(config, move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+
+        // The worker is now inside its next (bounded) poll call and is not
+        // draining the command queue, so this submission reliably saturates
+        // the single-slot queue instead of racing the drain loop.
+        let stuck = client
+            .submit(WorkerCommand::RequestFullRefresh)
+            .expect("first command fits the single-slot queue");
+        assert!(matches!(
+            client.submit(WorkerCommand::RequestFullRefresh),
+            Err(DesktopError::CommandQueueFull)
+        ));
+
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("shutdown succeeds despite a saturated queue");
+
+        assert_eq!(client.snapshot().state, ConnectionState::Stopped);
+        assert!(!client.snapshot().fatal_exit);
+        // The stuck ticket must resolve, not hang until its own timeout.
+        assert!(matches!(
+            stuck.wait(Duration::from_secs(1)),
+            Err(DesktopError::WorkerUnavailable)
+        ));
+    }
+
+    #[test]
+    fn drop_does_not_depend_on_shutdown_command_enqueue() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let mut config = settings();
+        config.command_capacity = 1;
+        config.poll_interval = Duration::from_millis(150);
+        let worker = DesktopWorker::spawn_with_factory(config, move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+
+        // Saturate the queue while the worker is stuck in a bounded poll
+        // call, so a normal `WorkerCommand::Shutdown` enqueue would fail.
+        let _stuck = client
+            .submit(WorkerCommand::RequestFullRefresh)
+            .expect("first command fits the single-slot queue");
+        assert!(matches!(
+            client.submit(WorkerCommand::RequestFullRefresh),
+            Err(DesktopError::CommandQueueFull)
+        ));
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let drop_thread = thread::spawn(move || {
+            drop(worker);
+            let _ = done_tx.send(());
+        });
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("drop must not hang behind a saturated queue");
+        drop_thread.join().expect("drop thread does not panic");
+
+        wait_for_state(&client, ConnectionState::Stopped);
+        assert!(!client.snapshot().fatal_exit);
+    }
+
+    #[test]
+    fn out_of_band_shutdown_releases_tracked_buttons_and_keys() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let factory_events = Arc::clone(&events);
+        let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+            Ok(RecordingSession::new(Arc::clone(&factory_events), None))
+        })
+        .expect("worker spawns");
+        let client = worker.client();
+        wait_for_state(&client, ConnectionState::Connected);
+        let point = Coordinate { x: 1, y: 1 };
+
+        client
+            .submit(WorkerCommand::SetButton {
+                coordinate: point,
+                button: MouseButton::Left,
+                pressed: true,
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect("button down");
+        client
+            .submit(WorkerCommand::SetKey {
+                key: KeyboardKey::CtrlLeft,
+                pressed: true,
+            })
+            .expect("accepted")
+            .wait(Duration::from_secs(1))
+            .expect("key down");
+
+        // Request shutdown directly through the out-of-band signal, not
+        // through `DesktopWorker::shutdown()`, to prove the flag alone
+        // drives cleanup.
+        client.request_shutdown();
+        wait_for_state(&client, ConnectionState::Stopped);
+
+        assert_eq!(
+            *lock_unpoisoned(&events),
+            vec![
+                InputEvent::Pointer(point, 1),
+                InputEvent::Key(KeyboardKey::CtrlLeft, true),
+                InputEvent::Pointer(point, 0),
+                InputEvent::Key(KeyboardKey::CtrlLeft, false),
+            ]
+        );
+        assert!(!client.snapshot().fatal_exit);
+
+        worker
+            .shutdown(Duration::from_secs(1))
+            .expect("worker joins");
     }
 }
