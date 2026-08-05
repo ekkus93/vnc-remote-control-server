@@ -146,13 +146,7 @@ jobs:
         run: cargo deny check
 
       - name: Scan complete Git history for secrets
-        run: >-
-          gitleaks git .
-          --redact
-          --no-banner
-          --exit-code 1
-          --report-format json
-          --report-path artifacts/static-policy/gitleaks-report.json
+        run: gitleaks git . --redact --no-banner --exit-code 1 --report-format json --report-path artifacts/static-policy/gitleaks-report.json
 
       - name: Upload static-policy evidence
         if: ${{ always() }}
