@@ -1,0 +1,125 @@
+name: Commit R16 Cargo Fixes
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/commit-r16-cargo-fixes.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: commit-r16-cargo-fixes
+  cancel-in-progress: false
+
+jobs:
+  commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+
+      - name: Install pinned build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libvncserver-dev \
+            pkg-config
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+
+      - name: Reproduce and validate ordinary fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "Cargo.toml",
+              'tracing-subscriber = { version = "=0.3.19",',
+              'tracing-subscriber = { version = "=0.3.20",',
+          )
+          replace_once(
+              "crates/controller-api/Cargo.toml",
+              'libvnc-adapter = { path = "../libvnc-adapter" }',
+              'libvnc-adapter = { version = "=0.1.0", path = "../libvnc-adapter" }',
+          )
+          replace_once(
+              "crates/controller-api/Cargo.toml",
+              'remote-desktop-core = { path = "../remote-desktop-core" }',
+              'remote-desktop-core = { version = "=0.1.0", path = "../remote-desktop-core" }',
+          )
+          replace_once(
+              "crates/libvnc-adapter/Cargo.toml",
+              'remote-desktop-core = { path = "../remote-desktop-core" }',
+              'remote-desktop-core = { version = "=0.1.0", path = "../remote-desktop-core" }',
+          )
+          replace_once("deny.toml", '  "ISC",\n', "")
+
+          old_policy = (
+              "Miri disables only Proptest's filesystem failure-persistence feature because "
+              "Miri does not support that host filesystem attachment path. Test generation, "
+              "shrinking, assertions, and the complete pure-Rust core test target remain enabled."
+          )
+          new_policy = (
+              "Miri runs the pure-Rust core test target with `-Zmiri-disable-isolation` because "
+              "Proptest resolves failure-persistence paths through the host current working directory. "
+              "This permits host filesystem and environment access but does not disable Miri's "
+              "undefined-behavior, validity, provenance, leak, or data-race checks. The Miri target "
+              "contains no native FFI or network operations. Test generation, shrinking, assertions, "
+              "and the complete pure-Rust core test target remain enabled."
+          )
+          replace_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md",
+              old_policy,
+              new_policy,
+          )
+          replace_once(
+              "tests/test_release_policy_contract.py",
+              '"PROPTEST_DISABLE_FAILURE_PERSISTENCE: \\"1\\"",',
+              '"MIRIFLAGS: -Zmiri-disable-isolation",',
+          )
+          PY
+
+          cargo update -p tracing-subscriber --precise 0.3.20
+          cargo test --locked --workspace --all-features
+          cargo install cargo-deny --locked --version 0.19.7
+          cargo deny check
+          python3 -m unittest discover -s tests -p 'test_trivy_critical_vex.py' -v
+          git diff --check
+
+      - name: Commit ordinary fixes directly to master
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ekkus93'
+          git config user.email '1386709+ekkus93@users.noreply.github.com'
+          git add \
+            Cargo.toml \
+            Cargo.lock \
+            crates/controller-api/Cargo.toml \
+            crates/libvnc-adapter/Cargo.toml \
+            deny.toml \
+            docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md \
+            tests/test_release_policy_contract.py
+          git diff --cached --check
+          git commit -m 'Fix Cargo policy and Miri gate configuration'
+          git push origin HEAD:master
