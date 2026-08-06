@@ -9,6 +9,7 @@ use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint};
 use std::fmt;
 use std::ptr::NonNull;
+use std::sync::atomic::{Ordering, compiler_fence};
 use std::time::Duration;
 
 const STATUS_OK: c_int = 0;
@@ -79,6 +80,54 @@ unsafe extern "C" {
     fn vrc_client_destroy(client: *mut VrcClient);
 }
 
+/// Heap-owned UTF-8 secret that scrubs its project-owned allocation on drop.
+///
+/// This type intentionally does not implement `Debug` or `Display`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SecretString(String);
+
+impl SecretString {
+    /// Creates one project-owned secret value.
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Exposes the secret only to the narrow native connection boundary.
+    pub fn expose_secret(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for SecretString {
+    fn from(value: &str) -> Self {
+        Self::new(value.to_owned())
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        // SAFETY: replacing UTF-8 bytes with NUL preserves UTF-8 validity and
+        // the string is not observed again after Drop starts.
+        let bytes = unsafe { self.0.as_mut_vec() };
+        secure_scrub(bytes);
+    }
+}
+
+fn secure_scrub(bytes: &mut [u8]) {
+    for byte in bytes {
+        // SAFETY: every pointer originates from the live mutable slice and is
+        // written exactly once while exclusively borrowed.
+        unsafe { std::ptr::write_volatile(byte, 0) };
+    }
+    compiler_fence(Ordering::SeqCst);
+}
+
 /// Configuration copied into one native client.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NativeClientConfig {
@@ -86,8 +135,8 @@ pub struct NativeClientConfig {
     pub host: String,
     /// Raw VNC TCP port.
     pub port: u16,
-    /// VNC password. `Debug` is intentionally not implemented.
-    pub password: String,
+    /// VNC password. `Debug` and `Display` are intentionally not implemented.
+    pub password: SecretString,
     /// Connect timeout in whole seconds.
     pub connect_timeout: Duration,
     /// Read timeout in whole seconds.
@@ -192,7 +241,7 @@ pub struct NativeFramebuffer {
     pub height: u32,
     /// Native framebuffer revision.
     pub revision: u64,
-    /// Raw LibVNCClient bytes. Canonical RGBA conversion is a later layer.
+    /// Negotiated native bytes in `[R, G, B, X]` order.
     pub bytes: Vec<u8>,
 }
 
@@ -214,21 +263,26 @@ impl NativeClient {
     /// Allocates and authenticates one native VNC client.
     pub fn connect(config: &NativeClientConfig) -> Result<Self, NativeError> {
         let host = CString::new(config.host.as_str()).map_err(|_| NativeError::EmbeddedNul)?;
-        let password =
-            CString::new(config.password.as_str()).map_err(|_| NativeError::EmbeddedNul)?;
+        let secret = config.password.expose_secret().as_bytes();
+        if secret.contains(&0) {
+            return Err(NativeError::EmbeddedNul);
+        }
+        let mut password = secret.to_vec();
+        password.push(0);
         let connect_timeout = whole_seconds(config.connect_timeout)?;
         let read_timeout = whole_seconds(config.read_timeout)?;
 
-        // SAFETY: both C strings remain valid for the call; the shim copies them.
+        // SAFETY: both buffers remain valid for the call; the shim copies them.
         let pointer = unsafe {
             vrc_client_create(
                 host.as_ptr(),
                 c_int::from(config.port),
-                password.as_ptr(),
+                password.as_ptr().cast::<c_char>(),
                 connect_timeout,
                 read_timeout,
             )
         };
+        secure_scrub(&mut password);
         let pointer = NonNull::new(pointer).ok_or(NativeError::AllocationFailed)?;
         let client = Self { pointer };
 
@@ -473,11 +527,18 @@ mod tests {
     }
 
     #[test]
+    fn secure_scrub_overwrites_live_buffer() {
+        let mut secret = b"password-sentinel".to_vec();
+        secure_scrub(&mut secret);
+        assert!(secret.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn native_configuration_rejects_embedded_nul_without_connecting() {
         let config = NativeClientConfig {
             host: "desk\0top".to_owned(),
             port: 5901,
-            password: "secret".to_owned(),
+            password: SecretString::from("secret"),
             connect_timeout: Duration::from_secs(2),
             read_timeout: Duration::from_secs(2),
         };
