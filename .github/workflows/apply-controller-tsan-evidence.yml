@@ -25,39 +25,29 @@ jobs:
 
           path = Path('.github/workflows/release-gates.yml')
           text = path.read_text()
-          old = (
-              '      - name: Run controller concurrency tests under ThreadSanitizer\n'
-              '        env:\n'
-              '          CARGO_TARGET_DIR: target/tsan-controller\n'
-              '          RUSTFLAGS: -Zsanitizer=thread\n'
-              '          TSAN_OPTIONS: halt_on_error=1\n'
-              '        run: >-\n'
-              '          cargo +nightly-2026-08-01 -Zbuild-std test\n'
-              '          --target x86_64-unknown-linux-gnu\n'
-              '          --locked\n'
-              '          --package controller-api\n'
-              '          --lib\n'
-          )
-          new = (
-              '      - name: Run controller concurrency tests under ThreadSanitizer\n'
-              '        env:\n'
-              '          CARGO_TARGET_DIR: target/tsan-controller\n'
-              '          RUSTFLAGS: -Zsanitizer=thread\n'
-              '          TSAN_OPTIONS: halt_on_error=1\n'
-              '        shell: bash\n'
-              '        run: |\n'
-              '          set -euo pipefail\n'
-              '          cargo +nightly-2026-08-01 -Zbuild-std test \\\n'
-              '            --target x86_64-unknown-linux-gnu \\\n'
-              '            --locked \\\n'
-              '            --package controller-api \\\n'
-              '            --lib \\\n'
-              '            2>&1 | tee artifacts/native-safety/controller-tsan.log\n'
-          )
-          if text.count(old) != 1:
-              raise SystemExit('controller TSan step marker mismatch')
-          path.write_text(text.replace(old, new, 1))
+          start_marker = '      - name: Run controller concurrency tests under ThreadSanitizer\n'
+          end_marker = '      - name: Run core shared-state tests under ThreadSanitizer\n'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''      - name: Run controller concurrency tests under ThreadSanitizer
+        env:
+          CARGO_TARGET_DIR: target/tsan-controller
+          RUSTFLAGS: -Zsanitizer=thread
+          TSAN_OPTIONS: halt_on_error=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-08-01 -Zbuild-std test \
+            --target x86_64-unknown-linux-gnu \
+            --locked \
+            --package controller-api \
+            --lib \
+            2>&1 | tee artifacts/native-safety/controller-tsan.log
+
+'''
+          path.write_text(text[:start] + replacement + text[end:])
           PY
+          grep -q 'controller-tsan.log' .github/workflows/release-gates.yml
           git diff --check
       - name: Commit and remove workflow
         shell: bash
