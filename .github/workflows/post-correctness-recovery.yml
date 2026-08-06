@@ -12,12 +12,12 @@ permissions:
 
 concurrency:
   group: post-correctness-recovery-master
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   recover:
     name: Apply and validate recovery
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
 
     steps:
