@@ -7,7 +7,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = (
     ROOT / ".github/post-correctness-recovery.py",
     ROOT / ".github/post-correctness-recovery-boundary-fix.py",
-    ROOT / ".github/post-correctness-recovery-api-fix.py",
 )
 texts: dict[str, str] = {}
 
