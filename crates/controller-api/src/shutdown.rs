@@ -1,8 +1,9 @@
 //! Bounded process-level shutdown coordination.
 //!
 //! HTTP termination, worker shutdown, and event-bridge shutdown are treated as
-//! separate cleanup surfaces. Every bounded cleanup attempt runs before the
-//! deterministic primary error is returned.
+//! separate cleanup surfaces. Worker and bridge cleanup share one total budget,
+//! and every bounded cleanup attempt runs before the deterministic primary error
+//! is returned.
 
 use crate::events::{EventBridge, EventBridgeError};
 use crate::worker::DesktopWorker;
@@ -10,18 +11,22 @@ use remote_desktop_core::DesktopError;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Coordinates bounded worker and event-bridge cleanup after the HTTP runtime
 /// has stopped accepting and draining requests.
+///
+/// `timeout` is one total budget. The worker receives the initial budget and
+/// the event bridge receives only the remainder after the worker phase.
 pub fn finalize_runtime(
     server_result: io::Result<()>,
     worker: DesktopWorker,
     event_bridge: EventBridge,
     timeout: Duration,
 ) -> Result<(), ProcessShutdownError> {
+    let started = Instant::now();
     let worker_result = worker.shutdown(timeout);
-    let bridge_result = event_bridge.shutdown(timeout);
+    let bridge_result = event_bridge.shutdown(timeout.saturating_sub(started.elapsed()));
 
     match server_result {
         Err(error) => {
