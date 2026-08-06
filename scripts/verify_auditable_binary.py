@@ -14,7 +14,7 @@ from typing import Any, NoReturn
 
 SECTION_NAME = ".dep-v0"
 MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024
-KNOWN_SOURCES = {"CratesIo", "Git", "Local", "Registry"}
+STANDARD_SOURCES = {"crates.io", "git", "local", "registry"}
 KNOWN_KINDS = {"build", "runtime"}
 
 
@@ -63,16 +63,11 @@ def decompress_metadata(compressed: bytes) -> bytes:
 
 
 def validate_source(source: Any, index: int) -> None:
-    if isinstance(source, str) and source in KNOWN_SOURCES:
-        return
-    if (
-        isinstance(source, dict)
-        and set(source) == {"Other"}
-        and isinstance(source["Other"], str)
-        and source["Other"]
-    ):
-        return
-    fail(f"package {index} has an invalid source")
+    # auditable-serde serializes Source as a string. The four standard values are
+    # crates.io, git, local, and registry, but the upstream enum is deliberately
+    # extensible, so any non-empty string is structurally valid.
+    if not isinstance(source, str) or not source:
+        fail(f"package {index} has an invalid source")
 
 
 def validate_metadata(metadata: Any, expected_root: str) -> tuple[list[dict[str, Any]], int]:
@@ -191,6 +186,9 @@ def main() -> None:
             "version": root["version"],
             "source": root["source"],
         },
+        "standard_source_package_count": sum(
+            package["source"] in STANDARD_SOURCES for package in packages
+        ),
         "metadata": metadata,
     }
 
