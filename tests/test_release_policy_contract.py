@@ -67,9 +67,15 @@ class ReleasePolicyContractTests(unittest.TestCase):
         text = AUDITABLE_VERIFIER.read_text(encoding="utf-8")
         self.assertIn('SECTION_NAME = ".dep-v0"', text)
         self.assertIn("MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024", text)
+        self.assertIn(
+            'STANDARD_SOURCES = {"crates.io", "git", "local", "registry"}',
+            text,
+        )
+        self.assertIn("if not isinstance(source, str) or not source:", text)
         self.assertIn("expected exactly one root package", text)
         self.assertIn("dependency graph contains a cycle", text)
         self.assertIn("binary_sha256", text)
+        self.assertNotIn('"CratesIo"', text)
         self.assertNotIn("except Exception", text)
 
     def test_cache_and_actions_are_immutably_pinned(self):
