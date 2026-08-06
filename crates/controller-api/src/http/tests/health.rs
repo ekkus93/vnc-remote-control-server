@@ -79,6 +79,30 @@ async fn protected_routes_use_one_generic_bearer_failure() {
 }
 
 #[tokio::test]
+async fn websocket_initial_snapshot_sequence_exhaustion_fails_before_upgrade() {
+    let state = test_state(true, MockScreenshot::Png);
+    state.events.force_sequence_for_test(u64::MAX);
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            request("/v1/events")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                .body(Body::empty())
+                .expect("websocket request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], "event_sequence_exhausted");
+}
+
+#[tokio::test]
 async fn accepted_request_id_is_returned_in_error_header_and_body() {
     let app = router(test_state(true, MockScreenshot::Png));
     let response = app
