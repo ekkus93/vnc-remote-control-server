@@ -104,12 +104,16 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 .ok_or(DesktopError::WorkerUnavailable)?
                 .framebuffer()?;
             validate_native_frame(display, &native)?;
-            let revision =
-                self.framebuffer
-                    .replace_native_rgbx(native.width, native.height, &native.bytes)?;
+            let revision = self
+                .framebuffer
+                .replace_native_rgbx(native.width, native.height, &native.bytes)?;
             self.last_native_revision = Some(native.revision);
-            lock_unpoisoned(self.snapshot).framebuffer_revision = Some(revision);
-            self.publish(DesktopEventKind::FramebufferRevision { revision });
+            let mut snapshot = lock_unpoisoned(self.snapshot);
+            let previous_revision = snapshot.framebuffer_revision.replace(revision);
+            drop(snapshot);
+            if previous_revision != Some(revision) {
+                self.publish(DesktopEventKind::FramebufferRevision { revision });
+            }
         }
 
         if display.complete
