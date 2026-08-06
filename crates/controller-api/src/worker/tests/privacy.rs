@@ -1,6 +1,7 @@
 use super::*;
 use crate::framebuffer::FramebufferStore;
 use crate::input::InputController;
+use crate::worker::WorkerFailureKind;
 use libvnc_adapter::{
     NativeClipboard, NativeDisplayInfo, NativeError, NativeFramebuffer, PollOutcome,
 };
