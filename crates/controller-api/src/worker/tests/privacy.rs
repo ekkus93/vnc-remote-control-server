@@ -151,7 +151,7 @@ fn native_failure_json_logs_exclude_vnc_password_sentinel() {
     let mut config = settings();
     config.native.password = SecretString::from(PASSWORD_SENTINEL);
 
-    let ((), records) = crate::test_support::capture_json_logs(|| {
+    let (failure_snapshot, records) = crate::test_support::capture_json_logs(|| {
         let worker = DesktopWorker::spawn_with_factory(config, || {
             Err::<MockSession, _>(NativeError::NativeFailure {
                 message: format!("VNC protocol initialization failed: {PASSWORD_SENTINEL}"),
@@ -160,14 +160,25 @@ fn native_failure_json_logs_exclude_vnc_password_sentinel() {
         .expect("worker spawns");
         let client = worker.client();
         wait_for_state(&client, ConnectionState::AuthenticationFailed);
+        let failure_snapshot = client.snapshot();
         worker
             .shutdown(Duration::from_secs(1))
             .expect("worker joins after authentication failure");
+        failure_snapshot
     });
 
+    assert_eq!(failure_snapshot.state, ConnectionState::AuthenticationFailed);
+    assert_eq!(
+        failure_snapshot.last_failure,
+        Some(WorkerFailureKind::Authentication)
+    );
     assert!(crate::test_support::json_logs_contain(
         &records,
-        "worker_failure_recorded"
+        "worker_state_transition"
+    ));
+    assert!(crate::test_support::json_logs_contain(
+        &records,
+        "AuthenticationFailed"
     ));
     assert!(
         !crate::test_support::json_logs_contain(&records, PASSWORD_SENTINEL),
