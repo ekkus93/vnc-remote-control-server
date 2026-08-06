@@ -24,6 +24,15 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 const EVENT_BRIDGE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const EVENT_BRIDGE_DROP_TIMEOUT: Duration = Duration::from_secs(2);
 
+struct EventBridgeStartSettings {
+    event_capacity: usize,
+    maximum_clients: usize,
+    ping_interval: Duration,
+    idle_timeout: Duration,
+    metrics: Metrics,
+    drop_timeout: Duration,
+}
+
 /// Process-wide WebSocket event transport.
 #[derive(Clone)]
 pub struct EventHub {
@@ -47,29 +56,34 @@ impl EventHub {
     ) -> io::Result<(Self, EventBridge)> {
         Self::start_with_hook(
             worker_events,
-            event_capacity,
-            maximum_clients,
-            ping_interval,
-            idle_timeout,
-            metrics,
+            EventBridgeStartSettings {
+                event_capacity,
+                maximum_clients,
+                ping_interval,
+                idle_timeout,
+                metrics,
+                drop_timeout: EVENT_BRIDGE_DROP_TIMEOUT,
+            },
             || {},
-            EVENT_BRIDGE_DROP_TIMEOUT,
         )
     }
 
     fn start_with_hook<H>(
         worker_events: WorkerEvents,
-        event_capacity: usize,
-        maximum_clients: usize,
-        ping_interval: Duration,
-        idle_timeout: Duration,
-        metrics: Metrics,
+        settings: EventBridgeStartSettings,
         before_loop: H,
-        drop_timeout: Duration,
     ) -> io::Result<(Self, EventBridge)>
     where
         H: FnOnce() + Send + 'static,
     {
+        let EventBridgeStartSettings {
+            event_capacity,
+            maximum_clients,
+            ping_interval,
+            idle_timeout,
+            metrics,
+            drop_timeout,
+        } = settings;
         let hub = Self::detached(
             event_capacity,
             maximum_clients,
@@ -639,15 +653,17 @@ mod tests {
         let ((result, elapsed), logs) = crate::test_support::capture_logs(|| {
             let (_hub, bridge) = EventHub::start_with_hook(
                 worker_events,
-                4,
-                2,
-                Duration::from_secs(1),
-                Duration::from_secs(3),
-                Metrics::default(),
+                EventBridgeStartSettings {
+                    event_capacity: 4,
+                    maximum_clients: 2,
+                    ping_interval: Duration::from_secs(1),
+                    idle_timeout: Duration::from_secs(3),
+                    metrics: Metrics::default(),
+                    drop_timeout: Duration::from_millis(25),
+                },
                 move || {
                     let _ = release_rx.recv();
                 },
-                Duration::from_millis(25),
             )
             .expect("bridge starts");
             let started = std::time::Instant::now();
@@ -667,13 +683,15 @@ mod tests {
         let (result, logs) = crate::test_support::capture_logs(|| {
             let (_hub, bridge) = EventHub::start_with_hook(
                 worker_events,
-                4,
-                2,
-                Duration::from_secs(1),
-                Duration::from_secs(3),
-                Metrics::default(),
+                EventBridgeStartSettings {
+                    event_capacity: 4,
+                    maximum_clients: 2,
+                    ping_interval: Duration::from_secs(1),
+                    idle_timeout: Duration::from_secs(3),
+                    metrics: Metrics::default(),
+                    drop_timeout: Duration::from_millis(25),
+                },
                 || panic!("test-only bridge panic"),
-                Duration::from_millis(25),
             )
             .expect("bridge starts");
             bridge.shutdown(Duration::from_secs(1))
@@ -690,15 +708,17 @@ mod tests {
         let ((elapsed, done), logs) = crate::test_support::capture_logs(|| {
             let (_hub, bridge) = EventHub::start_with_hook(
                 worker_events,
-                4,
-                2,
-                Duration::from_secs(1),
-                Duration::from_secs(3),
-                Metrics::default(),
+                EventBridgeStartSettings {
+                    event_capacity: 4,
+                    maximum_clients: 2,
+                    ping_interval: Duration::from_secs(1),
+                    idle_timeout: Duration::from_secs(3),
+                    metrics: Metrics::default(),
+                    drop_timeout: Duration::from_millis(25),
+                },
                 move || {
                     let _ = release_rx.recv();
                 },
-                Duration::from_millis(25),
             )
             .expect("bridge starts");
             let dispatch = crate::test_support::current_dispatch();
