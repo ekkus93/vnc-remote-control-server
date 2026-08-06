@@ -2,7 +2,7 @@
 
 Date: 2026-08-06
 
-Status: implementation complete; final exact-SHA evidence validation in progress.
+Status: implementation and evidence complete; exact final-tip workflow results are recorded externally because a commit cannot embed its own future SHA or run IDs.
 
 Implementation candidate source tree before this anchor: `1081f645b57a1a4b460e1560f5454b2467399c8d`.
 

@@ -6,8 +6,18 @@ Utility:
 
 - `crates/controller-api/tests/framebuffer_measurement.rs`
 - `crates/controller-api/tests/FRAMEBUFFER_MEASUREMENT.md`
+- `tests/measurement/framebuffer/run.py`
+- `tests/measurement/framebuffer/README.md`
 
-## Exact command
+## Exact commands
+
+Convenience launcher:
+
+```bash
+python3 tests/measurement/framebuffer/run.py
+```
+
+Direct Cargo command:
 
 ```bash
 cargo test --locked \
