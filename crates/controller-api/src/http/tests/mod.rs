@@ -23,6 +23,7 @@ mod access_log_and_validation;
 mod commands;
 mod display_and_screenshot;
 mod health;
+mod privacy;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum MockScreenshot {
