@@ -39,7 +39,7 @@ class ReleasePolicyContractTests(unittest.TestCase):
             "shellcheck\n",
             "docker build --check desktop",
             "docker build --check -f controller/Dockerfile .",
-            "docker compose -f deploy/docker-compose.yml config --quiet",
+            "docker compose -f deploy/compose.yaml config --quiet",
             "gitleaks git\n",
             "--report-path artifacts/static-policy/gitleaks.json",
             "--redact",
@@ -56,6 +56,7 @@ class ReleasePolicyContractTests(unittest.TestCase):
         for value in required:
             with self.subTest(value=value):
                 self.assertIn(value, text)
+        self.assertNotIn("deploy/docker-compose.yml", text)
         self.assertNotIn("--config .gitleaks.toml", text)
         self.assertNotIn("continue-on-error: true", text)
         self.assertNotIn("--ignore-unfixed", text)
