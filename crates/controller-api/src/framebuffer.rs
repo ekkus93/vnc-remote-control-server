@@ -1,9 +1,11 @@
 //! Canonical RGBA8 framebuffer storage and coherent snapshot semantics.
 //!
 //! The store has one process-local revision sequence. A revision increments
-//! exactly once after a complete full-frame replacement or one atomic dirty-
-//! rectangle batch commits. Invalidation does not increment the revision; it
-//! changes availability to stale so old pixels cannot be served as current.
+//! exactly once after framebuffer contents or availability become a new current
+//! complete frame. Byte-identical full-frame replacements keep the existing
+//! revision so HTTP validators do not churn on duplicate native updates.
+//! Invalidation does not increment the revision; it changes availability to
+//! stale so old pixels cannot be served as current.
 //! Snapshot creation clones an `Arc` while holding a read lock and releases the
 //! lock before callers perform expensive work such as PNG encoding.
 
@@ -268,6 +270,9 @@ impl FramebufferStore {
     }
 
     /// Replaces the current frame with one complete canonical RGBA8 image.
+    ///
+    /// A byte-identical replacement for an already-current frame returns the
+    /// existing revision without updating timestamps or advancing validators.
     pub fn replace_rgba(
         &self,
         width: u32,
@@ -279,6 +284,13 @@ impl FramebufferStore {
             return Err(FramebufferError::InvalidBufferLength);
         }
         let mut current = write_unpoisoned(&self.inner);
+        if current.status == FramebufferStatus::Current
+            && current.width == Some(width)
+            && current.height == Some(height)
+            && current.rgba.as_ref() == rgba.as_slice()
+        {
+            return Ok(current.revision);
+        }
         let revision = next_revision(current.revision)?;
         current.status = FramebufferStatus::Current;
         current.width = Some(width);
@@ -687,6 +699,18 @@ mod tests {
         assert!(second.rgba().iter().all(|value| *value == 2));
         assert_eq!(first.revision(), 1);
         assert_eq!(second.revision(), 2);
+    }
+
+    #[test]
+    fn identical_full_frame_replacement_keeps_revision_and_timestamp() {
+        let store = FramebufferStore::default();
+        assert_eq!(store.replace_rgba(2, 2, solid(2, 2, 7)), Ok(1));
+        let first = store.current_snapshot().expect("first snapshot");
+        assert_eq!(store.replace_rgba(2, 2, solid(2, 2, 7)), Ok(1));
+        let second = store.current_snapshot().expect("second snapshot");
+        assert_eq!(second.revision(), first.revision());
+        assert_eq!(second.updated_at(), first.updated_at());
+        assert_eq!(second.rgba(), first.rgba());
     }
 
     #[test]
