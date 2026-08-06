@@ -96,12 +96,31 @@ port_mapping="$(docker port "$container_name" 5901/tcp)"
 host_port="${port_mapping##*:}"
 [[ "$host_port" =~ ^[0-9]+$ ]] || fail "could not resolve dynamically published VNC port"
 
-log "starting production WorkerClient text and clipboard driver"
+read -r red_x red_y blue_x blue_y < <(
+    docker exec -i "$container_name" python3 - <<'PY'
+import json
+from pathlib import Path
+
+state = json.loads(Path('/tmp/vnc-test-app-state.json').read_text(encoding='utf-8'))
+red = state['swatches']['red']
+blue = state['swatches']['blue']
+print(red['x'], red['y'], blue['x'], blue['y'])
+PY
+)
+for coordinate in "$red_x" "$red_y" "$blue_x" "$blue_y"; do
+    [[ "$coordinate" =~ ^[0-9]+$ ]] || fail "invalid deterministic swatch coordinate"
+done
+
+log "starting production WorkerClient text, clipboard, and RGBX driver"
 driver_log="$temporary_directory/worker-text-clipboard-e2e.log"
 timeout --kill-after=5s 70s env \
     VRC_VNC_HOST=127.0.0.1 \
     VRC_VNC_PORT="$host_port" \
     VRC_VNC_PASSWORD_FILE="$temporary_directory/vnc_password" \
+    VRC_RED_SWATCH_X="$red_x" \
+    VRC_RED_SWATCH_Y="$red_y" \
+    VRC_BLUE_SWATCH_X="$blue_x" \
+    VRC_BLUE_SWATCH_Y="$blue_y" \
     cargo run --locked --quiet -p controller-api --bin worker-text-clipboard-e2e \
     >"$driver_log" 2>&1 &
 driver_pid=$!
@@ -185,6 +204,10 @@ driver_pid=""
     fail "worker text/clipboard driver exited with status $driver_status"
 }
 
+grep -Fq 'worker_rgbx_color_proof=1' "$driver_log" || {
+    cat "$driver_log" >&2
+    fail "worker text/clipboard driver did not publish RGBX proof marker"
+}
 grep -Fq 'worker_text_clipboard_e2e_complete=1' "$driver_log" || {
     cat "$driver_log" >&2
     fail "worker text/clipboard driver did not publish completion marker"
@@ -210,4 +233,4 @@ for forbidden in \
 done
 
 cat "$driver_log"
-log "WorkerHandle TigerVNC text and clipboard E2E test passed"
+log "WorkerHandle TigerVNC text, clipboard, and RGBX E2E test passed"
