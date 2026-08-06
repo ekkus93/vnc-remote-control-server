@@ -177,11 +177,20 @@ pub(super) fn run_worker<F, S>(
                     state.record_failure(failure);
                     match failure {
                         WorkerFailureKind::Authentication => {
-                            let _ = state.transition(ConnectionState::AuthenticationFailed);
+                            if state
+                                .transition(ConnectionState::AuthenticationFailed)
+                                .is_err()
+                            {
+                                break;
+                            }
                             state.next_connect = None;
                         }
                         WorkerFailureKind::Configuration => {
-                            let _ = state.transition(ConnectionState::Stopped);
+                            if state.transition(ConnectionState::Stopped).is_err() {
+                                tracing::error!(
+                                    "desktop_worker_configuration_stop_transition_failed"
+                                );
+                            }
                             break;
                         }
                         _ => state.schedule_reconnect(),
@@ -240,8 +249,15 @@ pub(super) fn run_worker<F, S>(
     // receives `Disconnected` and drops its returned permit as well.
     drop(commands);
     state.invalidate();
-    let _ = state.transition(ConnectionState::Stopped);
-    if !orderly_shutdown {
+    let final_transition_failed = if lock_unpoisoned(&snapshot).state == ConnectionState::Stopped {
+        false
+    } else if state.transition(ConnectionState::Stopped).is_err() {
+        tracing::error!("desktop_worker_final_stop_transition_failed");
+        true
+    } else {
+        false
+    };
+    if !orderly_shutdown || final_transition_failed {
         lock_unpoisoned(&snapshot).fatal_exit = true;
     }
 }
