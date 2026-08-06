@@ -4,6 +4,7 @@
 //! select secret file paths but never contain secret values. `Debug` output is
 //! implemented manually and omits both secret values.
 
+use crate::events::MIN_PROCESS_SHUTDOWN_TIMEOUT_MS;
 use crate::worker::WorkerSettings;
 use libvnc_adapter::{NativeClientConfig, SecretString};
 use remote_desktop_core::{DesktopError, MAX_FRAMEBUFFER_BYTES};
@@ -25,6 +26,7 @@ const DEFAULT_COMMAND_CAPACITY: usize = 64;
 const DEFAULT_EVENT_CAPACITY: usize = 256;
 const DEFAULT_MAXIMUM_JSON_BYTES: usize = 1024 * 1024;
 const DEFAULT_COMMAND_ACK_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_SCREENSHOT_CONCURRENCY: usize = 2;
 const DEFAULT_SCREENSHOT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_WEBSOCKET_EVENT_CAPACITY: usize = 256;
@@ -58,6 +60,8 @@ pub struct ControllerConfig {
     pub maximum_json_bytes: usize,
     /// Maximum wait for worker command completion.
     pub command_ack_timeout: Duration,
+    /// One total budget shared by worker and event-bridge process cleanup.
+    pub shutdown_timeout: Duration,
     /// Maximum simultaneous screenshot encodes.
     pub screenshot_concurrency: usize,
     /// Screenshot encode deadline.
@@ -83,6 +87,7 @@ impl fmt::Debug for ControllerConfig {
             .field("process_instance", &self.process_instance)
             .field("maximum_json_bytes", &self.maximum_json_bytes)
             .field("command_ack_timeout", &self.command_ack_timeout)
+            .field("shutdown_timeout", &self.shutdown_timeout)
             .field("screenshot_concurrency", &self.screenshot_concurrency)
             .field("screenshot_timeout", &self.screenshot_timeout)
             .field("websocket_event_capacity", &self.websocket_event_capacity)
@@ -148,6 +153,14 @@ impl ControllerConfig {
             "VRC_COMMAND_ACK_TIMEOUT_MS",
             DEFAULT_COMMAND_ACK_TIMEOUT_MS,
         )?;
+        let shutdown_timeout = parse_duration_ms(
+            environment,
+            "VRC_SHUTDOWN_TIMEOUT_MS",
+            DEFAULT_SHUTDOWN_TIMEOUT_MS,
+        )?;
+        if shutdown_timeout < Duration::from_millis(MIN_PROCESS_SHUTDOWN_TIMEOUT_MS) {
+            return Err(ConfigError::InvalidValue("VRC_SHUTDOWN_TIMEOUT_MS"));
+        }
         let screenshot_concurrency = parse_bounded_usize(
             environment,
             "VRC_SCREENSHOT_MAX_CONCURRENT",
@@ -284,6 +297,7 @@ impl ControllerConfig {
             process_instance: Arc::from(process_instance),
             maximum_json_bytes,
             command_ack_timeout,
+            shutdown_timeout,
             screenshot_concurrency,
             screenshot_timeout,
             websocket_event_capacity,
@@ -536,6 +550,7 @@ mod tests {
         assert_eq!(config.worker.native.host, "desktop");
         assert_eq!(config.worker.native.port, 5901);
         assert_eq!(config.maximum_json_bytes, 1024 * 1024);
+        assert_eq!(config.shutdown_timeout, Duration::from_secs(5));
 
         let debug = format!("{config:?}");
         assert!(!debug.contains("api-token"));
@@ -553,6 +568,7 @@ mod tests {
             ("VRC_VNC_PORT".to_owned(), "5999".to_owned()),
             ("VRC_COMMAND_CAPACITY".to_owned(), "8".to_owned()),
             ("VRC_EVENT_CAPACITY".to_owned(), "9".to_owned()),
+            ("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "750".to_owned()),
             ("VRC_WEBSOCKET_EVENT_CAPACITY".to_owned(), "10".to_owned()),
             ("VRC_WEBSOCKET_MAX_CLIENTS".to_owned(), "3".to_owned()),
             (
@@ -578,6 +594,7 @@ mod tests {
         assert_eq!(config.worker.native.port, 5999);
         assert_eq!(config.worker.command_capacity, 8);
         assert_eq!(config.worker.event_capacity, 9);
+        assert_eq!(config.shutdown_timeout, Duration::from_millis(750));
         assert_eq!(config.websocket_event_capacity, 10);
         assert_eq!(config.websocket_max_clients, 3);
         assert_eq!(config.websocket_ping_interval, Duration::from_secs(1));
@@ -597,11 +614,31 @@ mod tests {
             ("VRC_WEBSOCKET_MAX_CLIENTS", "0"),
             ("VRC_WEBSOCKET_PING_INTERVAL_MS", "0"),
             ("VRC_COMMAND_ACK_TIMEOUT_MS", "0"),
+            ("VRC_SHUTDOWN_TIMEOUT_MS", "499"),
             ("VRC_RECONNECT_JITTER_PER_MILLE", "501"),
         ] {
             let environment = MapEnvironment(HashMap::from([(name.to_owned(), value.to_owned())]));
             assert!(ControllerConfig::load_from(&environment, &secrets()).is_err());
         }
+    }
+
+    #[test]
+    fn process_shutdown_timeout_floor_is_accepted_and_below_floor_is_rejected() {
+        let below = MapEnvironment(HashMap::from([(
+            "VRC_SHUTDOWN_TIMEOUT_MS".to_owned(),
+            (MIN_PROCESS_SHUTDOWN_TIMEOUT_MS - 1).to_string(),
+        )]));
+        assert!(ControllerConfig::load_from(&below, &secrets()).is_err());
+
+        let floor = MapEnvironment(HashMap::from([(
+            "VRC_SHUTDOWN_TIMEOUT_MS".to_owned(),
+            MIN_PROCESS_SHUTDOWN_TIMEOUT_MS.to_string(),
+        )]));
+        let config = ControllerConfig::load_from(&floor, &secrets()).expect("floor is valid");
+        assert_eq!(
+            config.shutdown_timeout,
+            Duration::from_millis(MIN_PROCESS_SHUTDOWN_TIMEOUT_MS)
+        );
     }
 
     #[test]
