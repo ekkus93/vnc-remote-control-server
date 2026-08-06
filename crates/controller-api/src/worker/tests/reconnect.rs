@@ -82,13 +82,17 @@ fn authentication_failure_waits_for_manual_reconnect() {
 fn confirmed_stall_invalidates_reconnects_and_advances_revision() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_factory = Arc::clone(&calls);
+    let (factory_call_tx, factory_call_rx) = sync_channel(4);
     let modes = Arc::new(Mutex::new(VecDeque::from([
         MockMode::FirstMessageThenStall(false),
         MockMode::Healthy,
     ])));
     let modes_for_factory = Arc::clone(&modes);
     let worker = DesktopWorker::spawn_with_factory(settings(), move || {
-        calls_for_factory.fetch_add(1, Ordering::SeqCst);
+        let invocation = calls_for_factory.fetch_add(1, Ordering::SeqCst);
+        factory_call_tx
+            .send(invocation)
+            .expect("factory invocation remains observable");
         let mode = lock_unpoisoned(&modes_for_factory)
             .pop_front()
             .unwrap_or(MockMode::Healthy);
@@ -98,10 +102,20 @@ fn confirmed_stall_invalidates_reconnects_and_advances_revision() {
     })
     .expect("worker spawns");
     let client = worker.client();
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < deadline && calls.load(Ordering::SeqCst) < 2 {
-        thread::yield_now();
-    }
+
+    assert_eq!(
+        factory_call_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("initial factory invocation is observed"),
+        0
+    );
+    assert_eq!(
+        factory_call_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("stall reconnect factory invocation is observed"),
+        1
+    );
+
     assert!(calls.load(Ordering::SeqCst) >= 2);
     wait_for_state(&client, ConnectionState::Connected);
     assert_eq!(client.framebuffer_snapshot().expect("frame").revision(), 2);
