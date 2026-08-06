@@ -13,8 +13,8 @@ use std::time::{Duration, Instant, SystemTime};
 use super::super::loop_state::LoopState;
 use super::super::snapshot::{WorkerEvent, WorkerSnapshot};
 
-const X_SENTINEL: u32 = 1_234_567;
-const Y_SENTINEL: u32 = 1_345_678;
+const X_SENTINEL: u32 = 3_001;
+const Y_SENTINEL: u32 = 3_007;
 const KEY_SENTINEL: char = '§';
 const PASSWORD_SENTINEL: &str = "vnc-password-private-e74a91c3";
 
@@ -89,7 +89,7 @@ fn input_release_json_logs_exclude_key_and_coordinate_sentinels() {
     }));
     let clipboard = Arc::new(Mutex::new(None::<ClipboardSnapshot>));
     let (events_tx, _events_rx) = sync_channel::<WorkerEvent>(8);
-    let display = DisplayInfo::new(2_000_000, 2_000_000, 24, 1, true).expect("large display");
+    let display = DisplayInfo::new(4_096, 4_096, 24, 1, true).expect("bounded display");
     let coordinate = Coordinate::new(X_SENTINEL, Y_SENTINEL, display).expect("sentinel coordinate");
     let mut session = ReleaseFailingSession {
         fail_releases: false,
