@@ -10,391 +10,677 @@ Companion specification:
 
 - `docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_FIX_SPEC_2026-08-06.md`
 
-Review baseline: `e9be696783e7fdfb90389cd02890d48c3e9bbd2d`
+Decision documents:
 
-This TODO is the authoritative checklist for the correctness review fix pass. It does not supersede the shutdown work. The out-of-band shutdown flag, queue-depth permit, event-bridge stop path, bounded process cleanup, and input-release reporting are correct and must be preserved unchanged.
+- `docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_QUESTIONS_AND_ISSUES_2026-08-06.md`
+- `docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_ANSWERS_2026-08-06.md`
+
+Code baseline for defect reproduction: `e9be696783e7fdfb90389cd02890d48c3e9bbd2d`
+
+Planning baseline containing the accepted decisions: `c49742a2d1e1c3b55ae3f3f8affec9357b8855f4`
+
+This TODO is the authoritative implementation checklist for the correctness-review fix pass. It preserves the completed shutdown architecture while correcting the state-machine, timeout-contract, native-format, sanitizer, metric, secret-lifecycle, privacy-test, performance-record, and deterministic-test issues defined in the companion spec.
 
 ## Completion status
 
 Status: not started.
 
-Do not mark this TODO complete until the exact final repository-tip SHA passes both CI and Release Gates.
+Do not mark this TODO complete until the exact final repository-tip SHA passes both permanent CI and Release Gates, including unchanged R13.
 
 ---
 
-## CR0. Baseline and scope verification
+## CR0. Baseline, decisions, and evidence classification
 
 - [ ] Check out the latest `master` with a clean working tree.
-- [ ] Record the starting HEAD SHA in the evidence block below.
-- [ ] Confirm the companion spec exists.
-- [ ] Confirm this TODO exists.
-- [ ] Read the prior shutdown chain so preserved behavior is understood before editing:
+- [ ] Record the starting HEAD SHA in the final evidence block.
+- [ ] Confirm the companion spec and this TODO exist.
+- [ ] Read both decision documents completely.
+- [ ] Confirm the spec contains no unresolved “choose one” implementation menus.
+- [ ] Read the preserved shutdown chain:
   - [ ] `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_SPEC_2026-08-05.md`
   - [ ] `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_TODO_2026-08-05.md`
   - [ ] `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_HARDENING_EVIDENCE_2026-08-05.md`
-- [ ] Review the implementation surfaces this pass touches:
+- [ ] Review all implementation surfaces named by the spec:
   - [ ] `crates/remote-desktop-core/src/connection.rs`
   - [ ] `crates/controller-api/src/worker/loop_state.rs`
   - [ ] `crates/controller-api/src/worker/run.rs`
   - [ ] `crates/controller-api/src/worker/client.rs`
+  - [ ] `crates/controller-api/src/worker/desktop_worker.rs`
+  - [ ] `crates/controller-api/src/events.rs`
   - [ ] `crates/controller-api/src/framebuffer.rs`
   - [ ] `crates/controller-api/src/observability.rs`
   - [ ] `crates/controller-api/src/config.rs`
   - [ ] `crates/controller-api/src/shutdown.rs`
   - [ ] `crates/controller-api/src/main.rs`
+  - [ ] `crates/controller-api/src/http/backend.rs`
+  - [ ] `crates/controller-api/src/http/responses.rs`
   - [ ] `crates/libvnc-adapter/native/vnc_shim.c`
+  - [ ] `crates/libvnc-adapter/native/vnc_shim.h`
   - [ ] `crates/libvnc-adapter/src/lib.rs`
   - [ ] `.github/workflows/release-gates.yml`
-- [ ] Confirm the completed shutdown behavior that must remain unchanged:
-  - [ ] worker shutdown authority is the out-of-band `Arc<AtomicBool>`;
-  - [ ] the queue-depth permit is acquired in `CommandEnvelope::new()` before `try_send`;
-  - [ ] `EventBridge` stop, exit signal, bounded join, and deliberate detach are intact;
-  - [ ] `finalize_runtime` error precedence is server, then worker, then bridge;
-  - [ ] framebuffer byte-equality and ETag semantics are unchanged;
-  - [ ] R13 behavior is unchanged.
+  - [ ] desktop test application and all E2E scripts.
+- [ ] Confirm preserved behavior before editing:
+  - [ ] out-of-band worker shutdown remains authoritative;
+  - [ ] queue permit remains acquired before `try_send`;
+  - [ ] event-bridge stop/exit/join/detach model remains intact;
+  - [ ] server → worker → bridge error precedence remains intact;
+  - [ ] framebuffer byte equality, revisions, timestamps, ETags, and R13 `304` semantics remain intact;
+  - [ ] input-release observability remains intact.
+
+Classify and record baseline evidence before each repair:
+
+- [ ] CR1: failing production-path pre-`Connected` stall test.
+- [ ] CR2: failing production-path illegal-transition observability/health test.
+- [ ] CR3: failing E2E color assertion, or exact static current-layout evidence if pre-fix E2E cannot run.
+- [ ] CR4: absent/failing `controller-api` TSan invocation with exact output.
+- [ ] CR5: runtime test showing the in-flight value can exceed channel capacity.
+- [ ] CR6: failing configuration validation plus timing calculation.
+- [ ] CR7: timing calculation and exact source evidence.
+- [ ] CR8: static source evidence for unreachable arms.
+- [ ] CR9: focused live-buffer/helper evidence; never inspect freed memory.
+- [ ] CR10: path-carrying evidence; regression guards may pass on the baseline.
+- [ ] CR11: reproducible measurement evidence.
+- [ ] CR12: show the old sleep-based test can pass under an injected fault it claims to detect.
 
 Acceptance:
 
-- [ ] No code is changed before each targeted defect has a failing reproduction test.
-- [ ] The implementation notes distinguish this pass from the completed shutdown work.
+- [ ] No repair precedes its classified evidence.
+- [ ] No fake runtime failure is manufactured for a static, workflow, or documentation defect.
+- [ ] Implementation notes distinguish this pass from the completed shutdown work.
 
 Evidence:
 
 ```text
 Starting HEAD SHA:
 Working tree clean:
+Baseline evidence summary:
 ```
 
 ---
 
-## CR1. Fix the pre-`Connected` confirmed-stall fatal exit
+## CR1. Recover pre-`Connected` confirmed stalls
 
 Reproduce first:
 
-- [ ] Add a controlled session that returns `PollOutcome::TimedOut` from every poll and never delivers a complete framebuffer update, so the worker stays in `Connecting` or `Reconnecting`.
-- [ ] Confirm on the baseline that the confirmed stall causes worker termination with `fatal_exit == true` and no reconnect attempt.
-- [ ] Record the observed baseline failure in the evidence block.
+- [ ] Add a controlled session that completes native setup but never delivers a complete framebuffer update.
+- [ ] Keep the public state in `Connecting` or `Reconnecting` while `poll()` returns `TimedOut`.
+- [ ] Drive probe and confirmation through deterministic fixture controls and bounded deadlines.
+- [ ] Confirm the baseline terminates the worker, sets `fatal_exit`, and does not reconnect.
+- [ ] Record the exact baseline failure.
 
-Then fix:
+Implement the prescribed repair:
 
-- [ ] Choose and document one repair strategy:
-  - [ ] extend `ConnectionState::can_transition_to` with `Connecting -> Degraded` and `Reconnecting -> Degraded`; or
-  - [ ] handle the confirmed stall without a `Degraded` transition when the current state is pre-`Connected`; or
-  - [ ] handle the transition failure locally the way the `connected_message` error path already does, without propagating out of `poll()`.
-- [ ] Ensure the chosen strategy still invalidates the framebuffer and schedules reconnect.
-- [ ] Ensure `fatal_exit` remains `false` for a stall-driven recovery.
-- [ ] Ensure `run_worker` does not break out of the loop for a recoverable stall.
-- [ ] Do not remove the `worker_stall_timeout` diagnostic.
-- [ ] Do not change `Connected -> Degraded` behavior.
+- [ ] Do not widen `ConnectionState::can_transition_to` with pre-`Connected` → `Degraded` edges.
+- [ ] Preserve `Degraded` as “previously connected, now impaired.”
+- [ ] For current state `Connected`, retain `Connected -> Degraded -> invalidate -> reconnect`.
+- [ ] For current state `Connecting` or `Reconnecting`:
+  - [ ] record `WorkerFailureKind::Timeout`;
+  - [ ] emit `worker_stall_timeout`;
+  - [ ] invalidate session/framebuffer/input state;
+  - [ ] schedule reconnect without entering `Degraded`;
+  - [ ] keep `fatal_exit == false`;
+  - [ ] keep the worker loop alive.
+
+Regression test: `pre_connected_confirmed_stall_reconnects_without_fatal_exit`
+
+- [ ] Drive the real worker loop, not a helper-only path.
+- [ ] Assert the session factory is invoked again.
+- [ ] Assert `fatal_exit == false` before and after reconnect scheduling.
+- [ ] Assert the worker does not reach `Stopped` before explicit shutdown.
+- [ ] Assert `worker_stall_timeout` is present and payload-free.
+- [ ] Use bounded channels/barriers/deadlines, not sleeps.
+
+Regression preservation:
+
+- [ ] Keep `confirmed_stall_invalidates_reconnects_and_advances_revision` green.
+- [ ] Assert the legal `Connected -> Degraded` event remains emitted.
+- [ ] Assert framebuffer invalidation and revision behavior remain unchanged.
+
+Acceptance:
+
+- [ ] A pre-`Connected` confirmed stall reconnects without fatal exit.
+- [ ] A previously connected stall retains existing `Degraded` semantics.
+
+---
+
+## CR2. Make illegal transitions observable and non-mutating
+
+- [ ] Change `LoopState::transition()` so illegal transitions:
+  - [ ] emit `worker_illegal_state_transition`;
+  - [ ] include only `from` and `to` state names;
+  - [ ] do not change state;
+  - [ ] do not set `fatal_exit`;
+  - [ ] return `DesktopError::Protocol`.
+- [ ] Keep successful transition logging and event publication unchanged.
+- [ ] Keep `run_worker` as the owner of fatal exit when the loop ends unexpectedly.
+- [ ] Review `LoopState::publish` sequence-overflow handling:
+  - [ ] retain its `fatal_exit` write only with an explicit unrecoverable rationale; or
+  - [ ] move it to the centralized fatal-exit path.
+- [ ] Make `schedule_reconnect()` infallible by selecting a legal target from the current state.
+- [ ] Ensure `schedule_reconnect()` from `AuthenticationFailed` does not attempt an illegal intermediate state.
+- [ ] Remove every discarded transition result that can hide failure.
+
+Explicit final `Stopped` handling:
+
+- [ ] Replace `let _ = state.transition(ConnectionState::Stopped)` with explicit result handling.
+- [ ] Add a `debug_assert!` that every current state can reach `Stopped`.
+- [ ] If the final transition fails in production:
+  - [ ] emit a dedicated payload-free error diagnostic;
+  - [ ] set `fatal_exit` in the explicit finalization path;
+  - [ ] do not silently leave stale public state.
 
 Regression tests:
 
-### `pre_connected_confirmed_stall_reconnects_without_fatal_exit`
+### `illegal_transition_is_logged_and_does_not_mutate_health`
 
-- [ ] Drive the real worker loop with a session that never completes a framebuffer update.
-- [ ] Assert the session factory is invoked again after the confirmed stall.
-- [ ] Assert `fatal_exit == false` throughout.
-- [ ] Assert the worker does not reach `ConnectionState::Stopped` before shutdown is requested.
-- [ ] Assert the `worker_stall_timeout` diagnostic is emitted.
-- [ ] Bound the test with deadlines rather than sleeps.
+- [ ] Drive an illegal transition through production `LoopState`.
+- [ ] Parse structured logs and assert `from`/`to` only.
+- [ ] Assert state and `fatal_exit` remain unchanged.
 
-### `connected_confirmed_stall_behavior_is_unchanged`
+### `schedule_reconnect_from_authentication_failed_is_legal`
 
-- [ ] Preserve the existing `confirmed_stall_invalidates_reconnects_and_advances_revision` expectations.
-- [ ] Assert the `Connected -> Degraded` path still transitions, invalidates, and advances revision.
+- [ ] Start from `AuthenticationFailed`.
+- [ ] Assert no illegal-transition diagnostic.
+- [ ] Assert the resulting target is legal and reconnectable.
 
-Acceptance:
+### `final_stopped_transition_failure_is_not_silent`
 
-- [ ] A pre-`Connected` stall recovers instead of terminating.
-- [ ] `fatal_exit` is never set by a recoverable stall.
-- [ ] The already-correct `Connected` stall path is unchanged.
-
----
-
-## CR2. Make illegal state transitions observable
-
-- [ ] Emit a structured diagnostic, such as `worker_illegal_state_transition`, whenever `LoopState::transition()` rejects a transition.
-- [ ] Include only the `from` and `to` state names; include no payload.
-- [ ] Review every `let _ = self.transition(..)` call site:
-  - [ ] both call sites in `schedule_reconnect()`;
-  - [ ] all call sites in `run_worker`.
-- [ ] Replace each discarded result with explicit handling or an explicit documented reason for ignoring it.
-- [ ] Decide and document whether `transition()` should continue to set `fatal_exit` as a side effect, or whether the caller should own that decision.
-- [ ] Do not allow a discarded result to change `fatal_exit` silently.
-
-Regression test:
-
-### `illegal_transition_is_logged_and_does_not_silently_poison_health`
-
-- [ ] Drive an illegal transition through the production `LoopState`.
-- [ ] Assert the structured diagnostic is emitted.
-- [ ] Assert the resulting `fatal_exit` value matches the documented decision.
-- [ ] Assert no state name leaks any payload field.
+- [ ] Use a test-only state/invariant fault if required.
+- [ ] Assert a diagnostic and fatal disposition instead of ignored failure.
 
 Acceptance:
 
-- [ ] No illegal transition changes `/v1/status` health without a diagnostic.
-- [ ] No `transition()` result carrying a side effect is discarded without a stated reason.
+- [ ] No illegal transition silently poisons externally visible health.
+- [ ] No final state-transition failure is ignored.
 
 ---
 
-## CR3. Negotiate and verify the native pixel format
+## CR3. Pin and verify native `[R,G,B,X]` format
 
-- [ ] Set the pixel format explicitly in `vrc_client_connect` before `SetFormatAndEncodings`:
-  - [ ] `bitsPerPixel`, `depth`, `trueColour`;
-  - [ ] `redMax`, `greenMax`, `blueMax`;
-  - [ ] `redShift`, `greenShift`, `blueShift`;
-  - [ ] `bigEndian` set so the in-memory byte order is fixed independent of host endianness.
-- [ ] Choose shifts that make the in-memory byte order match what `replace_native_rgbx` reads.
-- [ ] Document the chosen layout in `vnc_shim.h` or `vnc_shim.c` as a contract comment.
-- [ ] Document the same layout on `replace_native_rgbx` and state that it is negotiated, not assumed.
-- [ ] Confirm `SetFormatAndEncodings` is still called after the format is assigned.
-- [ ] Do not change the canonical RGBA8 store layout.
+In `vrc_client_connect`, after `rfbGetClient` and before `SetFormatAndEncodings`:
 
-Regression tests:
+- [ ] set `format.bitsPerPixel = 32`;
+- [ ] set `format.depth = 24`;
+- [ ] set `format.trueColour = TRUE`;
+- [ ] set `format.bigEndian = FALSE`;
+- [ ] set `format.redMax = 255`;
+- [ ] set `format.greenMax = 255`;
+- [ ] set `format.blueMax = 255`;
+- [ ] set `format.redShift = 0`;
+- [ ] set `format.greenShift = 8`;
+- [ ] set `format.blueShift = 16`;
+- [ ] set `appData.requestedDepth = 24`.
+- [ ] Add a contract comment: native memory layout is `[R,G,B,X]`.
+- [ ] Add the matching contract comment to `replace_native_rgbx()`.
+- [ ] Verify the pinned LibVNCClient sends the assigned format and does not overwrite it from `appData`.
+- [ ] Keep canonical framebuffer format `[R,G,B,255]` unchanged.
 
-### `native_rgbx_conversion_preserves_channel_order`
+Unit test: `native_rgbx_conversion_preserves_channel_order`
 
-- [ ] Convert a synthetic native buffer whose channels are individually distinguishable.
-- [ ] Assert each canonical RGBA byte, not just the buffer length.
-- [ ] Assert the alpha byte is opaque.
+- [ ] Use distinct values in every channel and padding byte.
+- [ ] Assert every canonical byte and opaque alpha.
 
-### End-to-end color assertion
+Desktop/E2E fixture:
 
-- [ ] Extend the desktop or native E2E path so the test application renders a known solid color.
-- [ ] Assert the canonical framebuffer or decoded screenshot reports that color within an explicit tolerance.
-- [ ] Do not assert on encoded PNG bytes.
+- [ ] Add fixed pure-red and pure-blue swatches to the test application.
+- [ ] Define swatch geometry and center sample coordinates as named constants.
+- [ ] Place swatches away from existing controls and text fields.
+
+Canonical framebuffer assertion:
+
+- [ ] Red center: `r > 200`, `g < 60`, `b < 60`.
+- [ ] Blue center: `b > 200`, `r < 60`, `g < 60`.
+
+Decoded PNG assertion:
+
+- [ ] Fetch `GET /v1/screenshot.png`.
+- [ ] Decode PNG pixels.
+- [ ] Apply the same dominance assertions at the named centers.
+- [ ] Do not assert on encoded bytes.
+
+- [ ] If lossless encodings are pinned, document them and optionally tighten tolerance to `±8`.
+- [ ] Confirm a red/blue channel swap fails both layers.
 
 Acceptance:
 
-- [ ] The byte layout is negotiated in the shim rather than inherited from a library default.
-- [ ] A channel swap fails a test.
+- [ ] Pixel layout is negotiated, documented, and proven end to end.
 
 ---
 
-## CR4. Extend ThreadSanitizer coverage to the concurrent crate
+## CR4. Expand TSan and correct Miri claims
 
-- [ ] Attempt a ThreadSanitizer run over `--package controller-api --lib`.
-- [ ] Record whether the run succeeds, and if it fails, record the exact failure.
-- [ ] If the native link is the obstacle, evaluate and record the disposition of each option:
-  - [ ] a test-only feature that excludes the native adapter from the sanitizer build;
-  - [ ] a suppression file scoped to the uninstrumented LibVNCClient shared library;
-  - [ ] building LibVNCClient from source with the sanitizer enabled.
-- [ ] Add the widest coverage that passes without weakening any assertion.
-- [ ] Confirm the added job covers the worker, shutdown, events, and framebuffer tests.
-- [ ] Record the coverage boundary in the Release Gates evidence step alongside the existing LibVNCClient note.
-- [ ] Keep the existing `remote-desktop-core` TSan and Miri jobs.
-- [ ] Keep the existing `libvnc-adapter` ASan job.
+Baseline:
+
+- [ ] Record that existing TSan/Miri target only `remote-desktop-core`.
+- [ ] Attempt `controller-api --lib` under the pinned TSan toolchain and save exact output.
+
+Escalation order:
+
+- [ ] First try all `controller-api --lib` tests unchanged.
+- [ ] If Tokio-specific false positives occur, add the smallest documented `--skip` list while retaining worker, shutdown, events, and framebuffer coverage.
+- [ ] If still required, evaluate a narrowly scoped suppression file.
+- [ ] Use a test-only native-adapter exclusion feature only as the last resort.
+- [ ] Record which level succeeded and why earlier levels failed.
+
+Workflow requirements:
+
+- [ ] Add permanent TSan coverage for the achieved `controller-api` subset.
+- [ ] Keep existing `remote-desktop-core` TSan and Miri jobs.
+- [ ] Keep existing `libvnc-adapter` ASan job.
 - [ ] Do not add `continue-on-error`.
-- [ ] Do not mark this item complete on the basis of the existing `remote-desktop-core` job.
+- [ ] Do not label linked-but-unexecuted native code as instrumented.
+
+Miri documentation:
+
+- [ ] State permanently that FFI, Tokio, native linkage, and real I/O place `controller-api` outside the Miri boundary.
+- [ ] Remove any claim that prior hardening added Miri coverage to concurrent code.
+- [ ] Remove Miri from the list of gates expected to gain new coverage in this pass.
 
 Acceptance:
 
-- [ ] ThreadSanitizer exercises the code the shutdown passes changed, or the impossibility is documented with evidence.
-- [ ] The recorded sanitizer coverage boundary matches what actually runs.
+- [ ] TSan meaningfully exercises the concurrent code changed by shutdown hardening.
+- [ ] Sanitizer evidence states exactly what runs.
 
 ---
 
-## CR5. Correct the queue-depth metric semantics
+## CR5. Rename queue-depth instrumentation to submissions in flight
 
-- [ ] Confirm the permit is still acquired at envelope construction; do not move it.
-- [ ] Decide and document the reported semantics: in-flight command submissions, not channel occupancy.
-- [ ] Update the Prometheus metric name or its `# HELP` text so the value is not read as queue occupancy.
-- [ ] State explicitly that the value can transiently exceed `vrc_worker_command_queue_capacity`.
-- [ ] Update the HTTP status or operator documentation wherever the value is described.
-- [ ] Update `docs/OPERATOR_GUIDE.md` if it references the old meaning.
-- [ ] If the metric name changes, record the rename in the release policy document.
-- [ ] Do not change any accounting behavior.
+- [ ] Confirm permit acquisition remains in `CommandEnvelope::new()` before `try_send`.
+- [ ] Do not alter increment/decrement/drop behavior.
+- [ ] Rename Rust API usage to `command_submissions_in_flight`.
+- [ ] Rename Prometheus metric to `vrc_worker_command_submissions_in_flight`.
+- [ ] Remove the old metric without alias unless the user identifies an external consumer before implementation.
+- [ ] Confirm `/v1/status` has no affected field and requires no schema change.
+- [ ] Update `HttpBackend` and `WorkerHttpBackend` names.
+- [ ] Update tests and all documentation references.
+- [ ] Search and record references in:
+  - [ ] `deploy/`;
+  - [ ] tests;
+  - [ ] dashboards and alert rules;
+  - [ ] examples;
+  - [ ] operator guide;
+  - [ ] V01 spec section 17.1;
+  - [ ] release notes/policy.
+- [ ] Confirm R13 contains no assertion on the old name.
 
-Regression test:
+Prometheus metadata:
 
-### `in_flight_depth_can_exceed_capacity_and_still_converges_to_zero`
+- [ ] Add correct `# HELP` and `# TYPE` for every exported metric.
+- [ ] Classify counters and gauges correctly.
+- [ ] State that submissions in flight may transiently exceed queue capacity.
+- [ ] Add exporter-format regression tests.
 
-- [ ] Park a submitter between envelope construction and `try_send` using the existing before-send hook.
-- [ ] Assert the reported value exceeds the configured capacity while parked.
-- [ ] Release the submitter and assert the value converges to zero.
+Runtime regression: `in_flight_submissions_can_exceed_capacity_and_converge_to_zero`
+
+- [ ] Park one or more submitters after permit acquisition and before send.
+- [ ] Assert the reported value exceeds channel capacity.
+- [ ] Release all submitters.
+- [ ] Assert the value converges to zero.
+
+Policy:
+
+- [ ] Add a concise metric/API naming-compatibility rule to the release policy.
+- [ ] Record the no-alias v0.1 decision and its repository-local basis.
 
 Acceptance:
 
-- [ ] The exported metric states what it measures.
-- [ ] Accounting behavior is byte-for-byte unchanged.
+- [ ] Exported names and help text describe the actual value.
+- [ ] Accounting implementation remains unchanged.
 
 ---
 
-## CR6. Give process shutdown its own bounded deadline
+## CR6. Add one total process-shutdown budget
 
-- [ ] Add a dedicated configuration value, for example `VRC_SHUTDOWN_TIMEOUT_MS`, with a documented default.
-- [ ] Validate it with a floor strictly greater than `EVENT_BRIDGE_POLL_INTERVAL`.
-- [ ] Reject a configured value below that floor at load time, with a non-secret error.
-- [ ] Pass the new value to `finalize_runtime` instead of `command_ack_timeout`.
-- [ ] Document that worker and bridge cleanup are sequential and that the total bound is the sum.
-- [ ] Consider deriving separate worker and bridge budgets from one declared total, and record the decision.
-- [ ] Keep `command_ack_timeout` for its documented HTTP purpose only.
-- [ ] Preserve the existing server, then worker, then bridge error precedence.
-- [ ] Update `docs/OPERATOR_GUIDE.md` and `deploy/` documentation for the new variable.
+Configuration:
 
-Regression tests:
+- [ ] Add `VRC_SHUTDOWN_TIMEOUT_MS` with a documented default.
+- [ ] Define the minimum as `max(500 ms, 8 * EVENT_BRIDGE_POLL_INTERVAL)` through a derived constant.
+- [ ] Reject values below the minimum with a non-secret error naming the variable.
+- [ ] Keep `command_ack_timeout` exclusively for HTTP command acknowledgement.
+- [ ] Update configuration redaction/debug behavior and tests.
 
-### `process_shutdown_timeout_below_bridge_poll_interval_is_rejected`
+Coordinator:
 
-- [ ] Assert configuration load fails for a value below the floor.
-- [ ] Assert the error names the variable and contains no secret.
+- [ ] Establish one deadline at `finalize_runtime` entry.
+- [ ] Pass remaining budget to worker shutdown.
+- [ ] Recompute remaining budget with saturating arithmetic.
+- [ ] Pass only the remainder to bridge shutdown.
+- [ ] Preserve server → worker → bridge error precedence.
+- [ ] Attempt both cleanup surfaces within the shared budget.
 
-### `process_cleanup_returns_within_the_declared_total_bound`
+Zero-remainder bridge path:
 
-- [ ] Arrange a stuck worker and a live bridge.
-- [ ] Assert complete cleanup returns within the documented total.
-- [ ] Assert the worker timeout remains the primary error when no server error exists.
+- [ ] Request bridge stop.
+- [ ] Perform a nonblocking exit-result check.
+- [ ] If exit is already observed, join and preserve panic/success disposition.
+- [ ] If still active, detach deliberately.
+- [ ] Emit a payload-free timeout or secondary-cleanup diagnostic.
+- [ ] Do not call a zero-duration blocking wait.
+- [ ] Do not discard an already-available exit result.
+
+Tests:
+
+### `shutdown_timeout_below_derived_minimum_is_rejected`
+
+- [ ] Test values below 500 ms and below `8 * poll interval` if those differ.
+- [ ] Test the exact minimum is accepted.
+- [ ] Assert no secret in error output.
+
+### `process_cleanup_obeys_one_total_budget`
+
+- [ ] Arrange a stuck worker and live bridge.
+- [ ] Assert total elapsed cleanup stays within the declared budget plus a documented scheduler tolerance.
+- [ ] Assert worker timeout remains primary absent server error.
+
+### `zero_remaining_budget_observes_completed_bridge_before_detach`
+
+- [ ] Arrange bridge exit before zero-budget handling.
+- [ ] Assert it is joined and panic/success is retained.
+- [ ] Arrange an active bridge and assert deliberate detach.
+
+Documentation:
+
+- [ ] Update operator guide, deployment examples, and release notes.
+- [ ] Record direct wake-up as deferred; do not add `crossbeam-channel` or redesign the worker event channel.
 
 Acceptance:
 
-- [ ] Process shutdown no longer depends on an HTTP command knob.
-- [ ] A misconfiguration cannot produce a spurious bridge timeout on a clean shutdown.
+- [ ] Process cleanup has one honest total bound.
+- [ ] Zero-budget handling is observable and does not discard completed results.
 
 ---
 
-## CR7. Document or derive the startup cleanup bound
+## CR7. Derive startup cleanup from one total budget
 
-- [ ] Document on `spawn_with_factory_and_startup_hook` that the worst case is the acknowledgement wait plus the cleanup wait.
-- [ ] Either state the doubling explicitly, or derive the cleanup deadline from a single declared startup budget.
-- [ ] If a derived budget is chosen, keep every startup path bounded.
-- [ ] Keep the flag-first cleanup ordering.
-- [ ] Keep the queue nudge best-effort and permit-counted.
-- [ ] Keep the existing timeout and join-failure result distinction.
+- [ ] Establish one startup deadline before acknowledgement wait.
+- [ ] On timeout, set shutdown flag first.
+- [ ] Send the best-effort permit-counted compatibility nudge.
+- [ ] Compute remaining budget with saturating arithmetic.
+- [ ] Use only the remainder for exit observation/cleanup.
+- [ ] Preserve timeout versus worker panic/join-failure distinction.
+
+Zero-remainder startup path:
+
+- [ ] Perform a nonblocking exit check.
+- [ ] Join if the worker already exited.
+- [ ] Detach only if still active.
+- [ ] Return `DesktopError::Timeout` for an active worker.
+- [ ] Do not silently discard an already-available panic.
+
+Tests:
+
+- [ ] Prove total startup latency is bounded by one configured budget plus documented scheduler tolerance.
+- [ ] Prove zero remainder detaches an active worker.
+- [ ] Prove zero remainder still observes an already-exited/panicked worker.
+- [ ] Preserve existing startup-timeout and startup-panic regressions.
+
+Documentation:
+
+- [ ] Update doc comments and operator guide.
+- [ ] Audit Compose healthchecks and deployment timing against the shorter effective bound.
+- [ ] Add release-note entry for the behavior change.
 
 Acceptance:
 
-- [ ] The effective startup bound is stated where a reader configuring `startup_timeout` will see it.
-- [ ] No startup path becomes unbounded.
+- [ ] `startup_timeout` means the complete startup operation budget.
 
 ---
 
-## CR8. Remove unreachable error arms
+## CR8. Remove unreachable shutdown error arms
 
-- [ ] Remove or restructure the unreachable `Err(error) => Err(error)` arm in `EventBridge::shutdown`.
-- [ ] Remove or restructure the unreachable `Err(error) => Err(error)` arm in `DesktopWorker::shutdown`.
-- [ ] Prefer narrowing the `wait_for_exit` return type over silently forwarding a future third outcome.
-- [ ] If an arm is retained for forward compatibility, add a diagnostic so a new outcome cannot pass through undiagnosed.
-- [ ] Confirm strict Clippy remains clean.
+- [ ] Narrow the worker wait result to success/timeout semantics.
+- [ ] Remove generic unreachable `Err(error) => Err(error)` from `DesktopWorker::shutdown`.
+- [ ] Narrow the bridge wait result similarly.
+- [ ] Remove generic unreachable forwarding from `EventBridge::shutdown`.
+- [ ] Ensure any future third outcome requires explicit diagnostics and tests.
+- [ ] Record static baseline evidence.
+- [ ] Keep strict Clippy clean.
 
 Acceptance:
 
-- [ ] No shutdown path forwards an unreachable error without a diagnostic.
+- [ ] No unreachable catch-all forwards a future outcome silently.
 
 ---
 
-## CR9. Scrub secret material before release
+## CR9. Zeroize project-owned VNC password copies
 
-- [ ] Zeroize the duplicated password buffer in `vrc_client_destroy` before `free`.
-- [ ] Use a construct the compiler cannot elide, such as `explicit_bzero` or an equivalent guarded memset.
-- [ ] Zeroize any other shim-owned copy of the password.
-- [ ] On the Rust side, wrap the password so it is zeroized on drop.
-- [ ] Audit `NativeClientConfig`, `WorkerSettings`, `ControllerConfig`, and the worker thread closure for retained copies.
-- [ ] Confirm no password-bearing type gains a `Debug` implementation.
-- [ ] Confirm the added dependency, if any, passes `cargo-deny` advisory, license, and source policy.
-- [ ] Update `SECURITY.md` if it describes the previous behavior.
+Secret abstraction:
 
-Regression test:
+- [ ] Introduce a shared non-`Debug`, zeroizing secret type.
+- [ ] Design it to support future shared API-token storage.
+- [ ] Adopt it for VNC password now.
+- [ ] Leave API bearer-token comparison/storage behavior unchanged.
+- [ ] Record API-token adoption as a deferred follow-up.
 
-### `password_is_not_recoverable_after_client_destruction`
+Copy inventory:
 
-- [ ] Assert the Rust-side wrapper zeroizes on drop.
-- [ ] Keep the assertion payload-free; do not print the secret on failure.
+- [ ] secret-file read buffer;
+- [ ] `ControllerConfig`;
+- [ ] `NativeClientConfig`;
+- [ ] `WorkerSettings` and clones;
+- [ ] worker closure capture;
+- [ ] temporary `CString` in `NativeClient::connect`;
+- [ ] shim-owned duplicated password;
+- [ ] callback-returned allocation owned by LibVNCClient.
+
+Rust handling:
+
+- [ ] Minimize clones and document unavoidable copies.
+- [ ] Ensure temporary `CString` bytes are scrubbed before release.
+- [ ] Confirm no password-bearing type implements `Debug`.
+- [ ] Add a live-buffer scrub-helper test.
+- [ ] Add instrumented proof that wrapper `Drop` invokes scrubbing.
+- [ ] Never read freed memory.
+- [ ] Never print the sentinel secret on failure.
+
+C handling:
+
+- [ ] Implement `vrc_secure_scrub(void *, size_t)` with a `volatile unsigned char *` loop.
+- [ ] Scrub shim-owned password storage before `free`.
+- [ ] Scrub every other project-owned native copy before release.
+- [ ] Keep `_POSIX_C_SOURCE 200809L`, `-std=c11`, `-pedantic`, and `-Werror` intact.
+- [ ] Do not introduce `_GNU_SOURCE`/`_DEFAULT_SOURCE` solely for scrubbing.
+- [ ] Do not rely on `explicit_bzero` or optional `memset_s`.
+
+Third-party residual:
+
+- [ ] Inspect exact pinned Debian LibVNCClient source for `GetPassword` ownership/free behavior.
+- [ ] Record exact package/source version and relevant source location.
+- [ ] Record whether the callback-returned allocation is scrubbed before free.
+- [ ] If not scrubbed, document it as a third-party residual rather than claiming closure.
+- [ ] Record VNC DES eight-byte password truncation/library-copy implications where relevant.
+
+Documentation:
+
+- [ ] Update `SECURITY.md` or secret-lifecycle documentation.
+- [ ] State: all project-owned VNC password copies are scrubbed; third-party behavior is verified and documented separately.
 
 Acceptance:
 
-- [ ] The VNC password is scrubbed on both sides of the FFI boundary.
-- [ ] No gate is weakened by the change.
+- [ ] Every project-owned copy is scrubbed before release.
+- [ ] No undefined-behavior test or overstated third-party claim remains.
 
 ---
 
-## CR10. Make log-privacy assertions test real leaks
+## CR10. Replace vacuous privacy assertions with path-specific JSON-log tests
 
-- [ ] Replace generic-noun substring assertions in `shutdown_logs_incomplete_input_release_without_payloads`.
-- [ ] Inject distinctive sentinel values for each category under test:
-  - [ ] clipboard text;
-  - [ ] typed text;
-  - [ ] key value;
-  - [ ] coordinate;
-  - [ ] bearer token;
-  - [ ] VNC password.
-- [ ] Assert the absence of each sentinel, not the absence of the category word.
-- [ ] Keep the existing `"CtrlLeft"` style assertion where the value itself is the secret.
-- [ ] Apply the same correction to any other test asserting on category words.
-- [ ] Confirm the tests still assert the presence of `worker_input_release_incomplete` and `worker_input_release_abandoned`.
+Infrastructure:
+
+- [ ] Add `capture_json_logs` to test support.
+- [ ] Parse each JSON record and inspect field values.
+- [ ] Keep raw-rendered-string checks only as secondary defense.
+
+Test 1: input release
+
+- [ ] Press a distinctive key and mouse button at a distinctive coordinate through the real worker.
+- [ ] Force release failure.
+- [ ] Assert expected incomplete/abandoned diagnostics.
+- [ ] Assert only counts/booleans are present; key and coordinate sentinels are absent.
+
+Test 2: typed text and clipboard
+
+- [ ] Send distinctive text and clipboard sentinels through real validation/failure paths.
+- [ ] Assert no logged error field contains either value.
+- [ ] If baseline errors do not carry input, record this as a passing regression guard rather than fabricating a leak.
+
+Test 3: VNC password
+
+- [ ] Drive a failing native connection with a sentinel password.
+- [ ] Assert controller/native structured fields contain no sentinel.
+
+Test 4: bearer tokens
+
+- [ ] Drive correct and incorrect sentinel tokens through real HTTP authentication/access middleware.
+- [ ] Assert neither configured nor presented token appears.
+- [ ] Assert authorization is represented only by the redacted marker or payload-free metadata.
+
+Audit:
+
+- [ ] Remove generic-noun privacy assertions.
+- [ ] For every sentinel assertion, document the production mechanism carrying the value.
+- [ ] Ensure benign fields such as `framebuffer_revision` or `clipboard_revision` do not fail privacy tests.
 
 Acceptance:
 
-- [ ] A real leak fails a test.
-- [ ] A benign new structured field name does not.
+- [ ] A real value leak fails the relevant path test.
+- [ ] A sentinel never tested on a path that cannot carry it.
 
 ---
 
-## CR11. Complete the framebuffer performance record and optimize with evidence
+## CR11. Measure framebuffer costs reproducibly; do not optimize
 
-- [ ] Benchmark the complete per-frame path at a representative resolution, at minimum 1920x1080.
-- [ ] Measure each stage separately:
-  - [ ] the native copy allocation and `memcpy` in `NativeClient::framebuffer`;
-  - [ ] the per-pixel conversion loop in `replace_native_rgbx`;
-  - [ ] the full-frame equality comparison under the store write lock;
-  - [ ] the `Vec<u8> -> Arc<[u8]>` conversion allocation and copy.
-- [ ] Record measured allocation count and bytes per delivered frame.
-- [ ] Record write-lock hold time.
-- [ ] Optimize the per-pixel conversion loop only if the benchmark justifies it.
-- [ ] If optimized, preserve exact output bytes and prove it with a byte-equality test against the current implementation.
-- [ ] Evaluate reducing the number of full-frame allocations per frame and record the disposition.
-- [ ] Preserve exact byte-equality duplicate detection.
-- [ ] Preserve screenshot ETag stability and the R13 conditional `304` contract.
-- [ ] Append the completed measurements to the final hardening record as a correction, without retroactively editing its historical claims.
+Utility:
+
+- [ ] Create a committed measurement utility under `tools/framebuffer_measurement/` or `tests/measurement/framebuffer/`.
+- [ ] Include a README with exact build/run commands.
+- [ ] Record toolchain, allocator, resolution, repetitions, and output schema.
+- [ ] Keep it reproducible even if excluded from normal CI.
+- [ ] Do not use an uncommitted one-time script.
+
+Measurement method:
+
+- [ ] Run in a dedicated process with a counting global allocator.
+- [ ] Measure at minimum 1920×1080.
+- [ ] Measure allocation count and allocated bytes.
+- [ ] Measure native framebuffer copy.
+- [ ] Measure RGBX-to-RGBA conversion.
+- [ ] Measure equality comparison and write-lock hold time.
+- [ ] Measure `Vec<u8> -> Arc<[u8]>` behavior on the pinned toolchain.
+- [ ] Separate measured facts from source-reading hypotheses.
+
+Disposition:
+
+- [ ] Record results in the correctness evidence.
+- [ ] Correct the historical performance record without rewriting valid historical CI claims.
+- [ ] Make **no framebuffer code optimization in this pass**.
+- [ ] If measurements justify work, create a separate performance spec and TODO.
+- [ ] Preserve equality, revisions, timestamps, ETags, and R13 unchanged.
 
 Acceptance:
 
-- [ ] The performance record accounts for every full-frame pass, not only the comparison.
-- [ ] No optimization is introduced without measurement.
-- [ ] Framebuffer semantics are unchanged.
+- [ ] Results are independently reproducible from committed sources.
+- [ ] No framebuffer hot-path code change is mixed into this correctness pass.
 
 ---
 
-## CR12. Replace the remaining sleep-only test
+## CR12. Replace both sleep-only negative proofs
 
-- [ ] Convert `mismatched_native_frame_never_reaches_connected` to a bounded barrier.
-- [ ] Prove the exact concurrency state before asserting.
-- [ ] Add an assertion that `fatal_exit == false` for the mismatched-frame path.
-- [ ] Ensure the test fails quickly rather than hanging CI.
-- [ ] Audit the remaining worker tests for any other sleep-only proof and record the audit result.
+Test-only causal-progress hook:
+
+- [ ] Add a `#[cfg(test)]` worker-loop iteration counter or equivalent hook.
+- [ ] Ensure it does not affect production builds or timing.
+- [ ] Derive the required iteration count from the fixture; do not choose an arbitrary sleep.
+
+Convert `mismatched_native_frame_never_reaches_connected`:
+
+- [ ] Observe multiple post-condition loop iterations.
+- [ ] Assert the worker never reaches `Connected`.
+- [ ] Assert `fatal_exit == false`.
+- [ ] Add a positive control proving the fixture can observe a reconnect/state change when deliberately triggered.
+
+Convert `authentication_failure_waits_for_manual_reconnect`:
+
+- [ ] Observe multiple loop iterations after `AuthenticationFailed`.
+- [ ] Assert factory call count remains one.
+- [ ] Submit real `WorkerCommand::Reconnect` as positive control.
+- [ ] Assert the factory is called again within a bounded deadline.
+
+Weak-test baseline evidence:
+
+- [ ] Inject a fault each old test claims to detect.
+- [ ] Show the old sleep-based form can pass or flake under that fault.
+- [ ] Record the result before replacement.
+
+Audit:
+
+- [ ] Audit all worker lifecycle/race tests for sleep as primary proof.
+- [ ] Convert any additional case or record why a sleep is merely pacing rather than evidence.
+- [ ] Give every blocked thread a bounded release path.
 
 Acceptance:
 
-- [ ] No worker race or lifecycle test relies on a sleep as its primary proof.
+- [ ] Negative behavior is proved by causal progress plus positive control.
 
 ---
 
-## CR13. Preserve HTTP, R13, framebuffer, and security behavior
+## CR13. Preserve public, shutdown, framebuffer, and security behavior
 
-- [ ] Confirm `HttpState::begin_shutdown()` remains the public HTTP shutdown authority.
-- [ ] Confirm readiness fails closed after HTTP shutdown begins.
-- [ ] Confirm authenticated mutating routes retain the existing shutdown error envelope.
-- [ ] Confirm no new public shutdown error was added.
-- [ ] Confirm screenshot ETag semantics are unchanged:
-  - [ ] identical full frames keep revision and timestamp;
-  - [ ] identical dirty updates with unchanged availability keep revision and timestamp;
-  - [ ] changed pixels advance revision;
-  - [ ] availability transitions advance or invalidate correctly;
-  - [ ] stale or incomplete frames remain unavailable.
-- [ ] Confirm the R13 conditional `304` assertion is unweakened.
-- [ ] Confirm the out-of-band shutdown flag, queue permit, event-bridge stop path, and `finalize_runtime` precedence are unchanged.
-- [ ] Confirm no new sensitive logging.
-- [ ] Confirm no CI, secret-scanning, vulnerability, dependency, sanitizer, or release gate was weakened.
-- [ ] Confirm no `continue-on-error` was added.
-- [ ] Confirm no broad `.gitleaksignore`, Trivy, or VEX ignore was added.
+- [ ] `HttpState::begin_shutdown()` remains HTTP shutdown authority.
+- [ ] Readiness still fails closed after shutdown begins.
+- [ ] Mutating routes retain existing shutdown envelope.
+- [ ] No new public shutdown error is added.
+- [ ] Out-of-band worker authority remains unchanged.
+- [ ] Queue permit ownership and acquisition point remain unchanged.
+- [ ] Event-bridge model remains unchanged except total-budget orchestration and nonblocking zero-budget observation.
+- [ ] Server → worker → bridge error precedence remains unchanged.
+- [ ] Identical full frames keep revision/timestamp.
+- [ ] Identical dirty updates with unchanged availability keep revision/timestamp.
+- [ ] Changed pixels and availability transitions retain current semantics.
+- [ ] Stale/incomplete frames remain unavailable.
+- [ ] R13 conditional `304` assertion remains byte-for-byte unweakened.
+- [ ] API token constant-time comparison remains untouched.
+- [ ] No sensitive logging is added.
+- [ ] No CI/security/release gate is weakened.
+- [ ] No `continue-on-error`, broad ignore, or force push is used.
 
 Acceptance:
 
-- [ ] All preserved behavior is verified, not assumed.
+- [ ] Preserved behavior is verified through existing and new tests.
 
 ---
 
-## CR14. Local validation
+## CR14. Documentation and policy updates
+
+- [ ] Update `docs/OPERATOR_GUIDE.md` for:
+  - [ ] `VRC_SHUTDOWN_TIMEOUT_MS` total-budget semantics and derived floor;
+  - [ ] startup total-budget semantics;
+  - [ ] deferred direct bridge wake-up;
+  - [ ] renamed submissions-in-flight metric.
+- [ ] Update deployment examples and environment documentation.
+- [ ] Add release notes for:
+  - [ ] startup worst-case bound change;
+  - [ ] new shutdown variable;
+  - [ ] metric rename with no alias;
+  - [ ] explicit pixel format;
+  - [ ] secret-lifecycle clarification.
+- [ ] Add metric/API naming-compatibility policy to the release policy.
+- [ ] Document exact TSan and Miri coverage boundaries.
+- [ ] Document exact `[R,G,B,X]` native format contract.
+- [ ] Document password-copy inventory and third-party residual.
+- [ ] Link committed framebuffer measurement utility and results.
+- [ ] Record deferred follow-ups:
+  - [ ] direct bridge wake-up;
+  - [ ] API bearer-token secret-type adoption;
+  - [ ] framebuffer optimization conditional on measurement;
+  - [ ] compatibility alias only if an external consumer is identified.
+
+Acceptance:
+
+- [ ] Operator and security documentation state the implemented contracts accurately.
+
+---
+
+## CR15. Local validation
 
 Run before pushing whenever available:
 
@@ -403,129 +689,158 @@ Run before pushing whenever available:
 - [ ] `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo test --locked --workspace --all-features`
 - [ ] rustdoc with warnings denied
+- [ ] framebuffer measurement utility with recorded command/output
 - [ ] `python -m compileall -q tools/ci_status tests desktop/test-app`
 - [ ] `python -m unittest discover -s tests -p 'test_*.py' -v`
-- [ ] Run shell syntax checks:
+- [ ] shell syntax checks for all permanent scripts
 
-```bash
-bash -n \
-  desktop/entrypoint.sh \
-  desktop/healthcheck.sh \
-  desktop/xstartup \
-  tests/desktop/run.sh \
-  tests/native/run.sh \
-  tests/worker-e2e/run.sh \
-  tests/worker-text-clipboard-e2e/run.sh \
-  tests/http-e2e/run.sh \
-  controller/healthcheck.sh \
-  tests/compose/run.sh \
-  tests/integration/run.sh
-```
+Where Docker/VNC are available:
 
-Where Docker and VNC resources are available:
-
-- [ ] desktop Docker suite
-- [ ] native Docker and VNC suite
+- [ ] desktop image suite
+- [ ] native adapter/VNC suite
 - [ ] WorkerHandle input E2E
-- [ ] WorkerHandle text and clipboard E2E, including the new color assertion
+- [ ] WorkerHandle text/clipboard E2E
+- [ ] canonical framebuffer red/blue assertion
+- [ ] decoded screenshot PNG red/blue assertion
 - [ ] authenticated HTTP E2E
-- [ ] Compose and persistence suite
-- [ ] R13 Compose integration and E2E
+- [ ] Compose/persistence suite
+- [ ] unchanged R13 integration
 
-- [ ] Record every skipped local command and the exact reason.
+- [ ] Record every unavailable local command and exact reason.
 - [ ] Do not label unavailable validation as passed.
 
 Acceptance:
 
-- [ ] All available local checks pass.
-- [ ] Unavailable surfaces are explicitly deferred to exact-SHA CI.
+- [ ] All available checks pass.
+- [ ] Unavailable surfaces are explicitly deferred to exact-SHA permanent workflows.
 
 ---
 
-## CR15. Push and exact-SHA GitHub validation
+## CR16. Exact-SHA permanent validation
 
 - [ ] Commit implementation changes intentionally.
 - [ ] Push to `master` without force.
-- [ ] Record the implementation SHA.
-- [ ] Wait for CI on that exact implementation SHA.
-- [ ] Wait for Release Gates on that exact implementation SHA.
-- [ ] Confirm CI success across repository quality, desktop image, native adapter, WorkerHandle input, WorkerHandle text and clipboard, authenticated HTTP, controller image and Compose and persistence, and R13.
-- [ ] Confirm Release Gates success across static and supply-chain policy, full-history Gitleaks, ShellCheck, actionlint, BuildKit, Compose validation, cargo policy, ASan, TSan including the new `controller-api` coverage, Miri, Trivy, CycloneDX SBOM, and exact VEX enforcement.
-- [ ] Repair root causes; do not weaken assertions or gates.
-- [ ] Do not use canceled, superseded, previous-SHA, or partial jobs as completion evidence.
+- [ ] Record implementation SHA.
+- [ ] Wait for CI on that exact SHA.
+- [ ] Wait for Release Gates on that exact SHA.
+- [ ] Confirm CI success across:
+  - [ ] repository quality;
+  - [ ] desktop image;
+  - [ ] native adapter;
+  - [ ] WorkerHandle input;
+  - [ ] WorkerHandle text/clipboard;
+  - [ ] authenticated HTTP;
+  - [ ] controller image/Compose/persistence;
+  - [ ] unchanged R13.
+- [ ] Confirm Release Gates success across:
+  - [ ] static/supply-chain policy;
+  - [ ] full-history Gitleaks;
+  - [ ] ShellCheck/actionlint;
+  - [ ] BuildKit/Compose validation;
+  - [ ] cargo policy;
+  - [ ] ASan;
+  - [ ] existing core TSan;
+  - [ ] new `controller-api` TSan coverage;
+  - [ ] accurately scoped core Miri;
+  - [ ] Trivy/SBOM/VEX.
+- [ ] Repair root causes only; do not weaken gates or assertions.
+- [ ] Do not use previous-SHA, canceled, superseded, or partial jobs as completion evidence.
 
 Acceptance:
 
-- [ ] The implementation SHA is fully green before final evidence edits.
+- [ ] Implementation SHA is fully green before final evidence edits.
 
 ---
 
-## CR16. Final TODO and evidence update
+## CR17. Final evidence and historical corrections
 
-- [ ] Update this TODO with completed checkmarks only after implementation validation.
-- [ ] Fill in the evidence block below.
-- [ ] Append a correction note to `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_TODO_2026-08-05.md` stating that a later review found:
-  - [ ] the recorded ThreadSanitizer and Miri coverage did not include the crate the pass changed;
-  - [ ] the recorded framebuffer performance review omitted per-frame allocation and conversion cost.
-- [ ] Do not retroactively uncheck or rewrite that document's historical implementation claims, which remain accurate.
-- [ ] Link the historical document to this spec and TODO.
-- [ ] Commit the completed TODO and the correction note.
-- [ ] Push the documentation commit without force.
-- [ ] Wait for CI and Release Gates on the exact final repository-tip SHA.
-- [ ] Record the implementation SHA and the external run identifier that validated the tip; do not claim a commit contains its own hash.
+- [ ] Complete this TODO only after implementation validation.
+- [ ] Fill the evidence block below.
+- [ ] Add correction notes to prior hardening records stating:
+  - [ ] prior TSan/Miri claims did not cover the concurrent crate;
+  - [ ] prior framebuffer allocation/pass counts were unmeasured/incomplete;
+  - [ ] valid historical CI/R13 outcomes remain valid.
+- [ ] Do not rewrite historical implementation claims that remain accurate.
+- [ ] Link prior records to this spec/TODO and measurement evidence.
+- [ ] Commit documentation/evidence changes intentionally.
+- [ ] Push without force.
+- [ ] Wait for CI and Release Gates on the exact final documentation tip.
+- [ ] Record external workflow run IDs; do not claim a commit embeds its own hash.
 
 Final evidence:
 
 ```text
 Starting HEAD SHA:
 Implementation SHA:
-Final documentation SHA:
+Final documentation commit SHA:
+Final repository-tip SHA:
 Tip-validating CI run ID:
 Tip-validating Release Gates run ID:
 
-Baseline reproduction results:
+Baseline evidence:
 - CR1 pre-Connected stall:
 - CR2 illegal transition:
 - CR3 pixel format:
-- CR5 in-flight depth:
-- CR6 shutdown deadline:
+- CR4 controller-api TSan:
+- CR5 submissions-in-flight semantics:
+- CR6 process total budget:
+- CR7 startup total budget:
+- CR8 unreachable arms:
+- CR9 secret scrubbing:
+- CR10 privacy paths:
+- CR11 framebuffer measurement:
+- CR12 weak sleep tests:
+
+Secret lifecycle:
+- Project-owned copies scrubbed:
+- LibVNCClient-owned residual disposition:
+
+Framebuffer measurement:
+- Utility path:
+- Exact command:
+- Toolchain/allocator:
+- Resolution/repetitions:
+- Allocation count/bytes:
+- Stage timings:
+- Optimization follow-up disposition:
 
 Local validation:
 
 CI run and conclusion:
 Release Gates run and conclusion:
-R13 job and conclusion:
-TSan coverage after CR4:
-Framebuffer benchmark results:
+R13 job/step and conclusion:
+TSan coverage boundary:
+Miri coverage boundary:
 ```
 
 Acceptance:
 
-- [ ] The same final repository-tip SHA has successful CI and Release Gates.
-- [ ] This TODO is the authoritative completed handoff record for this pass.
+- [ ] Same exact final tip passes CI and Release Gates.
+- [ ] This TODO is the authoritative completed handoff.
 
 ---
 
 ## Final do-not-accept checklist
 
-- [ ] No fix was written before its failing baseline reproduction was demonstrated.
-- [ ] No shutdown architecture was changed.
-- [ ] No queue-depth accounting behavior was changed.
-- [ ] No permit acquisition point was moved.
-- [ ] No framebuffer ETag semantics were weakened.
-- [ ] No R13 assertion was weakened.
-- [ ] No sleep-only race test was accepted.
-- [ ] No helper-only test substituted for a production-path test.
-- [ ] No pixel-format assumption remains undocumented or unnegotiated.
-- [ ] No sanitizer coverage claim exceeds what the workflow actually runs.
-- [ ] No metric claims a meaning its value does not have.
-- [ ] No command payload, typed text, clipboard value, key value, coordinate, bearer token, VNC password, framebuffer byte, or screenshot is logged.
-- [ ] No `continue-on-error` was added.
-- [ ] No broad `.gitleaksignore` entry was added.
-- [ ] No broad Trivy or VEX ignore was added.
-- [ ] No security or release gate was disabled or downgraded.
-- [ ] No force-push was used.
-- [ ] No completion claim relies on an older SHA.
+- [ ] No state-table widening was used to hide the stall defect.
+- [ ] No repair preceded its classified evidence.
+- [ ] No side-effecting transition result is discarded.
+- [ ] No final `Stopped` failure is silently ignored.
+- [ ] No shutdown authority or queue-accounting behavior changed.
+- [ ] No permit acquisition point moved.
+- [ ] No direct bridge wake-up dependency was added in this pass.
+- [ ] No completed zero-budget exit result was discarded before detach.
+- [ ] No pixel-format assumption remains implicit.
+- [ ] No sanitizer claim exceeds actual execution.
+- [ ] No misleading queue-depth name or undocumented metric type remains.
+- [ ] No freed-memory zeroization test exists.
+- [ ] No claim says third-party-owned password copies are scrubbed without evidence.
+- [ ] No privacy sentinel is asserted on a path that cannot carry it.
+- [ ] No framebuffer optimization is mixed into this pass.
+- [ ] No sleep-only negative proof remains.
+- [ ] No framebuffer/ETag/R13 assertion is weakened.
+- [ ] No command payload, text, clipboard, key, coordinate, token, password, framebuffer byte, or screenshot is logged.
+- [ ] No `continue-on-error`, broad ignore, gate downgrade, force push, or older-SHA evidence is accepted.
 
 ---
 
@@ -533,21 +848,21 @@ Acceptance:
 
 This TODO is complete only when:
 
-- [ ] a pre-`Connected` confirmed stall recovers without fatal exit;
-- [ ] illegal state transitions are observable and no side-effecting result is silently discarded;
-- [ ] the native pixel format is negotiated and verified end to end;
-- [ ] ThreadSanitizer covers the concurrent crate or the limitation is evidenced;
-- [ ] the queue-depth metric states what it measures;
-- [ ] process shutdown has its own validated deadline;
-- [ ] the startup cleanup bound is documented or derived;
-- [ ] unreachable error arms are resolved;
-- [ ] the VNC password is scrubbed on both sides of the FFI boundary;
-- [ ] privacy assertions test sentinel values;
-- [ ] the framebuffer performance record is complete and any optimization is evidence-driven;
-- [ ] no sleep-only race test remains;
-- [ ] existing worker, HTTP, VNC, screenshot, framebuffer, WebSocket, and input behavior remains green;
-- [ ] R13 remains unchanged and green;
-- [ ] CI and Release Gates succeed on the exact final repository-tip SHA.
+- [ ] pre-`Connected` stalls recover without `Degraded`, fatal exit, or worker termination;
+- [ ] illegal transitions are diagnosed and non-mutating;
+- [ ] final `Stopped` handling is explicit;
+- [ ] native `[R,G,B,X]` format is pinned and red/blue verified at canonical and PNG layers;
+- [ ] TSan covers the concurrent crate and Miri boundary is stated accurately;
+- [ ] submissions-in-flight naming and complete Prometheus metadata are correct;
+- [ ] process shutdown and startup each obey one total budget;
+- [ ] zero-budget paths observe already-completed exits before detach;
+- [ ] unreachable shutdown arms are removed;
+- [ ] project-owned VNC password copies are scrubbed and third-party residual is documented;
+- [ ] structured privacy tests cover real value-carrying paths;
+- [ ] framebuffer costs are measured reproducibly with no optimization in this pass;
+- [ ] both known sleep-only tests use causal progress and positive controls;
+- [ ] preserved HTTP, worker, framebuffer, WebSocket, input, ETag, and R13 behavior remains green;
+- [ ] exact final repository tip passes CI and Release Gates.
 
 ## Claude Code final report template
 
@@ -557,53 +872,65 @@ Correctness review fix status: COMPLETE / INCOMPLETE
 Starting SHA:
 Implementation SHA:
 Final documentation SHA:
+Final repository-tip SHA:
 Tip-validating run IDs:
 
+Baseline evidence by CR item:
+
 Stall recovery:
-- Repair strategy chosen:
-- Baseline reproduction:
-- Regression tests:
+- Pre-Connected behavior:
+- Connected behavior preserved:
 
 State transitions:
-- Diagnostic added:
-- Discarded results resolved:
-- fatal_exit ownership decision:
+- Diagnostic:
+- fatal_exit ownership:
+- schedule_reconnect legality:
+- final Stopped handling:
 
 Pixel format:
-- Shim format assignment:
-- End-to-end color assertion:
+- Exact shim fields:
+- Canonical red/blue result:
+- PNG red/blue result:
 
-Sanitizer coverage:
-- controller-api TSan disposition:
-- Coverage boundary recorded:
+Sanitizers:
+- controller-api TSan command and result:
+- Escalation level used:
+- Miri boundary:
 
 Metric semantics:
-- Name or help text change:
-- Documentation updated:
+- Rust/API rename:
+- Prometheus rename:
+- HELP/TYPE coverage:
+- Compatibility decision:
 
-Shutdown deadline:
-- New variable and floor:
-- Total bound documented:
+Timeouts:
+- Shutdown total budget/floor:
+- Zero-budget bridge behavior:
+- Startup total budget:
+- Zero-budget worker behavior:
 
-Secret scrubbing:
-- Shim:
-- Rust:
+Secrets:
+- Shared type:
+- Project-owned copies scrubbed:
+- LibVNCClient residual:
+- API token deferral:
 
-Privacy assertions:
+Privacy tests:
 
-Framebuffer performance:
-- Measurements:
-- Optimization disposition:
+Framebuffer measurement:
+- Utility and command:
+- Results:
+- Follow-up disposition:
 
-Tests added or changed:
+Sleep-only test replacements:
+
+Documentation and policy changes:
 
 Local validation:
 
 CI run and conclusion:
 Release Gates run and conclusion:
 R13 job and conclusion:
-
-Historical document corrections:
 
 Remaining risks or skipped validation:
 ```
