@@ -95,13 +95,7 @@ fn input_release_json_logs_exclude_key_and_coordinate_sentinels() {
     };
     let mut input = InputController::default();
     input
-        .set_button(
-            &mut session,
-            coordinate,
-            display,
-            MouseButton::Left,
-            true,
-        )
+        .set_button(&mut session, coordinate, display, MouseButton::Left, true)
         .expect("button press tracked");
     input
         .set_key(&mut session, KeyboardKey::Printable(KEY_SENTINEL), true)
