@@ -45,6 +45,19 @@ static void vrc_set_error(vrc_client *client, const char *message) {
     (void)snprintf(client->last_error, VRC_ERROR_CAPACITY, "%s", message);
 }
 
+static void vrc_secure_scrub(void *buffer, size_t length) {
+    volatile unsigned char *bytes = buffer;
+
+    if (buffer == NULL) {
+        return;
+    }
+    while (length > 0U) {
+        *bytes = 0U;
+        bytes += 1;
+        length -= 1U;
+    }
+}
+
 static char *vrc_duplicate(const char *value) {
     size_t length;
     char *copy;
@@ -74,6 +87,9 @@ static char *vrc_get_password(rfbClient *native) {
     if (client == NULL || client->password == NULL) {
         return NULL;
     }
+    /* LibVNCClient owns and frees this callback result. The shim has no
+     * post-authentication hook through which it can scrub that library-owned
+     * copy. The persistent shim-owned source is scrubbed during destruction. */
     return vrc_duplicate(client->password);
 }
 
@@ -254,6 +270,21 @@ vrc_status vrc_client_connect(vrc_client *client) {
         vrc_set_error(client, "VNC protocol initialization failed");
         return VRC_STATUS_NATIVE_FAILURE;
     }
+
+    /* Request a host-independent 32-bit true-colour format whose in-memory
+     * bytes are exactly [R, G, B, X]. The canonical Rust layer replaces X with
+     * opaque alpha. SetFormatAndEncodings sends this contract to the server. */
+    client->native->format.bitsPerPixel = 32;
+    client->native->format.depth = 24;
+    client->native->format.trueColour = TRUE;
+    client->native->format.bigEndian = FALSE;
+    client->native->format.redMax = 255;
+    client->native->format.greenMax = 255;
+    client->native->format.blueMax = 255;
+    client->native->format.redShift = 0;
+    client->native->format.greenShift = 8;
+    client->native->format.blueShift = 16;
+    client->native->appData.requestedDepth = 24;
 
     client->native->width = client->native->si.framebufferWidth;
     client->native->height = client->native->si.framebufferHeight;
@@ -507,7 +538,11 @@ void vrc_client_destroy(vrc_client *client) {
         free(client->framebuffer);
     }
     free(client->clipboard);
-    free(client->password);
+    if (client->password != NULL) {
+        vrc_secure_scrub(client->password, strlen(client->password));
+        free(client->password);
+        client->password = NULL;
+    }
     free(client->host);
     free(client);
 }
