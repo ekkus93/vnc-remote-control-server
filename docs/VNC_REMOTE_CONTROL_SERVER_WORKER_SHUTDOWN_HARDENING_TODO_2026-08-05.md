@@ -18,6 +18,17 @@ Starting context:
 
 This TODO is a hardening pass. Do not redo the completed out-of-band shutdown refactor.
 
+## Superseding audit note
+
+A later line-by-line review found that this historical pass did not fully close the shutdown problem. Specifically, process shutdown could still block in an unbounded event-bridge join after worker timeout; queue-depth accounting retained compatibility-envelope underflow and final-drain races; failed input releases were silently cleared; several tests exercised helpers rather than full production paths; and startup cleanup could suppress meaningful join outcomes.
+
+Do not treat unchecked boxes below or the historical evidence file as current completion authority. The corrective specification and authoritative checklist are:
+
+- `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_SPEC_2026-08-05.md`
+- `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_TODO_2026-08-05.md`
+
+The historical CI/R13 results remain valid evidence for the earlier tree, but they did not prove the later-discovered concurrency and process-lifecycle guarantees.
+
 ## H0. Baseline verification
 
 - [ ] Check out latest `master`.

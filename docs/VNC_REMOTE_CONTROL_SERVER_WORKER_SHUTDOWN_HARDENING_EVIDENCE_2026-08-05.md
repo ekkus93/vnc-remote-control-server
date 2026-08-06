@@ -12,10 +12,19 @@ Companion TODO:
 
 ## Final status
 
-Status: complete on exact SHA `f0efed77426c8c9fd3a61190f39fd07b3eefc821`.
+Status: historical validation evidence for SHA `f0efed77426c8c9fd3a61190f39fd07b3eefc821`; completion claim superseded by later review.
 
-The worker shutdown hardening pass is complete. The final validated code SHA passed CI and Release Gates. The subsequent evidence-only commit that adds this file must be treated as documentation-only and should also be checked separately before calling the repository tip fully green.
+The recorded SHA did pass the listed CI and Release Gates, and that historical validation remains valid. A later code review found unresolved process-level bridge joining, queue-depth races/underflow, silent input-release failure handling, incomplete full-path test evidence, and startup cleanup result suppression. Therefore this file must not be used as current completion authority.
 
+
+## Later-review correction
+
+The statement below that queue-depth accounting was fully coherent was too broad. The earlier implementation still had an uncounted startup compatibility envelope, commands behind compatibility shutdown could escape explicit drain accounting, and a submitter racing the final drain could leave stale depth. Those defects, along with the process-level event-bridge hang and input-release observability gaps, are addressed by:
+
+- `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_SPEC_2026-08-05.md`
+- `docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_TODO_2026-08-05.md`.
+
+Retain the historical run IDs below as evidence of what those workflows covered; do not infer that they proved the later deterministic race cases.
 ## Implementation and repair commits
 
 - `40e5e027c6452134edec7fdbd99f3bcd71c650ef` — main worker shutdown lifecycle hardening.
@@ -157,7 +166,7 @@ The sandbox used for this pass did not have `cargo`, `rustc`, or `rustfmt`. Loca
 - [x] Saturated-queue tests are deterministic and bounded.
 - [x] Existing worker shutdown tests remain green.
 - [x] Input release still occurs on shutdown.
-- [x] Queue-depth accounting remains coherent.
+- [ ] Historical queue-depth coherence claim superseded; final-drain and startup-envelope defects were corrected in the final hardening pass.
 - [x] Fatal-exit semantics remain correct.
 - [x] Public HTTP shutdown behavior remains stable.
 - [x] R13 remains green on the final validated code SHA.
