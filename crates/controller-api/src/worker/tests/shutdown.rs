@@ -437,12 +437,7 @@ fn process_shutdown_remains_bounded_after_worker_timeout() {
         .expect("worker enters controlled poll");
 
     let started = Instant::now();
-    let result = finalize_runtime(
-        Ok(()),
-        worker,
-        bridge,
-        Duration::from_millis(100),
-    );
+    let result = finalize_runtime(Ok(()), worker, bridge, Duration::from_millis(100));
 
     assert!(matches!(
         result,
