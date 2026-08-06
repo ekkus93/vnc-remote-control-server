@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: post-correctness-recovery-master
+  group: post-correctness-recovery-master-final
   cancel-in-progress: true
 
 jobs:
