@@ -1,0 +1,88 @@
+name: ShellCheck Directive Repair
+
+on:
+  push:
+    paths:
+      - .github/workflows/shellcheck-directive-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    name: Add narrow ShellCheck directives
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out master
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Add source-local directives
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one patch anchor, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace_once(
+              "desktop/entrypoint.sh",
+              "\nstop_children() {\n",
+              "\n# Invoked indirectly by cleanup and signal traps.\n# shellcheck disable=SC2317\nstop_children() {\n",
+          )
+          replace_once(
+              "desktop/entrypoint.sh",
+              "\ncleanup() {\n",
+              "\n# Invoked indirectly by TERM, INT, and EXIT traps.\n# shellcheck disable=SC2317\ncleanup() {\n",
+          )
+          replace_once(
+              "desktop/xstartup",
+              "\nexec dbus-launch --exit-with-session bash -euo pipefail -c '\n",
+              "\n# Expansion is intentionally deferred to the inner Bash process.\n# shellcheck disable=SC2016\nexec dbus-launch --exit-with-session bash -euo pipefail -c '\n",
+          )
+          replace_once(
+              "tests/compose/run.sh",
+              "assert_secret_absent_from_home() {\n    printf '%s' \"$vnc_password\" \\\n        | \"${persistent[@]}\" exec -T desktop sh -ec '\n",
+              "assert_secret_absent_from_home() {\n    # Expansion is intentionally deferred to the shell inside the desktop container.\n    # shellcheck disable=SC2016\n    printf '%s' \"$vnc_password\" \\\n        | \"${persistent[@]}\" exec -T desktop sh -ec '\n",
+          )
+
+      - name: Validate exact release ShellCheck surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          shellcheck \
+            desktop/entrypoint.sh \
+            desktop/healthcheck.sh \
+            desktop/xstartup \
+            tests/desktop/run.sh \
+            tests/native/run.sh \
+            tests/worker-e2e/run.sh \
+            tests/worker-text-clipboard-e2e/run.sh \
+            tests/http-e2e/run.sh \
+            controller/healthcheck.sh \
+            tests/compose/run.sh \
+            tests/integration/run.sh
+          git diff --check
+
+      - name: Commit source-local directives
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add desktop/entrypoint.sh desktop/xstartup tests/compose/run.sh
+          git diff --cached --quiet && {
+            echo "No ShellCheck directive changes were produced" >&2
+            exit 1
+          }
+          git commit -m "Document intentional ShellCheck indirect paths"
+          git push origin HEAD:master
