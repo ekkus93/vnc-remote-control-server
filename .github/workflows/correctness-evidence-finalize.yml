@@ -1,0 +1,327 @@
+name: Correctness Evidence Finalize
+
+on:
+  push:
+    paths:
+      - .github/workflows/correctness-evidence-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  measure_and_document:
+    name: Measure framebuffer and finalize correctness documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out exact master tip
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          ref: master
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libvncserver-dev \
+            pkg-config
+
+      - name: Run reproducible framebuffer measurement
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version --verbose > /tmp/framebuffer-environment.txt
+          cargo --version --verbose >> /tmp/framebuffer-environment.txt
+          ldd --version | head -n 1 >> /tmp/framebuffer-environment.txt
+          uname -a >> /tmp/framebuffer-environment.txt
+          cargo test --locked \
+            --package controller-api \
+            --test framebuffer_measurement \
+            measure_representative_frame_pipeline \
+            -- \
+            --ignored \
+            --exact \
+            --nocapture \
+            --test-threads=1 \
+            2>&1 | tee /tmp/framebuffer-measurement-full.log
+          grep 'framebuffer_measurement_v1' /tmp/framebuffer-measurement-full.log \
+            > /tmp/framebuffer-measurement-results.txt
+          test -s /tmp/framebuffer-measurement-results.txt
+
+      - name: Update contract and evidence documents
+        shell: python
+        run: |
+          from pathlib import Path
+          from textwrap import dedent
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding="utf-8")
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one patch anchor, found {count}")
+              write(path, text.replace(old, new, 1))
+
+          def append_once(path: str, marker: str, section: str) -> None:
+              text = read(path)
+              if marker in text:
+                  return
+              write(path, text.rstrip() + "\n\n" + section.strip() + "\n")
+
+          replace_once(
+              "docs/OPERATOR_GUIDE.md",
+              "Metrics use bounded labels and exclude request payloads and secret values.",
+              dedent("""
+              Metrics use bounded labels and exclude request payloads and secret values. Every exported series includes Prometheus `# HELP` and `# TYPE` metadata.
+
+              `vrc_worker_command_submissions_in_flight` is a gauge of command submissions that have acquired an accounting permit but have not yet released it. Permit acquisition occurs before bounded-queue admission, so this value can transiently exceed `VRC_COMMAND_CAPACITY`; it is not queue depth. The earlier `vrc_worker_command_queue_depth` name was removed without an alias in v0.1 because no repository-local dashboard, alert, API response, or R13 contract consumed it.
+              """).strip(),
+          )
+
+          replace_once(
+              "docs/OPERATOR_GUIDE.md",
+              dedent("""
+              Compose services use a 15-second stop grace period. The controller handles SIGTERM by:
+
+              1. making readiness fail closed;
+              2. rejecting new commands;
+              3. stopping HTTP acceptance;
+              4. releasing tracked keys and buttons where possible;
+              5. closing the VNC connection;
+              6. joining the native worker and event bridge;
+              7. exiting within the configured shutdown grace period.
+              """).strip(),
+              dedent("""
+              Compose services use a 15-second stop grace period. `VRC_SHUTDOWN_GRACE_MS` bounds HTTP server draining, while `VRC_SHUTDOWN_TIMEOUT_MS` is one total process-cleanup budget shared by the worker and event bridge. The controller establishes one deadline, spends the remaining budget on worker shutdown, then passes only the remainder to bridge cleanup. Server error precedence remains server, worker, then bridge.
+
+              The controller handles SIGTERM by:
+
+              1. making readiness fail closed;
+              2. rejecting new commands;
+              3. stopping HTTP acceptance;
+              4. releasing tracked keys and buttons where possible;
+              5. closing the VNC connection;
+              6. joining the native worker and event bridge within the one total cleanup budget;
+              7. observing an already-completed bridge exit even when no budget remains, or deliberately detaching a still-active bridge with a payload-free diagnostic;
+              8. exiting before the Compose stop grace period expires under the documented defaults.
+
+              The default process-cleanup budget is 5000 ms. Configuration below `max(500 ms, 8 × 50 ms)` is rejected; with the current event-bridge poll interval, the derived minimum is 500 ms. Direct bridge wake-up is deliberately deferred: the current dependency-free stop flag and bounded poll remain authoritative.
+              """).strip(),
+          )
+
+          replace_once(
+              "docs/OPERATOR_GUIDE.md",
+              "| HTTP shutdown drain | `VRC_SHUTDOWN_GRACE_MS` | 10000 ms | maximum 300000 ms |",
+              "| HTTP shutdown drain | `VRC_SHUTDOWN_GRACE_MS` | 10000 ms | maximum 300000 ms |\n| Complete worker startup | `VRC_STARTUP_TIMEOUT_MS` | 10000 ms | one total acknowledgement-and-cleanup budget |\n| Process cleanup | `VRC_SHUTDOWN_TIMEOUT_MS` | 5000 ms | minimum `max(500 ms, 8 × event-bridge poll interval)` |",
+          )
+
+          replace_once(
+              "docs/OPERATOR_GUIDE.md",
+              "Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed.",
+              "Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.",
+          )
+
+          append_once(
+              "deploy/README.md",
+              "## Controller timing budgets",
+              dedent("""
+              ## Controller timing budgets
+
+              `VRC_STARTUP_TIMEOUT_MS` is the complete native-worker startup budget, including timeout cleanup; its default is 10000 ms. `VRC_SHUTDOWN_TIMEOUT_MS` is one total process-cleanup budget shared by worker shutdown and event-bridge cleanup; its default is 5000 ms and values below the derived 500 ms minimum are rejected. These are distinct from `VRC_COMMAND_ACK_TIMEOUT_MS`, which applies only to individual HTTP command acknowledgements, and `VRC_SHUTDOWN_GRACE_MS`, which applies to HTTP server draining.
+              """),
+          )
+
+          append_once(
+              "SECURITY.md",
+              "## VNC password lifecycle",
+              dedent("""
+              ## VNC password lifecycle
+
+              The shared `SecretString` abstraction is non-`Debug` and zeroizes its live byte buffer on drop. The controller uses it for the secret-file read result, validated configuration, worker settings and native-client configuration. The Rust adapter scrubs its temporary NUL-terminated connection buffer, and the C shim scrubs its persistent duplicated password before release using a C11-compatible volatile-byte loop. Tests instrument live buffers and drop behavior; no test reads freed memory.
+
+              LibVNCClient 0.9.14+dfsg-1ubuntu0.2 owns the allocation returned by its `GetPassword` callback and frees it inside the library. The shim has no post-authentication hook that can scrub that library-owned copy, so this remains an explicit third-party residual rather than a project-owned-zeroization claim. Classic VNC authentication also uses only the first eight password bytes for the DES challenge response; operators should still use a private network and treat VNC authentication as defense in depth, not transport confidentiality.
+
+              API bearer-token storage and constant-time comparison are unchanged in this pass. Moving the API token to the shared zeroizing abstraction is a deferred follow-up so that this correctness repair does not mix authentication behavior changes into the shutdown and worker-state work.
+              """),
+          )
+
+          replace_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md",
+              "AddressSanitizer instruments the Rust LibVNCClient adapter and its boundary tests. ThreadSanitizer is limited to Rust-only shared-state tests because combining TSan with the distribution LibVNCClient shared library is not a reliable signal. Rust does not expose a general UBSan mode; Miri is the release gate for Rust undefined behavior and provenance checks. The Debian LibVNCClient shared library is not rebuilt with sanitizers, so upstream native-library defects remain outside this repository's instrumentation boundary.",
+              "AddressSanitizer instruments the Rust LibVNCClient adapter and its boundary tests. ThreadSanitizer executes the complete `controller-api --lib` target, including worker, shutdown, event-bridge, framebuffer, observability, and HTTP library tests, and separately executes `remote-desktop-core --lib`. No skip list, suppression file, `continue-on-error`, or native-adapter exclusion feature is used. The distribution Debian LibVNCClient shared library is not rebuilt with sanitizers, so upstream native-library defects remain outside this repository's instrumentation boundary. Rust does not expose a general UBSan mode; Miri is the pure-Rust undefined-behavior and provenance gate.",
+          )
+
+          replace_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md",
+              "Miri runs the pure-Rust core test target with `-Zmiri-disable-isolation` because Proptest resolves failure-persistence paths through the host current working directory. This permits host filesystem and environment access but does not disable Miri's undefined-behavior, validity, provenance, leak, or data-race checks. The Miri target contains no native FFI or network operations. Test generation, shrinking, assertions, and the complete pure-Rust core test target remain enabled.",
+              "Miri runs only `remote-desktop-core --lib` with `-Zmiri-disable-isolation` because Proptest resolves failure-persistence paths through the host current working directory. This permits host filesystem and environment access but does not disable Miri's undefined-behavior, validity, provenance, leak, or data-race checks. `controller-api` is outside the Miri boundary because it depends on Tokio, OS threads, native FFI, and real I/O. Test generation, shrinking, assertions, and the complete pure-Rust core test target remain enabled.",
+          )
+
+          append_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md",
+              "## Metric and API naming compatibility",
+              dedent("""
+              ## Metric and API naming compatibility
+
+              Exported metric and API names must describe the represented value. A misleading pre-release name may be corrected without an alias only when a repository-wide search confirms that no shipped API schema, dashboard, alert, deployment example, operator contract, or permanent integration test consumes it. The evidence must record the search and the compatibility decision. Once an external consumer is identified, a rename requires a documented compatibility window or an explicit breaking-release decision.
+
+              For v0.1, `vrc_worker_command_queue_depth` was replaced by `vrc_worker_command_submissions_in_flight` without an alias. Accounting and permit acquisition did not change; the value can transiently exceed bounded channel capacity because it includes submissions between permit acquisition and queue admission.
+              """),
+          )
+
+          append_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_HARDENING_EVIDENCE_2026-08-05.md",
+              "## 2026-08-06 correctness-review correction",
+              dedent("""
+              ## 2026-08-06 correctness-review correction
+
+              The historical CI and R13 outcomes recorded here remain valid. Two coverage/performance descriptions were incomplete: the prior ThreadSanitizer/Miri discussion did not establish sanitizer execution over the concurrent `controller-api` crate, and prior framebuffer allocation/pass-count statements were not based on a committed counting-allocator measurement. The correctness-review pass adds full `controller-api --lib` TSan, retains Miri only for `remote-desktop-core`, and records reproducible framebuffer measurements in `VNC_REMOTE_CONTROL_SERVER_FRAMEBUFFER_MEASUREMENT_EVIDENCE_2026-08-06.md`. No historical green result is being rewritten.
+              """),
+          )
+
+          append_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_TODO_2026-08-05.md",
+              "## 2026-08-06 evidence scope correction",
+              dedent("""
+              ## 2026-08-06 evidence scope correction
+
+              Completion of this historical shutdown TODO remains valid. Sanitizer-boundary and framebuffer-cost claims are superseded only in scope by the correctness-review evidence: `controller-api --lib` now runs under TSan, Miri remains limited to `remote-desktop-core`, and framebuffer allocation/timing statements now come from the committed counting-allocator utility. See `VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_FIX_TODO_2026-08-06.md` and `VNC_REMOTE_CONTROL_SERVER_FRAMEBUFFER_MEASUREMENT_EVIDENCE_2026-08-06.md`.
+              """),
+          )
+
+          replace_once(
+              "docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_IMPLEMENTATION_NOTES_2026-08-06.md",
+              "Status: implementation in progress; permanent exact-SHA validation not yet complete.",
+              "Status: implementation complete; final exact-SHA evidence validation in progress.",
+          )
+
+          environment = Path("/tmp/framebuffer-environment.txt").read_text(encoding="utf-8").strip()
+          results = Path("/tmp/framebuffer-measurement-results.txt").read_text(encoding="utf-8").strip()
+          measurement_doc = dedent(f"""
+          # VNC Remote Control Server Framebuffer Measurement Evidence
+
+          Date: 2026-08-06
+
+          Utility:
+
+          - `crates/controller-api/tests/framebuffer_measurement.rs`
+          - `crates/controller-api/tests/FRAMEBUFFER_MEASUREMENT.md`
+
+          ## Exact command
+
+          ```bash
+          cargo test --locked \\
+            --package controller-api \\
+            --test framebuffer_measurement \\
+            measure_representative_frame_pipeline \\
+            -- \\
+            --ignored \\
+            --exact \\
+            --nocapture \\
+            --test-threads=1
+          ```
+
+          ## Environment
+
+          ```text
+          {environment}
+          ```
+
+          Allocator: `std::alloc::System` wrapped by the utility's counting global allocator.
+
+          Resolution: 1920×1080.
+
+          Frame bytes: 8,294,400.
+
+          Repetitions: 12 per stage.
+
+          ## Raw measurements
+
+          ```text
+          {results}
+          ```
+
+          ## Interpretation
+
+          These are runner-specific measurements, not release thresholds. They distinguish allocation calls/requested bytes from resident memory and isolate representative stages where possible. `production_changed_frame` and `production_duplicate_frame` are the public `FramebufferStore::replace_native_rgbx` paths; the representative write-lock stage is an uncontended micro-measurement rather than a claim to isolate every instruction executed under the production lock.
+
+          No framebuffer hot-path optimization is part of the correctness pass. Equality, revision, timestamp, availability, ETag, stale-frame, and unchanged R13 `304` semantics remain authoritative. A separate performance specification should be created only if these measurements and a production workload justify one.
+          """).strip() + "\n"
+          write(
+              "docs/VNC_REMOTE_CONTROL_SERVER_FRAMEBUFFER_MEASUREMENT_EVIDENCE_2026-08-06.md",
+              measurement_doc,
+          )
+
+          release_notes = dedent("""
+          # VNC Remote Control Server Correctness Review Release Notes
+
+          Date: 2026-08-06
+
+          This correctness pass repairs worker recovery, state-transition observability, native pixel negotiation, timeout contracts, sanitizer coverage, metric naming, secret lifecycle, privacy proofs, and race-test causality without changing the public control API.
+
+          ## Behavior changes
+
+          - A confirmed stall before the first complete framebuffer now invalidates session state and schedules reconnect without entering `Degraded`, setting fatal exit, or terminating the worker. Previously connected stalls retain `Connected -> Degraded -> reconnect` semantics.
+          - Illegal state transitions emit a payload-free `worker_illegal_state_transition` diagnostic and do not mutate health. Final `Stopped` transition failure is explicit rather than discarded.
+          - LibVNCClient now negotiates a 32-bit little-endian true-colour `[R,G,B,X]` layout; canonical storage remains `[R,G,B,255]`. Native and authenticated HTTP E2E tests verify red and blue at canonical and decoded-PNG layers.
+          - `VRC_STARTUP_TIMEOUT_MS` now bounds the complete startup operation, including timeout cleanup, rather than allowing a second full cleanup window.
+          - New `VRC_SHUTDOWN_TIMEOUT_MS` defaults to 5000 ms and supplies one total worker-plus-event-bridge process-cleanup budget. Values below the derived 500 ms floor are rejected.
+          - `vrc_worker_command_queue_depth` was replaced without alias by `vrc_worker_command_submissions_in_flight`; the implementation and permit-acquisition point are unchanged.
+
+          ## Safety and evidence changes
+
+          - Release Gates execute `controller-api --lib` and `remote-desktop-core --lib` under ThreadSanitizer. Miri remains accurately scoped to `remote-desktop-core`; LibVNCClient is not rebuilt with sanitizers.
+          - Project-owned VNC password buffers are zeroized before release. The callback allocation owned and freed by LibVNCClient remains an explicit third-party residual.
+          - Privacy tests parse structured JSON logs on real input-release, text/clipboard, native-password, and bearer-token paths.
+          - Negative worker tests use causal loop progress and positive controls instead of sleep as proof.
+          - A committed 1920×1080 counting-allocator utility records framebuffer allocation and timing evidence. No framebuffer optimization was mixed into this pass.
+
+          ## Deferred follow-ups
+
+          - direct event-bridge wake-up instead of bounded polling;
+          - migration of API bearer-token storage to the shared zeroizing secret type;
+          - framebuffer optimization only under a separate measured performance specification;
+          - a compatibility alias only if an external metric consumer is identified.
+          """).strip() + "\n"
+          write(
+              "docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_RELEASE_NOTES_2026-08-06.md",
+              release_notes,
+          )
+
+      - name: Commit measured evidence and documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            SECURITY.md \
+            deploy/README.md \
+            docs/OPERATOR_GUIDE.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_HARDENING_EVIDENCE_2026-08-05.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_WORKER_SHUTDOWN_FINAL_HARDENING_TODO_2026-08-05.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_IMPLEMENTATION_NOTES_2026-08-06.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_FRAMEBUFFER_MEASUREMENT_EVIDENCE_2026-08-06.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_RELEASE_NOTES_2026-08-06.md
+          git diff --cached --quiet && {
+            echo "No evidence changes were produced" >&2
+            exit 1
+          }
+          git commit -m "Finalize correctness review documentation and measurements"
+          git push origin HEAD:master
