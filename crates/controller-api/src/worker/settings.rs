@@ -38,7 +38,10 @@ pub struct WorkerSettings {
 impl WorkerSettings {
     /// Validates all settings before a thread is spawned.
     pub fn validate(&self) -> Result<(), DesktopError> {
-        if self.native.host.is_empty() || self.native.password.is_empty() || self.native.port == 0 {
+        if self.native.host.is_empty()
+            || self.native.password.expose_secret().is_empty()
+            || self.native.port == 0
+        {
             return Err(DesktopError::Configuration(
                 "native worker endpoint and credentials must be nonempty".to_owned(),
             ));
