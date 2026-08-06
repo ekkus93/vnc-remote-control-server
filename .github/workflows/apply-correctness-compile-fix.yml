@@ -1,0 +1,48 @@
+name: Apply correctness compile repair
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-correctness-compile-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Make PNG output allocation fallible
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/controller-api/src/bin/worker-text-clipboard-e2e.rs')
+          text = path.read_text()
+          old = '    let mut pixels = vec![0; reader.output_buffer_size()];\n'
+          new = '''    let output_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| io::Error::other("decoded PNG output size overflow"))?;
+    let mut pixels = vec![0; output_size];
+'''
+          if text.count(old) != 1:
+              raise SystemExit('PNG output allocation marker mismatch')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit and remove workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-correctness-compile-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/controller-api/src/bin/worker-text-clipboard-e2e.rs .github/workflows/apply-correctness-compile-fix.yml
+          git commit -m "Handle fallible PNG output sizing"
+          git push origin HEAD:master
