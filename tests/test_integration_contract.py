@@ -8,7 +8,17 @@ ROOT = Path(__file__).resolve().parents[1]
 class R13IntegrationContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = (ROOT / "tests/integration/run.sh").read_text(encoding="utf-8")
-        self.driver = (ROOT / "tests/integration/r13_integration.py").read_text(encoding="utf-8")
+        # The R13 driver is split across sibling `r13_*.py` modules by
+        # responsibility (config, types, helpers, harness, checks); the
+        # entry point `r13_integration.py` only orchestrates them. Markers
+        # below are checked against the concatenated driver source so this
+        # contract still verifies the implementation regardless of which
+        # module a given behavior lives in.
+        driver_dir = ROOT / "tests/integration"
+        self.driver = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted(driver_dir.glob("r13_*.py"))
+        )
         self.workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     def test_harness_is_real_compose_bounded_and_self_cleaning(self) -> None:

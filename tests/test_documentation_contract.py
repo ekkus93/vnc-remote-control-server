@@ -11,7 +11,7 @@ OPENAPI_PATH = ROOT / "docs" / "openapi.json"
 OPERATOR_GUIDE_PATH = ROOT / "docs" / "OPERATOR_GUIDE.md"
 WEBSOCKET_PATH = ROOT / "docs" / "WEBSOCKET_EVENTS.md"
 README_PATH = ROOT / "README.md"
-HTTP_SOURCE_PATH = ROOT / "crates" / "controller-api" / "src" / "http.rs"
+HTTP_SOURCE_PATH = ROOT / "crates" / "controller-api" / "src" / "http" / "router.rs"
 HTTP_E2E_PATH = ROOT / "tests" / "http-e2e" / "run.sh"
 
 EXPECTED_OPERATIONS = {
@@ -186,7 +186,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertEqual(documented, EXPECTED_OPERATIONS)
 
         source = HTTP_SOURCE_PATH.read_text(encoding="utf-8")
-        router = source.split("pub fn router(state: HttpState) -> Router {", 1)[1].split("#[derive(Clone)]", 1)[0]
+        router = source.split("pub fn router(state: HttpState) -> Router {", 1)[1]
         for path, methods in EXPECTED_OPERATIONS.items():
             source_path = path.removeprefix("/v1") if path.startswith("/v1/") else path
             self.assertIn(f'.route("{source_path}"', router)
