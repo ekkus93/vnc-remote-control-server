@@ -15,6 +15,7 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{Ordering, compiler_fence};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:8080";
@@ -47,13 +48,68 @@ const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CHANNEL_CAPACITY: usize = 65_536;
 const MAX_SCREENSHOT_CONCURRENCY: usize = 64;
 
+/// Process-wide API bearer token. The value is intentionally not `Debug` or
+/// `Display`; cloning this handle clones an `Arc`, not the token bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ApiToken {
+    inner: Arc<SecretString>,
+}
+
+impl ApiToken {
+    /// Wraps a parsed file-backed secret as a long-lived bearer token.
+    pub fn new(secret: SecretString) -> Self {
+        Self {
+            inner: Arc::new(secret),
+        }
+    }
+
+    /// Exposes bytes only to the constant-time bearer comparison boundary.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.inner.expose_secret().as_bytes()
+    }
+
+    /// Returns whether this token would be unusable for authentication.
+    pub fn is_empty(&self) -> bool {
+        self.inner.expose_secret().is_empty()
+    }
+
+    /// Exposes the secret for tests and narrow configuration assertions.
+    pub fn expose_secret(&self) -> &str {
+        self.inner.expose_secret()
+    }
+}
+
+impl From<SecretString> for ApiToken {
+    fn from(value: SecretString) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Arc<str>> for ApiToken {
+    fn from(value: Arc<str>) -> Self {
+        Self::new(SecretString::from(value.as_ref()))
+    }
+}
+
+impl From<&str> for ApiToken {
+    fn from(value: &str) -> Self {
+        Self::new(SecretString::from(value))
+    }
+}
+
+impl AsRef<str> for ApiToken {
+    fn as_ref(&self) -> &str {
+        self.expose_secret()
+    }
+}
+
 /// Fully validated process configuration.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ControllerConfig {
     /// HTTP listener address.
     pub listen_address: SocketAddr,
     /// Static bearer token. The value is intentionally not `Debug`.
-    pub api_token: Arc<str>,
+    pub api_token: ApiToken,
     /// Stable identifier used to namespace screenshot ETags for this process.
     pub process_instance: Arc<str>,
     /// Maximum accepted JSON request body size.
@@ -132,8 +188,13 @@ impl ControllerConfig {
             "VRC_VNC_PASSWORD_FILE",
             DEFAULT_VNC_PASSWORD_FILE,
         ));
-        let api_token_secret = secrets.read_secret(&api_token_path)?;
-        let api_token: Arc<str> = Arc::from(api_token_secret.expose_secret());
+        let api_token = ApiToken::new(secrets.read_secret(&api_token_path)?);
+        if api_token.is_empty() {
+            return Err(ConfigError::SecretFile {
+                path: api_token_path,
+                reason: "contents are empty or contain NUL",
+            });
+        }
         let vnc_password = secrets.read_secret(&vnc_password_path)?;
 
         let process_instance = environment
@@ -390,21 +451,67 @@ impl SecretReader for SystemSecretReader {
             path: path.to_path_buf(),
             reason: "cannot read contents",
         })?;
-        let mut value = String::from_utf8(bytes).map_err(|_| ConfigError::SecretFile {
-            path: path.to_path_buf(),
-            reason: "contents are not UTF-8",
-        })?;
-        while value.ends_with('\n') || value.ends_with('\r') {
-            value.pop();
-        }
-        if value.is_empty() || value.contains('\0') {
-            return Err(ConfigError::SecretFile {
-                path: path.to_path_buf(),
-                reason: "contents are empty or contain NUL",
-            });
-        }
-        Ok(SecretString::from(value))
+        parse_secret_bytes(path, bytes)
     }
+}
+
+fn parse_secret_bytes(path: &Path, bytes: Vec<u8>) -> Result<SecretString, ConfigError> {
+    parse_secret_bytes_with_rejection_observer(path, bytes, |_| {})
+}
+
+fn parse_secret_bytes_with_rejection_observer<F>(
+    path: &Path,
+    bytes: Vec<u8>,
+    observe_rejection: F,
+) -> Result<SecretString, ConfigError>
+where
+    F: FnOnce(&[u8]),
+{
+    let mut value = match String::from_utf8(bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            return scrub_and_reject_secret_bytes(
+                path,
+                error.into_bytes(),
+                "contents are not UTF-8",
+                observe_rejection,
+            );
+        }
+    };
+    while value.ends_with('\n') || value.ends_with('\r') {
+        value.pop();
+    }
+    if value.is_empty() || value.contains('\0') {
+        return scrub_and_reject_secret_bytes(
+            path,
+            value.into_bytes(),
+            "contents are empty or contain NUL",
+            observe_rejection,
+        );
+    }
+    Ok(SecretString::from(value))
+}
+
+fn scrub_and_reject_secret_bytes<F>(
+    path: &Path,
+    mut bytes: Vec<u8>,
+    reason: &'static str,
+    observe_rejection: F,
+) -> Result<SecretString, ConfigError>
+where
+    F: FnOnce(&[u8]),
+{
+    secure_scrub_bytes(&mut bytes);
+    observe_rejection(&bytes);
+    Err(ConfigError::SecretFile {
+        path: path.to_path_buf(),
+        reason,
+    })
+}
+
+fn secure_scrub_bytes(bytes: &mut [u8]) {
+    bytes.fill(0);
+    compiler_fence(Ordering::SeqCst);
 }
 
 #[cfg(unix)]
@@ -504,6 +611,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
     struct MapEnvironment(HashMap<String, String>);
@@ -687,6 +795,46 @@ mod tests {
         fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o666))
             .expect("set broad permissions");
         assert!(SystemSecretReader.read_secret(&secret_path).is_err());
+    }
+
+    fn rejected_secret_observation(bytes: Vec<u8>) -> (Result<SecretString, ConfigError>, Vec<u8>) {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let observed_for_callback = Arc::clone(&observed);
+        let result = parse_secret_bytes_with_rejection_observer(
+            Path::new("/tmp/secret"),
+            bytes,
+            move |scrubbed| {
+                *observed_for_callback
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = scrubbed.to_vec();
+            },
+        );
+        let observed = observed
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        (result, observed)
+    }
+
+    #[test]
+    fn invalid_utf8_secret_bytes_are_scrubbed_before_rejection() {
+        let (result, observed) = rejected_secret_observation(vec![0xff, b's', b'e', b'c']);
+        assert!(matches!(result, Err(ConfigError::SecretFile { reason: "contents are not UTF-8", .. })));
+        assert_eq!(observed, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn nul_secret_bytes_are_scrubbed_before_rejection() {
+        let (result, observed) = rejected_secret_observation(b"abc\0def".to_vec());
+        assert!(matches!(result, Err(ConfigError::SecretFile { reason: "contents are empty or contain NUL", .. })));
+        assert_eq!(observed, vec![0; 7]);
+    }
+
+    #[test]
+    fn empty_after_trim_secret_bytes_are_scrubbed_before_rejection() {
+        let (result, observed) = rejected_secret_observation(b"\r\n".to_vec());
+        assert!(matches!(result, Err(ConfigError::SecretFile { reason: "contents are empty or contain NUL", .. })));
+        assert_eq!(observed, vec![0, 0]);
     }
 
     #[test]
