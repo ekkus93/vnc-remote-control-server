@@ -95,7 +95,6 @@ jobs:
       - name: Run full-history secret scan
         run: >-
           gitleaks git
-          --config .gitleaks.toml
           --redact
           --report-format json
           --report-path artifacts/static-policy/gitleaks.json
