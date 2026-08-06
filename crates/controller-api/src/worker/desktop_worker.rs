@@ -12,10 +12,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 const WORKER_THREAD_NAME: &str = "vnc-desktop-worker";
 pub(super) const DROP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerExitWait {
+    Exited,
+    TimedOut,
+}
 
 /// Owning worker runtime. Dropping it requests shutdown and joins the thread.
 pub struct DesktopWorker {
@@ -50,15 +56,13 @@ impl DesktopWorker {
     }
 
     /// Requests out-of-band shutdown and waits no longer than `timeout` for
-    /// the worker thread to report exit. The request cannot fail on a
-    /// saturated command queue: it does not enqueue `WorkerCommand::Shutdown`,
-    /// it stores directly into a shared shutdown flag the worker loop checks
-    /// independently of the bounded queue.
+    /// the worker thread to report exit. A zero timeout still performs one
+    /// nonblocking exit observation before deliberate detach.
     pub fn shutdown(mut self, timeout: Duration) -> Result<(), DesktopError> {
         self.client.request_shutdown();
         match self.wait_for_worker_exit(timeout) {
-            Ok(()) => self.join_worker(),
-            Err(DesktopError::Timeout) => {
+            WorkerExitWait::Exited => self.join_worker(),
+            WorkerExitWait::TimedOut => {
                 tracing::warn!(
                     timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
                     "desktop_worker_shutdown_timeout"
@@ -66,7 +70,6 @@ impl DesktopWorker {
                 self.detach_worker();
                 Err(DesktopError::Timeout)
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -93,6 +96,7 @@ impl DesktopWorker {
     {
         settings.validate()?;
         let startup_timeout = settings.startup_timeout;
+        let startup_deadline = Instant::now() + startup_timeout;
         let command_capacity = settings.command_capacity;
         let framebuffer = FramebufferStore::new(settings.maximum_framebuffer_bytes)?;
         let thread_framebuffer = framebuffer.clone();
@@ -148,7 +152,7 @@ impl DesktopWorker {
                 DesktopError::Configuration(format!("failed to spawn desktop worker: {error}"))
             })?;
 
-        match startup_rx.recv_timeout(startup_timeout) {
+        match startup_rx.recv_timeout(remaining(startup_deadline)) {
             Ok(()) => Ok(Self {
                 client: WorkerClient {
                     commands: command_tx,
@@ -173,8 +177,11 @@ impl DesktopWorker {
                 let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter(Arc::clone(
                     &command_queue_depth,
                 )));
-                match cleanup_startup_worker_after_timeout(join, worker_exited_rx, startup_timeout)
-                {
+                match cleanup_startup_worker_after_timeout(
+                    join,
+                    worker_exited_rx,
+                    remaining(startup_deadline),
+                ) {
                     Err(DesktopError::WorkerUnavailable) => Err(DesktopError::WorkerUnavailable),
                     Ok(()) | Err(DesktopError::Timeout) => Err(DesktopError::Timeout),
                     Err(error) => Err(error),
@@ -182,8 +189,11 @@ impl DesktopWorker {
             }
             Err(RecvTimeoutError::Disconnected) => {
                 shutdown_requested.store(true, Ordering::Release);
-                match cleanup_startup_worker_after_timeout(join, worker_exited_rx, startup_timeout)
-                {
+                match cleanup_startup_worker_after_timeout(
+                    join,
+                    worker_exited_rx,
+                    remaining(startup_deadline),
+                ) {
                     Ok(()) => Err(DesktopError::WorkerUnavailable),
                     Err(error) => Err(error),
                 }
@@ -191,13 +201,13 @@ impl DesktopWorker {
         }
     }
 
-    fn wait_for_worker_exit(&mut self, timeout: Duration) -> Result<(), DesktopError> {
+    fn wait_for_worker_exit(&mut self, timeout: Duration) -> WorkerExitWait {
         let Some(receiver) = self.worker_exited.take() else {
-            return Ok(());
+            return WorkerExitWait::Exited;
         };
         match receiver.recv_timeout(timeout) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => Ok(()),
-            Err(RecvTimeoutError::Timeout) => Err(DesktopError::Timeout),
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => WorkerExitWait::Exited,
+            Err(RecvTimeoutError::Timeout) => WorkerExitWait::TimedOut,
         }
     }
 
@@ -212,6 +222,10 @@ impl DesktopWorker {
         };
         join_worker_handle(join)
     }
+}
+
+fn remaining(deadline: Instant) -> Duration {
+    deadline.saturating_duration_since(Instant::now())
 }
 
 fn join_worker_handle(join: JoinHandle<()>) -> Result<(), DesktopError> {
@@ -255,21 +269,17 @@ impl Drop for DesktopWorker {
         }
         self.client.request_shutdown();
         match self.wait_for_worker_exit(DROP_SHUTDOWN_TIMEOUT) {
-            Ok(()) => {
+            WorkerExitWait::Exited => {
                 if let Err(error) = self.join_worker() {
                     tracing::error!(error = ?error, "desktop_worker_drop_join_failed");
                 }
             }
-            Err(DesktopError::Timeout) => {
+            WorkerExitWait::TimedOut => {
                 tracing::warn!(
                     timeout_ms =
                         u64::try_from(DROP_SHUTDOWN_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
                     "desktop_worker_drop_shutdown_timeout"
                 );
-                self.detach_worker();
-            }
-            Err(error) => {
-                tracing::error!(error = ?error, "desktop_worker_drop_wait_failed");
                 self.detach_worker();
             }
         }
