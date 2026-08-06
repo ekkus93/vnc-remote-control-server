@@ -1,0 +1,53 @@
+name: Apply nightly atomic API repair
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-nightly-atomic-api.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Replace deprecated atomic API calls
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            crates/controller-api/src/events.rs
+            crates/controller-api/src/observability.rs
+            crates/controller-api/src/worker/client.rs
+            crates/controller-api/src/worker/command.rs
+          )
+          before="$(grep -h -o '\.fetch_update(' "${files[@]}" | wc -l)"
+          test "$before" -eq 4
+          sed -i 's/\.fetch_update(/.try_update(/g' "${files[@]}"
+          test "$(grep -h -o '\.try_update(' "${files[@]}" | wc -l)" -ge 4
+          if grep -n '\.fetch_update(' "${files[@]}"; then
+            exit 1
+          fi
+          cargo fmt --all
+          git diff --check
+      - name: Commit source repair and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-nightly-atomic-api.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/controller-api/src/events.rs \
+            crates/controller-api/src/observability.rs \
+            crates/controller-api/src/worker/client.rs \
+            crates/controller-api/src/worker/command.rs \
+            .github/workflows/apply-nightly-atomic-api.yml
+          git commit -m "Use current nightly atomic update API"
+          git push origin HEAD:master
