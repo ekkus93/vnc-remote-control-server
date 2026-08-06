@@ -8,6 +8,7 @@ CI = ROOT / ".github/workflows/ci.yml"
 RELEASE = ROOT / ".github/workflows/release-gates.yml"
 POLICY = ROOT / "docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md"
 GITLEAKS_IGNORE = ROOT / ".gitleaksignore"
+AUDITABLE_VERIFIER = ROOT / "scripts/verify_auditable_binary.py"
 EXPECTED_GITLEAKS_FALSE_POSITIVE = (
     "309364caf5d44d316557aa585ad7d92d043b0a47:"
     "docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md:"
@@ -51,6 +52,7 @@ class ReleasePolicyContractTests(unittest.TestCase):
             "controller-tsan.log",
             "MIRIFLAGS: -Zmiri-disable-isolation",
             "miri test",
+            "scripts/verify_auditable_binary.py",
             "scripts/verify_trivy_critical_vex.py",
         )
         for value in required:
@@ -60,6 +62,15 @@ class ReleasePolicyContractTests(unittest.TestCase):
         self.assertNotIn("--config .gitleaks.toml", text)
         self.assertNotIn("continue-on-error: true", text)
         self.assertNotIn("--ignore-unfixed", text)
+
+    def test_auditable_verifier_is_committed_and_fail_closed(self):
+        text = AUDITABLE_VERIFIER.read_text(encoding="utf-8")
+        self.assertIn('SECTION_NAME = ".dep-v0"', text)
+        self.assertIn("MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024", text)
+        self.assertIn("expected exactly one root package", text)
+        self.assertIn("dependency graph contains a cycle", text)
+        self.assertIn("binary_sha256", text)
+        self.assertNotIn("except Exception", text)
 
     def test_cache_and_actions_are_immutably_pinned(self):
         text = RELEASE.read_text(encoding="utf-8")
