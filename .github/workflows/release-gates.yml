@@ -130,7 +130,7 @@ jobs:
           printf 'release-gate-api-token\n' > deploy/secrets/api_token.txt
           printf 'release-gate-vnc-password\n' > deploy/secrets/vnc_password.txt
           chmod 0600 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt
-          docker compose -f deploy/docker-compose.yml config --quiet
+          docker compose -f deploy/compose.yaml config --quiet
           rm -rf deploy/secrets
 
       - name: Enforce advisory, license, source, and duplicate policy
