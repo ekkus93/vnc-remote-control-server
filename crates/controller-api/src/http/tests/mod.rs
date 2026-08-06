@@ -40,6 +40,8 @@ pub(super) struct MockBackend {
     pub(super) execute_error: Mutex<Option<DesktopError>>,
     pub(super) clipboard: Mutex<Option<ClipboardSnapshot>>,
     next_command_id: AtomicU64,
+    command_submissions_in_flight: usize,
+    command_queue_capacity: usize,
 }
 
 impl HttpBackend for MockBackend {
@@ -106,6 +108,14 @@ impl HttpBackend for MockBackend {
             .clone()
             .ok_or(DesktopError::ClipboardUnavailable)
     }
+
+    fn command_submissions_in_flight(&self) -> usize {
+        self.command_submissions_in_flight
+    }
+
+    fn command_queue_capacity(&self) -> usize {
+        self.command_queue_capacity
+    }
 }
 
 pub(super) fn test_state_with_backend(
@@ -146,6 +156,8 @@ pub(super) fn test_state_with_backend(
         execute_error: Mutex::new(None),
         clipboard: Mutex::new(None),
         next_command_id: AtomicU64::new(1),
+        command_submissions_in_flight: 3,
+        command_queue_capacity: 64,
     });
     let state = HttpState::new(
         backend.clone(),
