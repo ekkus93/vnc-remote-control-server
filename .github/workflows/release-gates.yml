@@ -228,12 +228,15 @@ jobs:
           CARGO_TARGET_DIR: target/tsan-controller
           RUSTFLAGS: -Zsanitizer=thread
           TSAN_OPTIONS: halt_on_error=1
-        run: >-
-          cargo +nightly-2026-08-01 -Zbuild-std test
-          --target x86_64-unknown-linux-gnu
-          --locked
-          --package controller-api
-          --lib
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-08-01 -Zbuild-std test \
+            --target x86_64-unknown-linux-gnu \
+            --locked \
+            --package controller-api \
+            --lib \
+            2>&1 | tee artifacts/native-safety/controller-tsan.log
 
       - name: Run core shared-state tests under ThreadSanitizer
         env:
