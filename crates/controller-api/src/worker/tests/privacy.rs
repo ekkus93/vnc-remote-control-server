@@ -167,7 +167,10 @@ fn native_failure_json_logs_exclude_vnc_password_sentinel() {
         failure_snapshot
     });
 
-    assert_eq!(failure_snapshot.state, ConnectionState::AuthenticationFailed);
+    assert_eq!(
+        failure_snapshot.state,
+        ConnectionState::AuthenticationFailed
+    );
     assert_eq!(
         failure_snapshot.last_failure,
         Some(WorkerFailureKind::Authentication)
