@@ -5,7 +5,7 @@ use super::session::WorkerSession;
 use super::settings::WorkerSettings;
 use libvnc_adapter::{
     NativeClientConfig, NativeClipboard, NativeDisplayInfo, NativeError, NativeFramebuffer,
-    PollOutcome,
+    PollOutcome, SecretString,
 };
 use remote_desktop_core::{ConnectionState, Coordinate, KeyboardKey, MAX_FRAMEBUFFER_BYTES};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -294,7 +294,7 @@ pub(super) fn settings() -> WorkerSettings {
         native: NativeClientConfig {
             host: "desktop".to_owned(),
             port: 5901,
-            password: "test-only".to_owned(),
+            password: SecretString::from("test-only"),
             connect_timeout: Duration::from_secs(1),
             read_timeout: Duration::from_secs(1),
         },
