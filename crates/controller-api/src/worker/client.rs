@@ -41,7 +41,7 @@ pub struct WorkerClient {
     pub(super) framebuffer: FramebufferStore,
     pub(super) clipboard: Arc<Mutex<Option<ClipboardSnapshot>>>,
     pub(super) next_command_id: Arc<AtomicU64>,
-    pub(super) command_queue_depth: Arc<AtomicUsize>,
+    pub(super) command_submissions_in_flight: Arc<AtomicUsize>,
     pub(super) command_queue_capacity: usize,
     pub(super) pending_overload: Arc<AtomicU64>,
     /// Out-of-band shutdown signal. Authoritative for shutdown correctness:
@@ -100,7 +100,7 @@ impl WorkerClient {
         let envelope = CommandEnvelope::new(
             command,
             completion_tx,
-            Arc::clone(&self.command_queue_depth),
+            Arc::clone(&self.command_submissions_in_flight),
         );
         // Re-check immediately before enqueueing to narrow the race between
         // a concurrent shutdown request and this submission.
@@ -132,9 +132,11 @@ impl WorkerClient {
         lock_unpoisoned(&self.snapshot).clone()
     }
 
-    /// Returns the current bounded command queue depth.
-    pub fn command_queue_depth(&self) -> usize {
-        self.command_queue_depth.load(Ordering::Acquire)
+    /// Returns the number of command submissions whose permit remains owned.
+    /// This includes submissions between envelope construction and `try_send`
+    /// and can therefore transiently exceed the channel capacity.
+    pub fn command_submissions_in_flight(&self) -> usize {
+        self.command_submissions_in_flight.load(Ordering::Acquire)
     }
 
     /// Returns the configured bounded command queue capacity.
