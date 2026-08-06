@@ -6,11 +6,18 @@ Repository: `ekkus93/vnc-remote-control-server`
 
 Target branch: `master`
 
-Baseline reviewed for this specification: `e9be696783e7fdfb90389cd02890d48c3e9bbd2d`
+Code baseline reviewed for the defects: `e9be696783e7fdfb90389cd02890d48c3e9bbd2d`
+
+Planning baseline containing the review discussion and answers: `c49742a2d1e1c3b55ae3f3f8affec9357b8855f4`
 
 Companion TODO:
 
 - `docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_FIX_TODO_2026-08-06.md`
+
+Decision documents:
+
+- `docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_QUESTIONS_AND_ISSUES_2026-08-06.md`
+- `docs/VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_ANSWERS_2026-08-06.md`
 
 Related documents:
 
@@ -22,173 +29,372 @@ Related documents:
 
 ## 1. Purpose
 
-A full static code review of the repository tip found that the completed shutdown work is correct and should not be revisited. The out-of-band shutdown flag, the ownership-based queue-depth permit, the independently stoppable event bridge, the bounded process cleanup coordinator, and the state-aware input-release reporting all hold up under line-by-line reading.
+A static review of the validated shutdown-hardening tree found a serious pre-`Connected` stall-recovery defect and several correctness, observability, native-format, sanitizer-coverage, secret-lifecycle, privacy-test, metric-semantics, timeout-contract, and test-quality issues outside the already-completed shutdown architecture.
 
-The review did find defects outside the shutdown scope, and two places where the final hardening pass recorded a checkbox that its implementation does not substantively cover. This specification defines the corrective pass.
+The shutdown architecture itself remains preserved:
 
-This pass must not weaken any existing gate, relax any assertion, revert any shutdown behavior, or change the framebuffer duplicate-detection semantics that protect screenshot ETag stability and the R13 conditional `304` contract.
+- the out-of-band `Arc<AtomicBool>` remains authoritative for worker shutdown;
+- queue accounting remains ownership-based and the permit remains acquired before `try_send`;
+- `EventBridge` retains its stop flag, exit signal, bounded join, and deliberate detach model;
+- process error precedence remains server, then worker, then bridge;
+- framebuffer byte equality, screenshot ETag stability, and the R13 conditional `304` contract remain unchanged;
+- state-aware input-release reporting remains intact.
 
-Scope note: the reviewing environment had no Rust toolchain and no Docker runtime. All findings below are derived from static reading and must be confirmed by a failing test before the corresponding fix is written.
+This revised specification incorporates the decisions in the questions and answers documents. It removes unresolved implementation menus and defines one accepted contract for each issue.
 
-## 2. Review findings that define this scope
+The environment used for the original review had no Rust toolchain and no Docker runtime. Evidence requirements are therefore task-specific: runtime defects require deterministic reproductions, workflow defects require workflow evidence, static-cleanup items require static evidence, secret scrubbing requires focused live-buffer tests, and performance claims require measurement rather than inference.
 
-### 2.1 High severity: a confirmed stall before `Connected` terminates the worker permanently
+## 2. Correctness and hardening requirements
 
-`LoopState::poll()` handles a confirmed transport stall by transitioning to `ConnectionState::Degraded` and propagating any transition failure:
+### 2.1 Pre-`Connected` confirmed stalls must reconnect without fatal exit
 
-```rust
-self.transition(ConnectionState::Degraded)?;
-self.invalidate();
-self.schedule_reconnect();
+A native session can exist while the public state remains `Connecting` or `Reconnecting`. The current confirmed-stall path always attempts `transition(ConnectionState::Degraded)`. That transition is legal from `Connected`, but illegal from `Connecting` and `Reconnecting`; the error escapes `poll()` and terminates the worker.
+
+The repair is prescribed:
+
+- do **not** add `Connecting -> Degraded` or `Reconnecting -> Degraded` to the state table;
+- preserve `Degraded` as meaning “a previously healthy connection became impaired”;
+- when a confirmed stall occurs while the state is `Connected`, preserve the existing `Connected -> Degraded -> invalidation -> reconnect` path;
+- when a confirmed stall occurs while the state is `Connecting` or `Reconnecting`, record the timeout, invalidate the session/framebuffer, and schedule reconnect without entering `Degraded`;
+- the recoverable path must not set `fatal_exit` and must not terminate the worker loop;
+- `worker_stall_timeout` remains emitted without payloads.
+
+The production-path regression must drive a real worker session that never delivers a complete framebuffer update, observe at least one reconnect attempt, and prove `fatal_exit == false` and `state != Stopped` until explicit shutdown.
+
+### 2.2 Illegal transitions must be observable and side-effect-free on failure
+
+`LoopState::transition()` currently mutates `fatal_exit` before returning an error. A discarded transition result can therefore poison externally visible health.
+
+The revised contract is:
+
+- an illegal transition emits `worker_illegal_state_transition` with only `from` and `to` state names;
+- the state and `fatal_exit` are unchanged when `transition()` returns an error;
+- `run_worker` remains the owner of `fatal_exit = true` when the worker exits unexpectedly;
+- the sequence-overflow write in `LoopState::publish` must be reviewed and either retained with an explicit unrecoverable rationale or moved to the same centralized fatal-exit policy;
+- `schedule_reconnect()` remains infallible but selects its transition target from the current state so an illegal edge is not attempted;
+- no `transition()` result may be discarded merely because the current table makes failure unlikely.
+
+Final shutdown-state handling must also be explicit. The implementation must not retain `let _ = state.transition(ConnectionState::Stopped)` as the only handling. If the final transition unexpectedly fails:
+
+- emit a dedicated diagnostic;
+- mark the exit fatal in the explicit finalization path;
+- retain a `debug_assert!` for the invariant that every state can reach `Stopped`;
+- do not silently exit with stale public state.
+
+### 2.3 The LibVNCClient pixel format must be explicit and verified end to end
+
+The shim must assign the following fields after `rfbGetClient` and before `SetFormatAndEncodings`:
+
+| Field | Required value |
+|---|---:|
+| `format.bitsPerPixel` | `32` |
+| `format.depth` | `24` |
+| `format.trueColour` | `TRUE` |
+| `format.bigEndian` | `FALSE` |
+| `format.redMax` | `255` |
+| `format.greenMax` | `255` |
+| `format.blueMax` | `255` |
+| `format.redShift` | `0` |
+| `format.greenShift` | `8` |
+| `format.blueShift` | `16` |
+| `appData.requestedDepth` | `24` |
+
+The negotiated native byte contract is `[R, G, B, X]`, with byte 3 unused padding. `replace_native_rgbx()` continues to convert this to canonical `[R, G, B, 255]`.
+
+The implementation must verify that the pinned LibVNCClient sends the assigned `client->format` and does not overwrite it from `appData`. Static source inspection is supporting evidence; the E2E color assertion is authoritative.
+
+The desktop test application must render two fixed, non-overlapping swatches with named constants:
+
+- pure red `#FF0000`;
+- pure blue `#0000FF`.
+
+Tests sample the center of each swatch at two layers:
+
+1. canonical RGBA framebuffer;
+2. decoded PNG returned by `GET /v1/screenshot.png`.
+
+Default assertions use channel dominance:
+
+- red: `r > 200`, `g < 60`, `b < 60`;
+- blue: `b > 200`, `r < 60`, `g < 60`.
+
+If the E2E pins a lossless encoding, the implementation may tighten the tolerance to `±8`, but the chosen mode and threshold must be documented. Tests must not assert on encoded PNG bytes and must not use the raw native framebuffer as the primary proof.
+
+### 2.4 ThreadSanitizer must cover the concurrent crate; Miri scope must be stated honestly
+
+The existing ThreadSanitizer and Miri jobs run against `remote-desktop-core`, which does not contain the worker/event/shutdown concurrency changed by the hardening passes.
+
+Required ThreadSanitizer escalation order:
+
+1. run `--package controller-api --lib` directly;
+2. if Tokio-specific false positives occur, use a short documented `--skip` list while preserving all worker, shutdown, event-bridge, and framebuffer tests;
+3. if required, use a suppression file scoped to the responsible library/runtime;
+4. use a test-only feature excluding the native adapter only as the final option;
+5. record which level succeeded and why earlier levels did not.
+
+No `continue-on-error` is permitted. The existing core TSan, core Miri, and adapter ASan coverage remain.
+
+Miri is not required to cover `controller-api`. FFI, native linkage, Tokio, and real I/O are a permanent coverage boundary. The corrective action for Miri is to state that boundary accurately and remove any claim that the hardening pass added Miri coverage to the concurrent code.
+
+### 2.5 Rename the queue metric to match its actual semantics
+
+The RAII permit is acquired before `try_send`; this ordering is required for final-drain correctness and must not move. The value therefore measures command submissions/envelopes participating in submission or queue ownership, not literal channel occupancy. It may transiently exceed configured channel capacity.
+
+Required rename:
+
+- Rust API concept: `command_submissions_in_flight`;
+- Prometheus metric: `vrc_worker_command_submissions_in_flight`.
+
+There is no queue-depth field in `/v1/status`; no HTTP response schema change is required. The affected surfaces are the Prometheus exporter, `WorkerClient`, `HttpBackend`/`WorkerHttpBackend`, tests, and documentation.
+
+The old metric is removed without an alias because the repository is v0.1, no naming-stability policy exists, no repository-local consumer is documented, and R13 does not assert the old name. Before removal, search `deploy/`, tests, dashboards, alert rules, examples, and documentation. External consumers cannot be discovered from the repository and remain an operator responsibility.
+
+Add valid Prometheus `# HELP` and `# TYPE` records for every exported metric. The new metric’s help text must state that it may transiently exceed `vrc_worker_command_queue_capacity`. Add a short metric/API naming-compatibility rule to the release policy.
+
+No queue accounting behavior changes are permitted.
+
+### 2.6 Process shutdown must use one total configured cleanup budget
+
+Add `VRC_SHUTDOWN_TIMEOUT_MS` as a dedicated process-cleanup budget. It is not a per-phase timeout.
+
+`finalize_runtime` must:
+
+1. establish one deadline before worker cleanup;
+2. pass the current remaining duration to worker shutdown;
+3. recompute the remaining duration with saturating arithmetic;
+4. pass the remainder to bridge shutdown;
+5. preserve server → worker → bridge error precedence;
+6. attempt both cleanup surfaces even when an earlier surface fails, subject to the shared total budget.
+
+The minimum accepted value is a derived constant:
+
+```text
+max(500 ms, 8 * EVENT_BRIDGE_POLL_INTERVAL)
 ```
 
-`ConnectionState::can_transition_to` permits `Connected -> Degraded`, but not `Connecting -> Degraded` and not `Reconnecting -> Degraded`.
+Do not add a new channel dependency or redesign the bridge wake-up in this pass. The 50 ms polling dependency is accepted and documented as a deferred performance/latency improvement.
 
-`run_worker` assigns `state.session = Some(session)` as soon as the session factory returns and the initial full refresh succeeds. The snapshot state remains `Connecting` or `Reconnecting` until `connected_message()` observes a complete framebuffer update at a stable native revision. `LoopState::poll()` therefore runs while the worker is still pre-`Connected`.
+When no budget remains before bridge waiting:
 
-For a peer that completes RFB initialization and then delivers no framebuffer update — a hung X server, a blanked or locked display, or a server deferring updates — the sequence is:
+- request bridge stop;
+- perform a nonblocking exit check before detaching;
+- if exit is already observed, join and preserve a panic result;
+- detach only if the bridge is still active;
+- record a payload-free timeout/secondary-cleanup diagnostic;
+- do not call a zero-duration blocking wait and do not discard an already-available exit result.
 
-1. `poll()` returns `PollOutcome::TimedOut` repeatedly, so `last_message` is never refreshed.
-2. `stall_probe_after` elapses, a probe refresh is sent, and `probe_sent` is recorded.
-3. `stall_confirm_after` elapses.
-4. `transition(ConnectionState::Degraded)` is rejected by the state machine, sets `fatal_exit = true` as a side effect, and returns `Err(DesktopError::Protocol)`.
-5. `?` propagates the error out of `poll()`.
-6. `run_worker` executes `if state.poll().is_err() { break; }` with `orderly_shutdown == false`.
-7. The loop exits, `fatal_exit` is set again, and the worker terminates without attempting reconnection.
+`command_ack_timeout` remains exclusively the HTTP command acknowledgement timeout.
 
-The stall detector exists specifically to recover half-open connections. In the pre-`Connected` window it produces the opposite outcome: permanent fatal termination with no reconnect.
+### 2.7 Startup timeout must also be one total budget
 
-Existing tests do not cover this. `confirmed_stall_invalidates_reconnects_and_advances_revision` reaches `Connected` before stalling, so it exercises the legal `Connected -> Degraded` edge. `mismatched_native_frame_never_reaches_connected` returns `PollOutcome::MessageProcessed` on every poll, which refreshes `last_message` and prevents the stall path from firing, and it does not assert `fatal_exit`.
+`startup_timeout` is the complete startup budget, not two sequential equal waits.
 
-The fix must make a pre-`Connected` confirmed stall recover through invalidation and reconnect scheduling, with `fatal_exit == false`.
+The worker spawn path must:
 
-### 2.2 Medium severity: `transition()` sets `fatal_exit` as a side effect, and its result is discarded
+1. establish a deadline before waiting for startup acknowledgement;
+2. on timeout, set the shutdown flag first;
+3. send the best-effort permit-counted compatibility nudge;
+4. use only the remaining duration for cleanup/exit observation;
+5. preserve timeout versus panic/join-failure distinction;
+6. if no budget remains, perform a nonblocking exit observation, join if already exited, otherwise detach deliberately and return `DesktopError::Timeout`.
 
-`LoopState::transition()` sets `fatal_exit = true` before returning `Err(DesktopError::Protocol)` on an illegal transition. It is invoked as `let _ = self.transition(..)` twice in `schedule_reconnect()` and three times in `run_worker`.
+The doc comment, operator guide, deployment timing, release notes, and relevant healthcheck assumptions must reflect the single-budget behavior. The effective worst case is reduced from approximately twice the configured value to the configured value.
 
-Any unexpected state sequence therefore poisons `fatal_exit` permanently and silently. `fatal_exit` is published on `/v1/status`, included in the WebSocket snapshot event, and consumed by readiness. A discarded result must not be able to change externally visible health.
+### 2.8 Remove unreachable shutdown error forwarding
 
-The fix must make illegal transitions observable and must stop discarding a result that carries a side effect.
+`EventBridge::shutdown` and `DesktopWorker::shutdown` must no longer contain a generic `Err(error) => Err(error)` arm for a wait function that can return only success or timeout.
 
-### 2.3 Medium severity: the native pixel format is assumed rather than negotiated or verified
+Prefer a narrower internal wait result. If a third outcome is introduced in the future, it must receive explicit diagnostics and tests rather than silently flowing through a catch-all arm.
 
-`FramebufferStore::replace_native_rgbx` interprets each native pixel as red, green, blue, padding:
+### 2.9 Scrub every project-owned VNC password copy; document the library-owned residual
 
-```rust
-rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], u8::MAX]);
+Introduce a shared, non-`Debug`, zeroizing secret abstraction designed to support both owned string storage and future shared token storage. Adopt it for the VNC password in this pass. API bearer-token adoption is deliberately deferred; its constant-time comparison path remains untouched.
+
+Audit and minimize project-owned copies in:
+
+- the secret-file reader;
+- `ControllerConfig`;
+- `NativeClientConfig`;
+- `WorkerSettings` and its clones;
+- worker thread closure capture;
+- the temporary `CString` used by `NativeClient::connect`;
+- the C shim’s duplicated password storage.
+
+The C shim must implement a project-owned scrub helper:
+
+```c
+vrc_secure_scrub(void *buffer, size_t length)
 ```
 
-`crates/libvnc-adapter/native/vnc_shim.c` never assigns `client->format.redShift`, `greenShift`, `blueShift`, `redMax`, `greenMax`, `blueMax`, or `bigEndian`. It calls `rfbGetClient(8, 3, 4)` and then `SetFormatAndEncodings(client->native)`, so the on-wire byte order is whatever the LibVNCClient default produces for the build host.
+using a `volatile unsigned char *` write loop. Do not use `explicit_bzero` under the current `_POSIX_C_SOURCE 200809L`, `-std=c11`, `-pedantic`, and `-Werror` translation-unit contract. Do not rely on optional `memset_s`. No new feature-test macro should be introduced solely for scrubbing.
 
-No test in the repository asserts a pixel value against a known source color. The unit tests use synthetic byte vectors that are equally consistent with any channel order, and neither E2E binary inspects pixels. A channel swap, or an off-by-one that reads the padding byte as red, would pass every current gate including R13.
+The Rust zeroization tests must not read freed memory. Required evidence:
 
-The fix must remove the assumption. The shim must set the pixel format explicitly so the byte layout is defined and host-endianness-independent, and an end-to-end test must assert a known color.
+- direct live-buffer scrub-helper test;
+- instrumented proof that the secret wrapper invokes the scrub operation on drop;
+- no secret value printed on failure;
+- native C build remains warning-free under strict flags.
 
-### 2.4 Medium severity: the ThreadSanitizer and Miri gates do not cover the concurrent code
+The allocation returned by `vrc_get_password()` becomes owned by LibVNCClient after callback return. The shim has no post-authentication hook to scrub it. Inspect the exact pinned Debian LibVNCClient source and record whether it scrubs before `free`. This copy is a documented residual if the library does not scrub it; the pass must not claim that every third-party-owned copy is zeroized.
 
-`.github/workflows/release-gates.yml` runs ThreadSanitizer and Miri against `--package remote-desktop-core --lib`, and AddressSanitizer against `--package libvnc-adapter --lib`.
+Completion language must be: every project-owned VNC password copy is scrubbed before release, and any library-owned residual is explicitly documented.
 
-`remote-desktop-core` contains no threads. Every atomic, bounded channel, queue-depth permit, exit signal, join path, and cross-thread handoff introduced or modified by the shutdown refactor and both hardening passes lives in `controller-api`, which no sanitizer job builds.
+### 2.10 Privacy tests must exercise real value-carrying paths
 
-The final hardening TODO's `TSan` and `Miri` acceptance boxes are literally accurate about the gate existing and substantively empty about the code the pass changed.
+Add `capture_json_logs` to the test support layer and deserialize structured records. Raw-string searches remain a secondary defense, not the primary assertion.
 
-The fix must extend ThreadSanitizer coverage to the `controller-api` worker and shutdown tests, or record an explicit, evidenced justification for why that is not achievable together with whatever narrower coverage is achievable.
+Use separate tests:
 
-### 2.5 Low/medium severity: `command_queue_depth` reports in-flight submissions, not queue occupancy
+1. **Input release:** distinctive key and coordinate values travel through the real worker and forced release failure; logs contain counts only.
+2. **Typed text and clipboard:** sentinel values travel through command validation/failure paths that render `DesktopError`; assert no structured field value contains either sentinel.
+3. **VNC password:** a sentinel password travels through a failing native connection/error path; assert it does not appear in native or controller logs.
+4. **Bearer token:** correct and incorrect sentinel tokens travel through real HTTP authentication/access logging; assert neither token appears and the authorization field is redacted.
 
-`CommandEnvelope::new()` acquires the queue-depth permit before `WorkerClient::submit_inner` calls `try_send`. This ordering is deliberate and is what makes the final-drain race safe; it must be preserved.
+A sentinel may be asserted only in a test that names and exercises the production mechanism carrying that value. Generic nouns such as `clipboard` and `framebuffer` are not privacy assertions.
 
-The consequence is that the counter is not queue occupancy. It can exceed `command_queue_capacity`, and it can be nonzero while the channel is empty whenever a submitter is between envelope construction and `try_send`. That state is exactly what `submit_racing_final_shutdown_drain_converges_depth_to_zero` constructs on purpose.
+Some privacy tests may pass on the baseline; they are valid regression guards and are not required to manufacture a failing reproduction.
 
-`vrc_worker_command_queue_depth` is rendered next to `vrc_worker_command_queue_capacity` in the Prometheus output and appears in the HTTP status surface. As an operator signal backing alert thresholds, the current name asserts something the value does not mean.
+### 2.11 Framebuffer performance work is measurement-only in this pass
 
-The fix must correct the reported semantics without changing the accounting.
+The prior performance record inferred allocation counts and omitted major stages. The corrective requirement is measurement and documentation, not optimization.
 
-### 2.6 Low/medium severity: process cleanup reuses an unrelated HTTP timeout
+Create a committed, reproducible measurement utility under a stable path such as:
 
-`main.rs` passes `config.command_ack_timeout` to `finalize_runtime`, which applies it twice in sequence:
+- `tools/framebuffer_measurement/`; or
+- `tests/measurement/framebuffer/`.
 
-```rust
-let worker_result = worker.shutdown(timeout);
-let bridge_result = event_bridge.shutdown(timeout);
-```
+It may be excluded from normal CI, but it must include instructions, inputs, output format, and the exact command required to reproduce the results. It must not be a disposable uncommitted script.
 
-Three problems follow. The complete cleanup bound is `2 x VRC_COMMAND_ACK_TIMEOUT_MS` rather than a single declared deadline. The bound is controlled by a knob whose documented purpose is the per-command HTTP acknowledgement wait. And `EVENT_BRIDGE_POLL_INTERVAL` is a fixed 50 ms, so any `command_ack_timeout` below roughly 50 ms guarantees a spurious `event_bridge_shutdown_timeout` and a nonzero process exit on an otherwise clean shutdown. Configuration currently rejects only a zero value.
+Use a dedicated process with a counting global allocator to measure, at minimum, a 1920×1080 complete-frame path:
 
-The fix must give process shutdown its own configured deadline with a floor that cannot be set below the bridge poll interval.
+- allocation count and bytes;
+- native framebuffer copy;
+- RGBX-to-RGBA conversion;
+- equality comparison/write-lock hold time;
+- `Vec<u8> -> Arc<[u8]>` conversion behavior on the pinned toolchain.
 
-### 2.7 Low severity: startup timeout is silently doubled
+Treat all current allocation/pass counts as hypotheses until measured.
 
-`spawn_with_factory_and_startup_hook` waits `startup_timeout` for the startup acknowledgement, then passes `startup_timeout` again to `cleanup_startup_worker_after_timeout`. The path is bounded and safe, but the effective worst case is twice the configured value and nothing says so.
+No framebuffer optimization is allowed in this correctness pass, including apparently trivial loop rewrites. The hot path participates in byte-equality duplicate detection, screenshot ETag stability, and R13 conditional `304` behavior. If the measurements justify optimization, create a separate performance spec/TODO and validate it independently.
 
-The fix is documentation, or an explicitly derived cleanup deadline.
+### 2.12 Replace both known sleep-only negative tests with causal progress
 
-### 2.8 Low severity: unreachable error arms
+Convert both:
 
-`EventBridge::shutdown` and `DesktopWorker::shutdown` both end with an `Err(error) => Err(error)` arm. `wait_for_exit` in each type can return only `Ok(())` or the timeout variant, so neither arm is reachable.
+- `mismatched_native_frame_never_reaches_connected`;
+- `authentication_failure_waits_for_manual_reconnect`.
 
-These are harmless today and become misleading if either wait path later grows a third outcome that the caller silently forwards without diagnostics.
+Add a `#[cfg(test)]` worker-loop iteration counter or equivalent non-production hook that observes causal loop progress without changing production timing.
 
-### 2.9 Low severity: secret material is not scrubbed before release
+Each negative assertion must prove:
 
-`vrc_client_destroy` releases the duplicated VNC password with a plain `free`. On the Rust side, `NativeClientConfig.password` is a `String` that is cloned into `WorkerSettings` and moved into the worker thread closure, leaving copies resident for the process lifetime.
+- the worker completed at least a fixture-derived number of further iterations after reaching the relevant state;
+- the prohibited retry or transition did not occur;
+- a positive control can trigger and observe the corresponding reconnect/retry path within a bounded deadline.
 
-Every other secret-handling decision in the repository is deliberate: no `Debug` on password-bearing types, redacted `Authorization` in the access log, bounded secret-file size, payload-free events. Scrubbing closes the remaining gap.
+Elapsed sleep is not admissible as proof that something did not happen. Every blocked test thread must have a bounded release path.
 
-### 2.10 Low severity: privacy assertions match generic nouns
+## 3. Baseline evidence classification
 
-`shutdown_logs_incomplete_input_release_without_payloads` asserts the absence of substrings including `"clipboard"`, `"framebuffer"`, and `"typed_text"`.
+No repair may precede its classified evidence, but evidence form is task-specific:
 
-`"CtrlLeft"` is a correct assertion, because it is the actual value under test. The generic nouns are not. They will fail spuriously the first time any structured field is named `framebuffer_revision` or `clipboard_revision`, and they would not catch a real leak that renders a value without the matching noun nearby.
+| Item | Required baseline evidence |
+|---|---|
+| CR1 pre-`Connected` stall | Failing production-path runtime test |
+| CR2 illegal transition visibility | Failing production-path runtime test |
+| CR3 pixel format | Failing E2E color assertion, or exact static current-layout evidence if pre-fix E2E cannot run |
+| CR4 sanitizer coverage | Missing/failing workflow invocation with recorded output |
+| CR5 metric semantics | Runtime test showing in-flight count can exceed capacity |
+| CR6 shutdown deadline | Failing configuration test plus timing calculation |
+| CR7 startup bound | Timing calculation and source evidence |
+| CR8 unreachable arms | Static source evidence |
+| CR9 secret scrubbing | Focused live-buffer/helper evidence; no freed-memory inspection |
+| CR10 privacy assertions | Path-carrying evidence; regression guards may pass on baseline |
+| CR11 framebuffer performance | Reproducible measurement evidence |
+| CR12 sleep-only tests | Demonstration that the old test can pass under an injected fault it claims to detect |
 
-The fix must assert against injected sentinel values rather than category words.
+## 4. Required outcomes
 
-### 2.11 Documentation defect: the framebuffer performance review is incomplete
+1. Pre-`Connected` confirmed stalls reconnect without entering `Degraded`, without fatal exit, and without terminating the worker.
+2. Illegal transitions emit a payload-free diagnostic and mutate neither state nor health on failure.
+3. Final transition to `Stopped` is handled explicitly and cannot fail silently.
+4. Native `[R,G,B,X]` format is pinned and red/blue channel order is verified in canonical RGBA and decoded PNG.
+5. TSan exercises `controller-api` concurrency; Miri’s permanent boundary is documented accurately.
+6. Queue instrumentation is renamed to submissions-in-flight and all Prometheus metrics have correct `# HELP` and `# TYPE` records.
+7. Process shutdown and startup each obey one total configured budget.
+8. Zero-budget cleanup observes already-completed exits before deliberate detach.
+9. Unreachable shutdown error arms are removed.
+10. Every project-owned VNC password copy is scrubbed; third-party residuals are verified and documented.
+11. Privacy tests parse structured records and exercise real value-carrying paths.
+12. Framebuffer allocation/pass claims are measured with a committed reproducible utility; no optimization is mixed into this pass.
+13. Both known sleep-only negative tests use causal progress and positive controls.
+14. Existing HTTP, WebSocket, framebuffer, ETag, R13, input, shutdown, and release-gate behavior remains green.
 
-The final hardening TODO records the framebuffer performance disposition as the 64 MiB worst-case comparison under the write lock plus the dirty-commit clone. That accounting omits the dominant per-frame costs.
-
-Each complete frame currently performs, in order: a full-size `Vec` allocation and `memcpy` in `NativeClient::framebuffer`; a second full-size `Vec` allocation filled by a per-pixel `extend_from_slice` loop in `replace_native_rgbx`; a full-frame equality comparison under the store write lock; and a `Vec<u8> -> Arc<[u8]>` conversion that allocates and copies a third time.
-
-That is approximately four full-frame passes and three full-frame allocations per delivered frame. The per-pixel conversion loop is the cheapest to remove and is not mentioned in the recorded review.
-
-### 2.12 Low severity: one pre-existing sleep-only test
-
-`mismatched_native_frame_never_reaches_connected` sleeps 30 ms and then asserts. The final hardening TODO's do-not-accept list prohibits sleep-only race evidence. This test predates that pass, but it is the same failure mode and should be converted to a bounded barrier.
-
-## 3. Required outcomes
-
-1. A confirmed stall in any pre-`Connected` state recovers through invalidation and reconnect scheduling, and never sets `fatal_exit`.
-2. No illegal state transition can change externally visible health without an emitted diagnostic, and no `transition()` result carrying a side effect is discarded.
-3. The native pixel format is explicitly negotiated in the shim, and an end-to-end test asserts a known source color through the canonical framebuffer.
-4. ThreadSanitizer covers the `controller-api` worker and shutdown tests, or the impossibility is documented with evidence and the achievable subset is added.
-5. The queue-depth metric name and help text state what the counter measures.
-6. Process shutdown has its own configured deadline with a floor above `EVENT_BRIDGE_POLL_INTERVAL`, and the total cleanup bound is stated.
-7. Startup cleanup's effective bound is documented or explicitly derived.
-8. Unreachable error arms are removed or made reachable-and-diagnosed.
-9. The VNC password is zeroized on both sides of the FFI boundary before release.
-10. Log-privacy assertions test injected sentinel values.
-11. The framebuffer performance record accounts for per-frame allocation and conversion cost, and the per-pixel conversion loop is removed if a benchmark justifies it.
-12. The remaining sleep-only test uses a bounded barrier.
-
-## 4. Non-goals and preservation requirements
+## 5. Non-goals and preservation requirements
 
 This pass must not:
 
-- change the out-of-band `Arc<AtomicBool>` shutdown authority;
-- change the queue-depth permit ownership model or the point at which the permit is acquired;
-- change `EventBridge` stop, exit-signal, join, or detach semantics;
-- change the `finalize_runtime` error precedence of server, then worker, then bridge;
-- change framebuffer byte-equality semantics, ETag stability, or the R13 conditional `304` contract;
-- weaken any R13 assertion;
-- add `continue-on-error`, a broad `.gitleaksignore` entry, or a broad Trivy or VEX ignore;
-- disable or downgrade any CI or Release Gates job;
-- introduce a new public HTTP shutdown error;
-- log any command payload, typed text, clipboard value, key value, coordinate, bearer token, VNC password, framebuffer byte, or screenshot.
+- widen the connection-state table merely to accommodate the stall defect;
+- change the out-of-band shutdown authority;
+- move queue-permit acquisition or alter accounting behavior;
+- redesign event-bridge wake-up or add a new channel dependency;
+- change server → worker → bridge error precedence;
+- add an HTTP status field for submission depth;
+- retain a misleading queue-depth alias unless the user identifies an external consumer requiring a transition period;
+- refactor API bearer-token authentication or constant-time comparison;
+- claim the LibVNCClient-owned password copy is scrubbed without exact source evidence;
+- inspect freed memory in a test;
+- optimize the framebuffer hot path;
+- change framebuffer equality, revision, timestamp, ETag, or R13 `304` semantics;
+- weaken R13 or any CI/security/release assertion;
+- add `continue-on-error`, broad ignores, or unpinned dependencies;
+- log command payloads, typed text, clipboard values, key values, coordinates, tokens, passwords, framebuffer bytes, or screenshots.
 
-## 5. Verification standard
+## 6. Validation and documentation requirements
 
-Every behavioral fix in sections 2.1 through 2.10 requires a test that fails on the baseline `e9be696783e7fdfb90389cd02890d48c3e9bbd2d` and passes after the change. Reproduction precedes repair. A fix without a demonstrated failing baseline test is not accepted.
+The implementation must pass all available local checks and exact-SHA permanent CI and Release Gates. Unavailable local checks must be recorded as skipped with reasons, not labeled passed.
 
-Deterministic tests use bounded channels, barriers, and deadlines. Sleep-only proofs are not accepted. Every potentially blocked test thread has a bounded release path so a regression fails quickly instead of hanging CI.
+Permanent validation must include:
 
-Both CI and Release Gates must succeed on the exact final repository-tip SHA. Where a commit cannot record its own hash, the TODO records the implementation SHA plus the external run identifier that validated the tip, and does not claim self-referential proof.
+- formatting, strict Clippy, Rust tests, and rustdoc;
+- Python tests and shell syntax checks;
+- desktop image and native adapter suites;
+- WorkerHandle input and text/clipboard E2E;
+- authenticated HTTP E2E;
+- Compose/persistence and unchanged R13;
+- static/supply-chain gates;
+- ASan, expanded TSan, and the accurately scoped Miri gate;
+- Trivy, SBOM, and exact VEX enforcement.
+
+Documentation updates must include:
+
+- operator guide entries for shutdown and startup total budgets;
+- release notes for startup-bound behavior change and metric rename;
+- release-policy naming compatibility rule;
+- exact pixel-layout contract;
+- exact TSan/Miri coverage boundary;
+- password-copy inventory and third-party residual;
+- reproducible framebuffer measurement results;
+- corrections to the prior hardening evidence without rewriting valid historical CI results.
+
+## 7. Deferred follow-ups
+
+The following are deliberately excluded from this pass and must be recorded so they are not forgotten:
+
+1. direct event-bridge wake-up that removes polling-dependent clean-shutdown latency;
+2. API bearer-token adoption of the shared secret abstraction;
+3. framebuffer allocation/throughput optimization, conditional on the reproducible measurements;
+4. any compatibility alias for the old metric, only if an external consumer is identified before implementation.
+
+## 8. Completion boundary
+
+This pass is complete only when:
+
+- every required outcome is implemented and evidenced according to section 3;
+- the companion TODO is truthfully completed;
+- no preserved behavior or security boundary is weakened;
+- CI and Release Gates pass on the same exact final repository-tip SHA;
+- R13 passes unchanged on that SHA;
+- completion evidence distinguishes project-owned secret zeroization from any verified third-party residual;
+- the committed framebuffer measurement utility and results are reproducible;
+- no completion claim relies on a previous SHA, canceled job, partial job, or self-referential commit hash.
