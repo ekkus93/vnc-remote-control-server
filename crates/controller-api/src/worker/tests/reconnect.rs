@@ -359,6 +359,87 @@ fn mismatched_native_frame_never_reaches_connected() {
         .expect("worker joins");
 }
 
+struct MatchingFrameSession {
+    poll_count: usize,
+    poll_progress: SyncSender<usize>,
+}
+
+impl WorkerSession for MatchingFrameSession {
+    fn poll(&mut self, _timeout: Duration) -> Result<PollOutcome, NativeError> {
+        self.poll_count += 1;
+        let _ = self.poll_progress.send(self.poll_count);
+        Ok(PollOutcome::MessageProcessed)
+    }
+
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 7,
+            complete: true,
+        })
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 7,
+            bytes: vec![0x22; 16],
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn send_pointer(
+        &mut self,
+        _coordinate: Coordinate,
+        _button_mask: u8,
+    ) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn matching_native_frame_positive_control_reaches_connected() {
+    let (poll_tx, poll_rx) = sync_channel(8);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        Ok(MatchingFrameSession {
+            poll_count: 0,
+            poll_progress: poll_tx.clone(),
+        })
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+
+    poll_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("positive control observes causal worker poll progress");
+    wait_for_state(&client, ConnectionState::Connected);
+    let frame = client.framebuffer_snapshot().expect("positive control frame");
+    assert_eq!(frame.revision(), 1);
+    assert_eq!(&frame.rgba()[0..4], &[0x22, 0x22, 0x22, 0xff]);
+    assert!(!client.snapshot().fatal_exit);
+
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker joins");
+}
+
 #[test]
 fn reconnect_delay_is_exponential_jittered_and_bounded() {
     let settings = settings();
