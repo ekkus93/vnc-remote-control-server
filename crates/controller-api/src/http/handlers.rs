@@ -57,7 +57,7 @@ pub(super) async fn metrics_endpoint(State(state): State<HttpState>) -> Response
     let snapshot = state.backend.snapshot();
     let body = state.metrics.render(
         &snapshot,
-        state.backend.command_queue_depth(),
+        state.backend.command_submissions_in_flight(),
         state.backend.command_queue_capacity(),
     );
     let mut response = Response::new(Body::from(body));
