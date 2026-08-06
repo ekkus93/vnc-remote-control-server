@@ -230,10 +230,11 @@ impl Metrics {
     pub fn render(
         &self,
         snapshot: &WorkerSnapshot,
-        command_queue_depth: usize,
+        command_submissions_in_flight: usize,
         command_queue_capacity: usize,
     ) -> String {
         let mut output = String::new();
+        render_metadata(&mut output);
         let states = [
             ConnectionState::Starting,
             ConnectionState::Connecting,
@@ -337,8 +338,8 @@ impl Metrics {
         );
         metric(
             &mut output,
-            "vrc_worker_command_queue_depth",
-            u64::try_from(command_queue_depth).unwrap_or(u64::MAX),
+            "vrc_worker_command_submissions_in_flight",
+            u64::try_from(command_submissions_in_flight).unwrap_or(u64::MAX),
         );
         metric(
             &mut output,
@@ -477,6 +478,155 @@ impl Metrics {
             self.inner.protocol_errors.load(Ordering::Relaxed),
         );
         output
+    }
+}
+
+fn render_metadata(output: &mut String) {
+    const METRICS: &[(&str, &str, &str)] = &[
+        (
+            "vrc_connection_state",
+            "Current worker connection state as a one-hot gauge.",
+            "gauge",
+        ),
+        (
+            "vrc_worker_last_failure",
+            "Last bounded worker failure category as a one-hot gauge.",
+            "gauge",
+        ),
+        (
+            "vrc_http_requests_total",
+            "Completed HTTP requests.",
+            "counter",
+        ),
+        (
+            "vrc_http_errors_total",
+            "Completed HTTP requests with status 400 or greater.",
+            "counter",
+        ),
+        (
+            "vrc_auth_failures_total",
+            "Rejected authentication attempts.",
+            "counter",
+        ),
+        (
+            "vrc_commands_total",
+            "Accepted command attempts by bounded command kind.",
+            "counter",
+        ),
+        (
+            "vrc_command_errors_total",
+            "Worker command failures.",
+            "counter",
+        ),
+        (
+            "vrc_command_timeouts_total",
+            "Worker command timeout failures.",
+            "counter",
+        ),
+        (
+            "vrc_worker_command_submissions_in_flight",
+            "Command submissions whose ownership permit remains live; this can transiently exceed queue capacity before try_send.",
+            "gauge",
+        ),
+        (
+            "vrc_worker_command_queue_capacity",
+            "Configured bounded worker command channel capacity.",
+            "gauge",
+        ),
+        (
+            "vrc_worker_rejected_commands_total",
+            "Commands rejected because the bounded channel was full.",
+            "counter",
+        ),
+        (
+            "vrc_worker_dropped_events_total",
+            "Worker events dropped because the bounded event channel was full.",
+            "counter",
+        ),
+        (
+            "vrc_worker_reconnect_attempts",
+            "Current consecutive reconnect attempt count.",
+            "gauge",
+        ),
+        (
+            "vrc_framebuffer_revision",
+            "Current canonical framebuffer revision, or zero when unavailable.",
+            "gauge",
+        ),
+        (
+            "vrc_screenshot_requests_total",
+            "Screenshot requests started.",
+            "counter",
+        ),
+        (
+            "vrc_screenshot_success_total",
+            "PNG screenshot responses completed.",
+            "counter",
+        ),
+        (
+            "vrc_screenshot_not_modified_total",
+            "Conditional screenshot requests answered with not modified.",
+            "counter",
+        ),
+        (
+            "vrc_screenshot_busy_total",
+            "Screenshot requests rejected by bounded concurrency.",
+            "counter",
+        ),
+        (
+            "vrc_screenshot_timeouts_total",
+            "Screenshot encoding timeouts.",
+            "counter",
+        ),
+        (
+            "vrc_screenshot_failures_total",
+            "Other screenshot failures.",
+            "counter",
+        ),
+        (
+            "vrc_screenshot_duration_milliseconds_total",
+            "Cumulative screenshot processing duration in milliseconds.",
+            "counter",
+        ),
+        (
+            "vrc_websocket_clients",
+            "Current authenticated WebSocket clients.",
+            "gauge",
+        ),
+        (
+            "vrc_websocket_rejected_total",
+            "WebSocket clients rejected at capacity.",
+            "counter",
+        ),
+        (
+            "vrc_websocket_slow_disconnects_total",
+            "WebSocket clients disconnected after falling behind.",
+            "counter",
+        ),
+        (
+            "vrc_websocket_idle_disconnects_total",
+            "WebSocket clients disconnected by heartbeat timeout.",
+            "counter",
+        ),
+        (
+            "vrc_events_total",
+            "Payload-free worker events by bounded type.",
+            "counter",
+        ),
+        (
+            "vrc_reconnect_events_total",
+            "Worker reconnecting state events.",
+            "counter",
+        ),
+        (
+            "vrc_protocol_errors_total",
+            "Observed protocol errors.",
+            "counter",
+        ),
+    ];
+    for (name, help, metric_type) in METRICS {
+        let _ = writeln!(output, "# HELP {name} {help}");
+        let _ = writeln!(output, "# TYPE {name} {metric_type}");
     }
 }
 

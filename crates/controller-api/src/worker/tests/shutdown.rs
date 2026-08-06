@@ -27,7 +27,7 @@ fn bounded_command_queue_tracks_depth_and_rejection_without_payload_logging() {
         dropped_events: 0,
         fatal_exit: false,
     }));
-    let command_queue_depth = Arc::new(AtomicUsize::new(0));
+    let command_submissions_in_flight = Arc::new(AtomicUsize::new(0));
     let pending_overload = Arc::new(AtomicU64::new(0));
     let client = WorkerClient {
         commands: command_tx,
@@ -35,7 +35,7 @@ fn bounded_command_queue_tracks_depth_and_rejection_without_payload_logging() {
         framebuffer: FramebufferStore::default(),
         clipboard: Arc::new(Mutex::new(None)),
         next_command_id: Arc::new(AtomicU64::new(1)),
-        command_queue_depth: Arc::clone(&command_queue_depth),
+        command_submissions_in_flight: Arc::clone(&command_submissions_in_flight),
         command_queue_capacity: 1,
         pending_overload: Arc::clone(&pending_overload),
         shutdown_requested: Arc::new(AtomicBool::new(false)),
@@ -44,7 +44,7 @@ fn bounded_command_queue_tracks_depth_and_rejection_without_payload_logging() {
     let _first = client
         .submit(WorkerCommand::RequestFullRefresh)
         .expect("first command fits");
-    assert_eq!(client.command_queue_depth(), 1);
+    assert_eq!(client.command_submissions_in_flight(), 1);
     assert_eq!(client.command_queue_capacity(), 1);
     assert!(matches!(
         client.submit(WorkerCommand::TypeText {
@@ -52,7 +52,7 @@ fn bounded_command_queue_tracks_depth_and_rejection_without_payload_logging() {
         }),
         Err(DesktopError::CommandQueueFull)
     ));
-    assert_eq!(command_queue_depth.load(Ordering::Acquire), 1);
+    assert_eq!(command_submissions_in_flight.load(Ordering::Acquire), 1);
     assert_eq!(pending_overload.load(Ordering::Acquire), 1);
     assert_eq!(lock_unpoisoned(&snapshot).rejected_commands, 1);
 }
@@ -72,7 +72,7 @@ fn submit_rejects_after_shutdown_request_without_queue_mutation() {
         dropped_events: 0,
         fatal_exit: false,
     }));
-    let command_queue_depth = Arc::new(AtomicUsize::new(0));
+    let command_submissions_in_flight = Arc::new(AtomicUsize::new(0));
     let pending_overload = Arc::new(AtomicU64::new(0));
     let client = WorkerClient {
         commands: command_tx,
@@ -80,7 +80,7 @@ fn submit_rejects_after_shutdown_request_without_queue_mutation() {
         framebuffer: FramebufferStore::default(),
         clipboard: Arc::new(Mutex::new(None)),
         next_command_id: Arc::new(AtomicU64::new(1)),
-        command_queue_depth: Arc::clone(&command_queue_depth),
+        command_submissions_in_flight: Arc::clone(&command_submissions_in_flight),
         command_queue_capacity: 4,
         pending_overload: Arc::clone(&pending_overload),
         shutdown_requested: Arc::new(AtomicBool::new(false)),
@@ -92,7 +92,7 @@ fn submit_rejects_after_shutdown_request_without_queue_mutation() {
         client.submit(WorkerCommand::RequestFullRefresh),
         Err(DesktopError::WorkerUnavailable)
     ));
-    assert_eq!(command_queue_depth.load(Ordering::Acquire), 0);
+    assert_eq!(command_submissions_in_flight.load(Ordering::Acquire), 0);
     assert_eq!(pending_overload.load(Ordering::Acquire), 0);
     assert_eq!(lock_unpoisoned(&snapshot).rejected_commands, 0);
 }
@@ -328,7 +328,7 @@ fn queued_command_received_after_shutdown_is_rejected_without_execution() {
         Err(DesktopError::WorkerUnavailable)
     ));
     assert_eq!(control.command_calls(), 0);
-    assert_eq!(client.command_queue_depth(), 0);
+    assert_eq!(client.command_submissions_in_flight(), 0);
     assert_eq!(client.snapshot().state, ConnectionState::Stopped);
     assert!(!client.snapshot().fatal_exit);
 }
@@ -409,7 +409,7 @@ fn deterministic_saturated_queue_shutdown_still_completes() {
     ));
     assert_eq!(control.command_calls(), 0);
     assert_eq!(control.refresh_calls(), initial_refresh_calls);
-    assert_eq!(client.command_queue_depth(), 0);
+    assert_eq!(client.command_submissions_in_flight(), 0);
 }
 
 #[test]
@@ -496,7 +496,7 @@ fn compatibility_shutdown_drains_commands_behind_it_and_depth_returns_to_zero() 
             text: "must-not-execute".to_owned(),
         })
         .expect("ordinary command queues behind shutdown");
-    assert_eq!(client.command_queue_depth(), 2);
+    assert_eq!(client.command_submissions_in_flight(), 2);
 
     release_tx.send(()).expect("release controlled poll");
     wait_for_state(&client, ConnectionState::Stopped);
@@ -512,7 +512,7 @@ fn compatibility_shutdown_drains_commands_behind_it_and_depth_returns_to_zero() 
         Err(DesktopError::WorkerUnavailable)
     ));
     assert_eq!(control.command_calls(), 0);
-    assert_eq!(client.command_queue_depth(), 0);
+    assert_eq!(client.command_submissions_in_flight(), 0);
     assert_eq!(client.snapshot().state, ConnectionState::Stopped);
     assert!(!client.snapshot().fatal_exit);
 }
@@ -642,7 +642,7 @@ fn submit_racing_final_shutdown_drain_converges_depth_to_zero() {
         Err(DesktopError::WorkerUnavailable)
     ));
     submitter.join().expect("submitter does not panic");
-    assert_eq!(client.command_queue_depth(), 0);
+    assert_eq!(client.command_submissions_in_flight(), 0);
     assert_eq!(control.refresh_calls(), initial_refresh_calls);
 }
 

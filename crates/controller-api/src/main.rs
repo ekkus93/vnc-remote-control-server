@@ -46,12 +46,7 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     .await;
 
     state.begin_shutdown();
-    finalize_runtime(
-        server_result,
-        worker,
-        event_bridge,
-        config.shutdown_timeout,
-    )?;
+    finalize_runtime(server_result, worker, event_bridge, config.shutdown_timeout)?;
     Ok(())
 }
 
