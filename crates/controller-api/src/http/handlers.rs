@@ -37,7 +37,7 @@ pub(super) async fn events(
             StatusCode::SERVICE_UNAVAILABLE,
             "websocket_capacity",
             "WebSocket client capacity is exhausted",
-            request_id,
+            request_id.clone(),
         )
     })?;
     let snapshot = state.backend.snapshot();
@@ -46,7 +46,17 @@ pub(super) async fn events(
         .clipboard_snapshot()
         .ok()
         .map(|clipboard| clipboard.revision);
-    let initial = state.events.snapshot_event(&snapshot, clipboard_revision);
+    let initial = state
+        .events
+        .snapshot_event(&snapshot, clipboard_revision)
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "event_sequence_exhausted",
+                "event sequence is exhausted",
+                request_id,
+            )
+        })?;
     let events = state.events.clone();
     Ok(websocket.on_upgrade(move |socket| async move {
         events.serve(socket, subscription, initial).await;
