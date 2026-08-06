@@ -22,3 +22,11 @@ The maintainer will acknowledge a complete report, assess severity, coordinate a
 - API and VNC credentials must come from secret files, never image layers or source control.
 - The controller is designed for the project-owned desktop container, not arbitrary untrusted VNC servers.
 - Typed text, clipboard contents, framebuffer pixels, bearer tokens, and VNC passwords must never be logged.
+
+## VNC password lifecycle
+
+The shared `SecretString` abstraction is non-`Debug` and zeroizes its live byte buffer on drop. The controller uses it for the secret-file read result, validated configuration, worker settings and native-client configuration. The Rust adapter scrubs its temporary NUL-terminated connection buffer, and the C shim scrubs its persistent duplicated password before release using a C11-compatible volatile-byte loop. Tests instrument live buffers and drop behavior; no test reads freed memory.
+
+LibVNCClient 0.9.14+dfsg-1ubuntu0.2 owns the allocation returned by its `GetPassword` callback and frees it inside the library. The shim has no post-authentication hook that can scrub that library-owned copy, so this remains an explicit third-party residual rather than a project-owned-zeroization claim. Classic VNC authentication also uses only the first eight password bytes for the DES challenge response; operators should still use a private network and treat VNC authentication as defense in depth, not transport confidentiality.
+
+API bearer-token storage and constant-time comparison are unchanged in this pass. Moving the API token to the shared zeroizing abstraction is a deferred follow-up so that this correctness repair does not mix authentication behavior changes into the shutdown and worker-state work.

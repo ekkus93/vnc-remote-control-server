@@ -50,3 +50,7 @@ The override binds VNC only to `127.0.0.1:5901`. Never use the debug override on
 ## Health
 
 The controller image has an image-level liveness check against `/health/live`. Production Compose overrides it with the readiness check at `/health/ready`, which becomes healthy only after the controller has a current complete desktop frame.
+
+## Controller timing budgets
+
+`VRC_STARTUP_TIMEOUT_MS` is the complete native-worker startup budget, including timeout cleanup; its default is 10000 ms. `VRC_SHUTDOWN_TIMEOUT_MS` is one total process-cleanup budget shared by worker shutdown and event-bridge cleanup; its default is 5000 ms and values below the derived 500 ms minimum are rejected. These are distinct from `VRC_COMMAND_ACK_TIMEOUT_MS`, which applies only to individual HTTP command acknowledgements, and `VRC_SHUTDOWN_GRACE_MS`, which applies to HTTP server draining.

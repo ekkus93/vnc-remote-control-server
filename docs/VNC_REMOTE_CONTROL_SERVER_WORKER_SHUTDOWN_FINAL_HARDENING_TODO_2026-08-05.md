@@ -797,3 +797,7 @@ Historical TODO/evidence corrections:
 
 Remaining risks or skipped validation:
 ```
+
+## 2026-08-06 evidence scope correction
+
+Completion of this historical shutdown TODO remains valid. Sanitizer-boundary and framebuffer-cost claims are superseded only in scope by the correctness-review evidence: `controller-api --lib` now runs under TSan, Miri remains limited to `remote-desktop-core`, and framebuffer allocation/timing statements now come from the committed counting-allocator utility. See `VNC_REMOTE_CONTROL_SERVER_CORRECTNESS_REVIEW_FIX_TODO_2026-08-06.md` and `VNC_REMOTE_CONTROL_SERVER_FRAMEBUFFER_MEASUREMENT_EVIDENCE_2026-08-06.md`.

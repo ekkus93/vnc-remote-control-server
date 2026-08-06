@@ -172,3 +172,7 @@ The sandbox used for this pass did not have `cargo`, `rustc`, or `rustfmt`. Loca
 - [x] R13 remains green on the final validated code SHA.
 - [x] CI passed on the final validated code SHA.
 - [x] Release Gates passed on the final validated code SHA.
+
+## 2026-08-06 correctness-review correction
+
+The historical CI and R13 outcomes recorded here remain valid. Two coverage/performance descriptions were incomplete: the prior ThreadSanitizer/Miri discussion did not establish sanitizer execution over the concurrent `controller-api` crate, and prior framebuffer allocation/pass-count statements were not based on a committed counting-allocator measurement. The correctness-review pass adds full `controller-api --lib` TSan, retains Miri only for `remote-desktop-core`, and records reproducible framebuffer measurements in `VNC_REMOTE_CONTROL_SERVER_FRAMEBUFFER_MEASUREMENT_EVIDENCE_2026-08-06.md`. No historical green result is being rewritten.

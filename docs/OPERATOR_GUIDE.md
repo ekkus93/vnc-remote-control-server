@@ -316,7 +316,9 @@ Manual reconnect is rate-limited. Automatic reconnect remains active for transpo
 curl --fail-with-body --header "$AUTH_HEADER" "$BASE_URL/v1/metrics"
 ```
 
-Metrics use bounded labels and exclude request payloads and secret values.
+Metrics use bounded labels and exclude request payloads and secret values. Every exported series includes Prometheus `# HELP` and `# TYPE` metadata.
+
+`vrc_worker_command_submissions_in_flight` is a gauge of command submissions that have acquired an accounting permit but have not yet released it. Permit acquisition occurs before bounded-queue admission, so this value can transiently exceed `VRC_COMMAND_CAPACITY`; it is not queue depth. The earlier `vrc_worker_command_queue_depth` name was removed without an alias in v0.1 because no repository-local dashboard, alert, API response, or R13 contract consumed it.
 
 ## 10. Asynchronous command semantics
 
@@ -342,15 +344,20 @@ See [`WEBSOCKET_EVENTS.md`](WEBSOCKET_EVENTS.md) for the exact event envelope an
 
 ## 12. Shutdown behavior
 
-Compose services use a 15-second stop grace period. The controller handles SIGTERM by:
+Compose services use a 15-second stop grace period. `VRC_SHUTDOWN_GRACE_MS` bounds HTTP server draining, while `VRC_SHUTDOWN_TIMEOUT_MS` is one total process-cleanup budget shared by the worker and event bridge. The controller establishes one deadline, spends the remaining budget on worker shutdown, then passes only the remainder to bridge cleanup. Server error precedence remains server, worker, then bridge.
+
+The controller handles SIGTERM by:
 
 1. making readiness fail closed;
 2. rejecting new commands;
 3. stopping HTTP acceptance;
 4. releasing tracked keys and buttons where possible;
 5. closing the VNC connection;
-6. joining the native worker and event bridge;
-7. exiting within the configured shutdown grace period.
+6. joining the native worker and event bridge within the one total cleanup budget;
+7. observing an already-completed bridge exit even when no budget remains, or deliberately detaching a still-active bridge with a payload-free diagnostic;
+8. exiting before the Compose stop grace period expires under the documented defaults.
+
+The default process-cleanup budget is 5000 ms. Configuration below `max(500 ms, 8 × 50 ms)` is rejected; with the current event-bridge poll interval, the derived minimum is 500 ms. Direct bridge wake-up is deliberately deferred: the current dependency-free stop flag and bounded poll remain authoritative.
 
 Use:
 
@@ -394,6 +401,8 @@ Important controller defaults:
 | HTTP header read | `VRC_HTTP_HEADER_TIMEOUT_MS` | 5000 ms | maximum 300000 ms |
 | HTTP body read | `VRC_HTTP_BODY_TIMEOUT_MS` | 5000 ms | maximum 300000 ms |
 | HTTP shutdown drain | `VRC_SHUTDOWN_GRACE_MS` | 10000 ms | maximum 300000 ms |
+| Complete worker startup | `VRC_STARTUP_TIMEOUT_MS` | 10000 ms | one total acknowledgement-and-cleanup budget |
+| Process cleanup | `VRC_SHUTDOWN_TIMEOUT_MS` | 5000 ms | minimum `max(500 ms, 8 × event-bridge poll interval)` |
 | Worker command queue | `VRC_COMMAND_CAPACITY` | 64 | bounded, nonzero |
 | Worker event queue | `VRC_EVENT_CAPACITY` | 256 | bounded, nonzero |
 | Command acknowledgement | `VRC_COMMAND_ACK_TIMEOUT_MS` | 5000 ms | nonzero |
@@ -410,7 +419,7 @@ Important controller defaults:
 | Stall probe | `VRC_STALL_PROBE_AFTER_MS` | 30000 ms | nonzero |
 | Stall confirmation | `VRC_STALL_CONFIRM_AFTER_MS` | 10000 ms | nonzero |
 
-Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed.
+Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.
 
 ## 15. Troubleshooting
 

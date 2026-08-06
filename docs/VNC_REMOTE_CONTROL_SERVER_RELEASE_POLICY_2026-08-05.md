@@ -29,11 +29,11 @@ Current determinations are stored in `security/trivy-critical-vex.json` and trac
 
 ## Native-safety coverage and limitations
 
-AddressSanitizer instruments the Rust LibVNCClient adapter and its boundary tests. ThreadSanitizer is limited to Rust-only shared-state tests because combining TSan with the distribution LibVNCClient shared library is not a reliable signal. Rust does not expose a general UBSan mode; Miri is the release gate for Rust undefined behavior and provenance checks. The Debian LibVNCClient shared library is not rebuilt with sanitizers, so upstream native-library defects remain outside this repository's instrumentation boundary.
+AddressSanitizer instruments the Rust LibVNCClient adapter and its boundary tests. ThreadSanitizer executes the complete `controller-api --lib` target, including worker, shutdown, event-bridge, framebuffer, observability, and HTTP library tests, and separately executes `remote-desktop-core --lib`. No skip list, suppression file, `continue-on-error`, or native-adapter exclusion feature is used. The distribution Debian LibVNCClient shared library is not rebuilt with sanitizers, so upstream native-library defects remain outside this repository's instrumentation boundary. Rust does not expose a general UBSan mode; Miri is the pure-Rust undefined-behavior and provenance gate.
 
 These limitations must remain visible in the release evidence. A sanitizer command may not be changed to `continue-on-error`, wrapped in an unconditional success fallback, or replaced by a compile-only check without an explicit policy update.
 
-Miri runs the pure-Rust core test target with `-Zmiri-disable-isolation` because Proptest resolves failure-persistence paths through the host current working directory. This permits host filesystem and environment access but does not disable Miri's undefined-behavior, validity, provenance, leak, or data-race checks. The Miri target contains no native FFI or network operations. Test generation, shrinking, assertions, and the complete pure-Rust core test target remain enabled.
+Miri runs only `remote-desktop-core --lib` with `-Zmiri-disable-isolation` because Proptest resolves failure-persistence paths through the host current working directory. This permits host filesystem and environment access but does not disable Miri's undefined-behavior, validity, provenance, leak, or data-race checks. `controller-api` is outside the Miri boundary because it depends on Tokio, OS threads, native FFI, and real I/O. Test generation, shrinking, assertions, and the complete pure-Rust core test target remain enabled.
 
 ## Image and artifact evidence
 
@@ -42,3 +42,9 @@ Release Gates builds the controller and desktop release images from the candidat
 ## Tool pinning
 
 The release gate pins the Rust stable and nightly toolchains, cargo-deny, actionlint, Gitleaks, Trivy, and GitHub Actions by immutable version or commit. Downloaded release archives are checked against the publisher-provided checksum manifest before installation.
+
+## Metric and API naming compatibility
+
+Exported metric and API names must describe the represented value. A misleading pre-release name may be corrected without an alias only when a repository-wide search confirms that no shipped API schema, dashboard, alert, deployment example, operator contract, or permanent integration test consumes it. The evidence must record the search and the compatibility decision. Once an external consumer is identified, a rename requires a documented compatibility window or an explicit breaking-release decision.
+
+For v0.1, `vrc_worker_command_queue_depth` was replaced by `vrc_worker_command_submissions_in_flight` without an alias. Accounting and permit acquisition did not change; the value can transiently exceed bounded channel capacity because it includes submissions between permit acquisition and queue admission.
