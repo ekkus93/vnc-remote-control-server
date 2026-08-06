@@ -157,7 +157,10 @@ fn verify_colors(
     };
     let decoder = png::Decoder::new(Cursor::new(png_bytes));
     let mut reader = decoder.read_info()?;
-    let mut pixels = vec![0; reader.output_buffer_size()];
+    let output_size = reader
+        .output_buffer_size()
+        .ok_or_else(|| io::Error::other("decoded PNG output size overflow"))?;
+    let mut pixels = vec![0; output_size];
     let info = reader.next_frame(&mut pixels)?;
     if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
         return Err(io::Error::other("screenshot PNG is not RGBA8").into());
