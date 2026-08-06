@@ -1,7 +1,7 @@
 use remote_desktop_core::{DesktopError, WorkerCommand};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
-use std::sync::Arc;
 
 /// Ownership token for one envelope counted in the bounded command queue.
 ///

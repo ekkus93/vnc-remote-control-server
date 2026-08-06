@@ -103,6 +103,10 @@ fn shutdown_does_not_require_command_queue_capacity() {
     let factory_events = Arc::clone(&events);
     let mut config = settings();
     config.command_capacity = 1;
+    // Wide enough that the worker thread is reliably still inside one
+    // bounded native poll call (which always sleeps for the full
+    // interval before returning) when the test fills the queue below,
+    // without relying on microsecond-scale timing.
     config.poll_interval = Duration::from_millis(150);
     let worker = DesktopWorker::spawn_with_factory(config, move || {
         Ok(RecordingSession::new(Arc::clone(&factory_events), None))
@@ -111,6 +115,9 @@ fn shutdown_does_not_require_command_queue_capacity() {
     let client = worker.client();
     wait_for_state(&client, ConnectionState::Connected);
 
+    // The worker is now inside its next (bounded) poll call and is not
+    // draining the command queue, so this submission reliably saturates
+    // the single-slot queue instead of racing the drain loop.
     let stuck = client
         .submit(WorkerCommand::RequestFullRefresh)
         .expect("first command fits the single-slot queue");
@@ -125,6 +132,7 @@ fn shutdown_does_not_require_command_queue_capacity() {
 
     assert_eq!(client.snapshot().state, ConnectionState::Stopped);
     assert!(!client.snapshot().fatal_exit);
+    // The stuck ticket must resolve, not hang until its own timeout.
     assert!(matches!(
         stuck.wait(Duration::from_secs(1)),
         Err(DesktopError::WorkerUnavailable)
@@ -145,6 +153,8 @@ fn drop_does_not_depend_on_shutdown_command_enqueue() {
     let client = worker.client();
     wait_for_state(&client, ConnectionState::Connected);
 
+    // Saturate the queue while the worker is stuck in a bounded poll
+    // call, so a normal `WorkerCommand::Shutdown` enqueue would fail.
     let _stuck = client
         .submit(WorkerCommand::RequestFullRefresh)
         .expect("first command fits the single-slot queue");
@@ -197,6 +207,9 @@ fn out_of_band_shutdown_releases_tracked_buttons_and_keys() {
         .wait(Duration::from_secs(1))
         .expect("key down");
 
+    // Request shutdown directly through the out-of-band signal, not
+    // through `DesktopWorker::shutdown()`, to prove the flag alone
+    // drives cleanup.
     client.request_shutdown();
     wait_for_state(&client, ConnectionState::Stopped);
 
@@ -280,7 +293,9 @@ fn startup_timeout_cleanup_does_not_unbounded_join() {
     assert!(matches!(result, Err(DesktopError::Timeout)));
     assert!(elapsed < Duration::from_secs(1));
     assert!(logs.contains("desktop_worker_startup_cleanup_timeout"));
-    release_tx.send(()).expect("release detached startup worker");
+    release_tx
+        .send(())
+        .expect("release detached startup worker");
 }
 
 #[test]
@@ -343,7 +358,9 @@ fn drop_logs_or_records_worker_join_timeout_without_blocking() {
         done_rx
             .recv_timeout(Duration::from_secs(3))
             .expect("drop returns after bounded timeout");
-        drop_thread.join().expect("worker drop thread does not panic");
+        drop_thread
+            .join()
+            .expect("worker drop thread does not panic");
         ((client, release_tx), started.elapsed())
     });
 
@@ -420,7 +437,12 @@ fn process_shutdown_remains_bounded_after_worker_timeout() {
         .expect("worker enters controlled poll");
 
     let started = Instant::now();
-    let result = finalize_runtime(Ok(()), worker, bridge, Duration::from_millis(100));
+    let result = finalize_runtime(
+        Ok(()),
+        worker,
+        bridge,
+        Duration::from_millis(100),
+    );
 
     assert!(matches!(
         result,
@@ -662,7 +684,10 @@ fn shutdown_logs_incomplete_input_release_without_payloads() {
         "bearer",
         "framebuffer",
     ] {
-        assert!(!logs.contains(forbidden), "forbidden log field: {forbidden}");
+        assert!(
+            !logs.contains(forbidden),
+            "forbidden log field: {forbidden}"
+        );
     }
 }
 

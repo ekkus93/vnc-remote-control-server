@@ -84,23 +84,25 @@ impl EventHub {
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let join = thread::Builder::new()
             .name("worker-event-bridge".to_owned())
-            .spawn(move || tracing::dispatcher::with_default(&dispatcher, || {
-                let _exit_signal = EventBridgeExitSignal::new(exited_tx);
-                let span = tracing::info_span!("worker_event_bridge");
-                let _entered = span.enter();
-                before_loop();
-                loop {
-                    if thread_stop_requested.load(Ordering::Acquire) {
-                        break;
+            .spawn(move || {
+                tracing::dispatcher::with_default(&dispatcher, || {
+                    let _exit_signal = EventBridgeExitSignal::new(exited_tx);
+                    let span = tracing::info_span!("worker_event_bridge");
+                    let _entered = span.enter();
+                    before_loop();
+                    loop {
+                        if thread_stop_requested.load(Ordering::Acquire) {
+                            break;
+                        }
+                        match worker_events.recv_timeout(EVENT_BRIDGE_POLL_INTERVAL) {
+                            Ok(event) => bridge_hub.publish_worker(event),
+                            Err(RecvTimeoutError::Timeout) => {}
+                            Err(RecvTimeoutError::Disconnected) => break,
+                        }
                     }
-                    match worker_events.recv_timeout(EVENT_BRIDGE_POLL_INTERVAL) {
-                        Ok(event) => bridge_hub.publish_worker(event),
-                        Err(RecvTimeoutError::Timeout) => {},
-                        Err(RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-                tracing::info!("worker_event_bridge_stopped");
-            }))?;
+                    tracing::info!("worker_event_bridge_stopped");
+                })
+            })?;
         Ok((
             hub,
             EventBridge {
@@ -612,7 +614,6 @@ mod tests {
         assert!(rendered.contains("vrc_websocket_clients 0"));
         assert!(rendered.contains("vrc_websocket_rejected_total 1"));
     }
-
     #[test]
     fn event_bridge_shutdown_does_not_require_worker_sender_drop() {
         let (_sender, worker_events) = WorkerEvents::test_channel(4);
@@ -708,7 +709,9 @@ mod tests {
                 let _ = done_tx.send(());
             });
             let done = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-            drop_thread.join().expect("bridge drop thread does not panic");
+            drop_thread
+                .join()
+                .expect("bridge drop thread does not panic");
             (started.elapsed(), done)
         });
 

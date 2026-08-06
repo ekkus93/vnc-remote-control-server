@@ -197,17 +197,14 @@ pub(super) fn run_worker<F, S>(
 
         match commands.try_recv() {
             Ok(envelope) => {
-                let envelope = match classify_received_command(
-                    envelope,
-                    &shutdown_requested,
-                    &commands,
-                ) {
-                    ReceivedCommandAction::Execute(envelope) => envelope,
-                    ReceivedCommandAction::Stop => {
-                        orderly_shutdown = true;
-                        break;
-                    }
-                };
+                let envelope =
+                    match classify_received_command(envelope, &shutdown_requested, &commands) {
+                        ReceivedCommandAction::Execute(envelope) => envelope,
+                        ReceivedCommandAction::Stop => {
+                            orderly_shutdown = true;
+                            break;
+                        }
+                    };
                 let result = match envelope.command {
                     WorkerCommand::Shutdown => unreachable!("shutdown handled before execution"),
                     WorkerCommand::Reconnect => state.manual_reconnect(),

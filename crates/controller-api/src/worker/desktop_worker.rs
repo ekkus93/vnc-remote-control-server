@@ -123,25 +123,27 @@ impl DesktopWorker {
         let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let join = thread::Builder::new()
             .name(WORKER_THREAD_NAME.to_owned())
-            .spawn(move || tracing::dispatcher::with_default(&dispatcher, || {
-                let channels = WorkerChannels {
-                    commands: command_rx,
-                    events: event_tx,
-                    startup: startup_tx,
-                    pending_overload: thread_pending_overload,
-                    shutdown_requested: thread_shutdown_requested,
-                    worker_exited: worker_exited_tx,
-                };
-                before_startup();
-                run_worker(
-                    settings,
-                    factory,
-                    channels,
-                    thread_snapshot,
-                    thread_framebuffer,
-                    thread_clipboard,
-                );
-            }))
+            .spawn(move || {
+                tracing::dispatcher::with_default(&dispatcher, || {
+                    let channels = WorkerChannels {
+                        commands: command_rx,
+                        events: event_tx,
+                        startup: startup_tx,
+                        pending_overload: thread_pending_overload,
+                        shutdown_requested: thread_shutdown_requested,
+                        worker_exited: worker_exited_tx,
+                    };
+                    before_startup();
+                    run_worker(
+                        settings,
+                        factory,
+                        channels,
+                        thread_snapshot,
+                        thread_framebuffer,
+                        thread_clipboard,
+                    );
+                })
+            })
             .map_err(|error| {
                 DesktopError::Configuration(format!("failed to spawn desktop worker: {error}"))
             })?;
@@ -168,14 +170,11 @@ impl DesktopWorker {
                 // queue nudge below is a best-effort extra and its failure
                 // must not matter.
                 shutdown_requested.store(true, Ordering::Release);
-                let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter(
-                    Arc::clone(&command_queue_depth),
-                ));
-                match cleanup_startup_worker_after_timeout(
-                    join,
-                    worker_exited_rx,
-                    startup_timeout,
-                ) {
+                let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter(Arc::clone(
+                    &command_queue_depth,
+                )));
+                match cleanup_startup_worker_after_timeout(join, worker_exited_rx, startup_timeout)
+                {
                     Err(DesktopError::WorkerUnavailable) => Err(DesktopError::WorkerUnavailable),
                     Ok(()) | Err(DesktopError::Timeout) => Err(DesktopError::Timeout),
                     Err(error) => Err(error),
@@ -183,11 +182,8 @@ impl DesktopWorker {
             }
             Err(RecvTimeoutError::Disconnected) => {
                 shutdown_requested.store(true, Ordering::Release);
-                match cleanup_startup_worker_after_timeout(
-                    join,
-                    worker_exited_rx,
-                    startup_timeout,
-                ) {
+                match cleanup_startup_worker_after_timeout(join, worker_exited_rx, startup_timeout)
+                {
                     Ok(()) => Err(DesktopError::WorkerUnavailable),
                     Err(error) => Err(error),
                 }
