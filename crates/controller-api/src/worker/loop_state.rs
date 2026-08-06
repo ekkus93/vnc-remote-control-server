@@ -411,7 +411,8 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 }) {
                     self.record_failure(WorkerFailureKind::Timeout);
                     tracing::warn!("worker_stall_timeout");
-                    match lock_unpoisoned(self.snapshot).state {
+                    let state = lock_unpoisoned(self.snapshot).state;
+                    match state {
                         ConnectionState::Connected => {
                             self.transition(ConnectionState::Degraded)?;
                         }
