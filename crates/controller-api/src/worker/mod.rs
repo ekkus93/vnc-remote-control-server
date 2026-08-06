@@ -6,12 +6,12 @@
 //! framebuffer snapshots, and bounded screenshot services.
 //!
 //! The implementation is split across submodules by responsibility:
-//! configuration and status types ([`settings`], [`snapshot`]), the
-//! cloneable client handle ([`client`]), the owning runtime and its lifecycle
-//! ([`desktop_worker`]), the internal command envelope and channel bundle
-//! ([`command`], [`channels`]), the native-adapter abstraction
-//! ([`session`]), the single-threaded event loop state machine
-//! ([`loop_state`], [`run`]), and small pure helpers ([`helpers`]).
+//! configuration and status types (`settings`, `snapshot`), the cloneable
+//! client handle (`client`), the owning runtime and its lifecycle
+//! (`desktop_worker`), the internal command envelope and channel bundle
+//! (`command`, `channels`), the native-adapter abstraction (`session`), the
+//! single-threaded event loop state machine (`loop_state`, `run`), and small
+//! pure helpers (`helpers`).
 
 mod channels;
 mod client;
