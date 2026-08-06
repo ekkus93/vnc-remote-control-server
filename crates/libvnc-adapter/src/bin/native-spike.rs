@@ -1,4 +1,4 @@
-use libvnc_adapter::{NativeClient, NativeClientConfig};
+use libvnc_adapter::{NativeClient, NativeClientConfig, SecretString};
 use remote_desktop_core::{Coordinate, DisplayInfo, KeyboardKey, checked_rgba_len};
 use std::env;
 use std::error::Error;
@@ -43,7 +43,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let config = NativeClientConfig {
         host,
         port,
-        password,
+        password: SecretString::from(password),
         connect_timeout: Duration::from_secs(5),
         read_timeout: Duration::from_secs(5),
     };
