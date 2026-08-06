@@ -20,10 +20,10 @@ use std::time::{Duration, Instant};
 /// Drains queued command envelopes without executing them, resolving each
 /// pending caller with `WorkerUnavailable` so command tickets do not hang
 /// until an arbitrary timeout during shutdown. Never inspects or logs command
-/// payloads. Dequeue ownership releases each envelope's queue-depth permit.
+/// payloads. Dequeue ownership releases each envelope's submission permit.
 pub(super) fn drain_pending_commands(commands: &Receiver<CommandEnvelope>) {
     while let Ok(mut envelope) = commands.try_recv() {
-        envelope.release_queue_depth();
+        envelope.release_submission();
         let _ = envelope
             .completion
             .send(Err(DesktopError::WorkerUnavailable));
@@ -69,14 +69,14 @@ pub(super) enum ReceivedCommandAction {
     Stop,
 }
 
-/// Releases queue ownership, then applies receive-side shutdown authority
+/// Releases submission ownership, then applies receive-side shutdown authority
 /// before any ordinary command can reach the native session.
 pub(super) fn classify_received_command(
     mut envelope: CommandEnvelope,
     shutdown_requested: &AtomicBool,
     commands: &Receiver<CommandEnvelope>,
 ) -> ReceivedCommandAction {
-    envelope.release_queue_depth();
+    envelope.release_submission();
     if matches!(&envelope.command, WorkerCommand::Shutdown) {
         shutdown_requested.store(true, Ordering::Release);
         let _ = envelope.completion.send(Ok(()));
@@ -245,7 +245,7 @@ pub(super) fn run_worker<F, S>(
     }
 
     // Closing the receiver drops any envelope that raced the final drain. Its
-    // queue-depth permit releases automatically, and a racing `try_send()`
+    // submission permit releases automatically, and a racing `try_send()`
     // receives `Disconnected` and drops its returned permit as well.
     drop(commands);
     state.invalidate();
