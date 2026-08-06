@@ -1,5 +1,5 @@
 use controller_api::worker::{DesktopWorker, WorkerClient, WorkerSettings};
-use libvnc_adapter::NativeClientConfig;
+use libvnc_adapter::{NativeClientConfig, SecretString};
 use remote_desktop_core::{
     ConnectionState, Coordinate, KeyboardKey, MAX_FRAMEBUFFER_BYTES, MouseButton, WorkerCommand,
 };
@@ -196,7 +196,7 @@ fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
     })
 }
 
-fn read_secret(path: &Path) -> Result<String, Box<dyn Error>> {
+fn read_secret(path: &Path) -> Result<SecretString, Box<dyn Error>> {
     let mut value = fs::read_to_string(path)?;
     while value.ends_with('\n') || value.ends_with('\r') {
         value.pop();
@@ -204,5 +204,5 @@ fn read_secret(path: &Path) -> Result<String, Box<dyn Error>> {
     if value.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "VNC password is empty").into());
     }
-    Ok(value)
+    Ok(SecretString::from(value))
 }
