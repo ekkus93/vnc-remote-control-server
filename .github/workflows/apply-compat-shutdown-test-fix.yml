@@ -26,25 +26,27 @@ jobs:
 
           path = Path("crates/controller-api/src/worker/tests/shutdown.rs")
           source = path.read_text()
-          old = '''    release_tx.send(()).expect("release controlled poll");
-    worker
-        .shutdown(Duration::from_secs(1))
-        .expect("worker joins after compatibility shutdown");
-
-    shutdown_ticket
-        .wait(Duration::from_secs(1))
-        .expect("compatibility shutdown is acknowledged");
-'''
-          new = '''    release_tx.send(()).expect("release controlled poll");
-    wait_for_state(&client, ConnectionState::Stopped);
-
-    shutdown_ticket
-        .wait(Duration::from_secs(1))
-        .expect("compatibility shutdown is acknowledged");
-    worker
-        .shutdown(Duration::from_secs(1))
-        .expect("stopped worker joins after compatibility shutdown");
-'''
+          old = (
+              '    release_tx.send(()).expect("release controlled poll");\n'
+              '    worker\n'
+              '        .shutdown(Duration::from_secs(1))\n'
+              '        .expect("worker joins after compatibility shutdown");\n'
+              '\n'
+              '    shutdown_ticket\n'
+              '        .wait(Duration::from_secs(1))\n'
+              '        .expect("compatibility shutdown is acknowledged");\n'
+          )
+          new = (
+              '    release_tx.send(()).expect("release controlled poll");\n'
+              '    wait_for_state(&client, ConnectionState::Stopped);\n'
+              '\n'
+              '    shutdown_ticket\n'
+              '        .wait(Duration::from_secs(1))\n'
+              '        .expect("compatibility shutdown is acknowledged");\n'
+              '    worker\n'
+              '        .shutdown(Duration::from_secs(1))\n'
+              '        .expect("stopped worker joins after compatibility shutdown");\n'
+          )
           if source.count(old) != 1:
               raise SystemExit("expected compatibility shutdown test block exactly once")
           path.write_text(source.replace(old, new))
