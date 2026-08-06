@@ -25,13 +25,9 @@ pub trait HttpBackend: Send + Sync + 'static {
     /// Returns the last valid inbound clipboard snapshot.
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError>;
     /// Returns command submissions whose ownership permit remains live.
-    fn command_submissions_in_flight(&self) -> usize {
-        0
-    }
+    fn command_submissions_in_flight(&self) -> usize;
     /// Returns the configured bounded command queue capacity.
-    fn command_queue_capacity(&self) -> usize {
-        0
-    }
+    fn command_queue_capacity(&self) -> usize;
 }
 
 /// Production HTTP backend over one worker client and screenshot service.
