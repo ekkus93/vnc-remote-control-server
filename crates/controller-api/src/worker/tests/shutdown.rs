@@ -227,7 +227,6 @@ fn out_of_band_shutdown_releases_tracked_buttons_and_keys() {
         .expect("worker joins");
 }
 
-
 #[test]
 fn shutdown_timeout_is_enforced_when_worker_does_not_exit() {
     let (control, entered_rx, release_tx) = ControlledPoll::new();
@@ -265,7 +264,9 @@ fn startup_timeout_cleanup_does_not_unbounded_join() {
     let started = Instant::now();
     cleanup_startup_worker_after_timeout(join, exited_rx, Duration::from_millis(25));
     assert!(started.elapsed() < Duration::from_secs(1));
-    release_tx.send(()).expect("release detached cleanup thread");
+    release_tx
+        .send(())
+        .expect("release detached cleanup thread");
 }
 
 #[test]
