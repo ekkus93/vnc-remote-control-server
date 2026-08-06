@@ -1,10 +1,10 @@
 use super::*;
 use crate::framebuffer::{FramebufferError, FramebufferStore};
 use crate::input::InputController;
-use remote_desktop_core::{ClipboardSnapshot, Coordinate, DesktopError, KeyboardKey};
+use remote_desktop_core::{ClipboardSnapshot, Coordinate, DesktopError, KeyboardKey, WorkerCommand};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::Duration;
 
 use super::super::helpers::reconnect_delay;
@@ -45,12 +45,32 @@ fn authentication_failure_waits_for_manual_reconnect() {
     .expect("worker spawns");
     let client = worker.client();
     wait_for_state(&client, ConnectionState::AuthenticationFailed);
-    thread::sleep(Duration::from_millis(30));
+
+    // A completed ordinary command proves the worker loop progressed after the
+    // authentication failure without using elapsed time as negative evidence.
+    let result = client
+        .submit(WorkerCommand::RequestFullRefresh)
+        .expect("command queues")
+        .wait(Duration::from_secs(1));
+    assert_eq!(result, Err(DesktopError::WorkerUnavailable));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         client.framebuffer_snapshot().err(),
         Some(FramebufferError::Unavailable)
     );
+
+    // Positive control: an explicit reconnect must be observed by the fixture.
+    client
+        .submit(WorkerCommand::Reconnect)
+        .expect("manual reconnect queues")
+        .wait(Duration::from_secs(1))
+        .expect("manual reconnect accepted");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline && calls.load(Ordering::SeqCst) < 2 {
+        thread::yield_now();
+    }
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+
     worker
         .shutdown(Duration::from_secs(1))
         .expect("worker joins");
@@ -223,68 +243,85 @@ fn illegal_transition_is_logged_and_does_not_silently_poison_health() {
     assert!(logs.contains("worker_illegal_state_transition"));
 }
 
-#[test]
-fn mismatched_native_frame_never_reaches_connected() {
-    struct MismatchedSession;
+struct MismatchedSession {
+    poll_count: usize,
+    poll_progress: SyncSender<usize>,
+}
 
-    impl WorkerSession for MismatchedSession {
-        fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
-            thread::sleep(timeout);
-            Ok(PollOutcome::MessageProcessed)
-        }
-
-        fn request_full_refresh(&mut self) -> Result<(), NativeError> {
-            Ok(())
-        }
-
-        fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
-            Ok(NativeDisplayInfo {
-                width: 2,
-                height: 2,
-                revision: 5,
-                complete: true,
-            })
-        }
-
-        fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
-            Ok(NativeFramebuffer {
-                width: 2,
-                height: 2,
-                revision: 4,
-                bytes: vec![0; 16],
-            })
-        }
-
-        fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
-            Err(NativeError::ClipboardUnavailable)
-        }
-
-        fn send_pointer(
-            &mut self,
-            _coordinate: Coordinate,
-            _button_mask: u8,
-        ) -> Result<(), NativeError> {
-            Ok(())
-        }
-
-        fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
-            Ok(())
-        }
-
-        fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
-            Ok(())
-        }
+impl WorkerSession for MismatchedSession {
+    fn poll(&mut self, _timeout: Duration) -> Result<PollOutcome, NativeError> {
+        self.poll_count += 1;
+        let _ = self.poll_progress.send(self.poll_count);
+        Ok(PollOutcome::MessageProcessed)
     }
 
-    let worker = DesktopWorker::spawn_with_factory(settings(), || Ok(MismatchedSession))
-        .expect("worker spawns");
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 5,
+            complete: true,
+        })
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 4,
+            bytes: vec![0; 16],
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn send_pointer(
+        &mut self,
+        _coordinate: Coordinate,
+        _button_mask: u8,
+    ) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn mismatched_native_frame_never_reaches_connected() {
+    let (poll_tx, poll_rx) = sync_channel(8);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        Ok(MismatchedSession {
+            poll_count: 0,
+            poll_progress: poll_tx.clone(),
+        })
+    })
+    .expect("worker spawns");
     let client = worker.client();
-    thread::sleep(Duration::from_millis(30));
+
+    for _ in 0..3 {
+        poll_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fixture observes causal worker poll progress");
+    }
     assert_ne!(client.snapshot().state, ConnectionState::Connected);
+    assert!(!client.snapshot().fatal_exit);
     assert_eq!(
         client.framebuffer_snapshot().err(),
         Some(FramebufferError::Unavailable)
     );
+
     worker
         .shutdown(Duration::from_secs(1))
         .expect("worker joins");
