@@ -2,7 +2,8 @@ name: Apply correctness metric refactor
 
 on:
   push:
-    branches: [master]
+    branches:
+      - master
     paths:
       - .github/workflows/apply-correctness-metric-refactor.yml
 
@@ -20,71 +21,8 @@ jobs:
       - name: Apply metric rename and metadata
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          root = Path('crates/controller-api/src')
-          for path in root.rglob('*.rs'):
-              text = path.read_text()
-              text = text.replace('command_queue_depth', 'command_submissions_in_flight')
-              text = text.replace('vrc_worker_command_queue_depth', 'vrc_worker_command_submissions_in_flight')
-              text = text.replace('release_queue_depth', 'release_submission')
-              path.write_text(text)
-
-          path = Path('crates/controller-api/src/observability.rs')
-          text = path.read_text()
-          marker = '        let mut output = String::new();\n'
-          replacement = '        let mut output = String::new();\n        render_metadata(&mut output);\n'
-          if text.count(marker) != 1:
-              raise SystemExit('render output marker mismatch')
-          text = text.replace(marker, replacement, 1)
-
-          function_marker = '''fn metric(output: &mut String, name: &str, value: u64) {
-'''
-          metadata = r'''fn render_metadata(output: &mut String) {
-    const METRICS: &[(&str, &str, &str)] = &[
-        ("vrc_connection_state", "Current worker connection state as a one-hot gauge.", "gauge"),
-        ("vrc_worker_last_failure", "Last bounded worker failure category as a one-hot gauge.", "gauge"),
-        ("vrc_http_requests_total", "Completed HTTP requests.", "counter"),
-        ("vrc_http_errors_total", "Completed HTTP requests with status 400 or greater.", "counter"),
-        ("vrc_auth_failures_total", "Rejected authentication attempts.", "counter"),
-        ("vrc_commands_total", "Accepted command attempts by bounded command kind.", "counter"),
-        ("vrc_command_errors_total", "Worker command failures.", "counter"),
-        ("vrc_command_timeouts_total", "Worker command timeout failures.", "counter"),
-        ("vrc_worker_command_submissions_in_flight", "Command submissions whose ownership permit remains live; this can transiently exceed queue capacity before try_send.", "gauge"),
-        ("vrc_worker_command_queue_capacity", "Configured bounded worker command channel capacity.", "gauge"),
-        ("vrc_worker_rejected_commands_total", "Commands rejected because the bounded channel was full.", "counter"),
-        ("vrc_worker_dropped_events_total", "Worker events dropped because the bounded event channel was full.", "counter"),
-        ("vrc_worker_reconnect_attempts", "Current consecutive reconnect attempt count.", "gauge"),
-        ("vrc_framebuffer_revision", "Current canonical framebuffer revision, or zero when unavailable.", "gauge"),
-        ("vrc_screenshot_requests_total", "Screenshot requests started.", "counter"),
-        ("vrc_screenshot_success_total", "PNG screenshot responses completed.", "counter"),
-        ("vrc_screenshot_not_modified_total", "Conditional screenshot requests answered with not modified.", "counter"),
-        ("vrc_screenshot_busy_total", "Screenshot requests rejected by bounded concurrency.", "counter"),
-        ("vrc_screenshot_timeouts_total", "Screenshot encoding timeouts.", "counter"),
-        ("vrc_screenshot_failures_total", "Other screenshot failures.", "counter"),
-        ("vrc_screenshot_duration_milliseconds_total", "Cumulative screenshot processing duration in milliseconds.", "counter"),
-        ("vrc_websocket_clients", "Current authenticated WebSocket clients.", "gauge"),
-        ("vrc_websocket_rejected_total", "WebSocket clients rejected at capacity.", "counter"),
-        ("vrc_websocket_slow_disconnects_total", "WebSocket clients disconnected after falling behind.", "counter"),
-        ("vrc_websocket_idle_disconnects_total", "WebSocket clients disconnected by heartbeat timeout.", "counter"),
-        ("vrc_events_total", "Payload-free worker events by bounded type.", "counter"),
-        ("vrc_reconnect_events_total", "Worker reconnecting state events.", "counter"),
-        ("vrc_protocol_errors_total", "Observed protocol errors.", "counter"),
-    ];
-    for (name, help, metric_type) in METRICS {
-        let _ = writeln!(output, "# HELP {name} {help}");
-        let _ = writeln!(output, "# TYPE {name} {metric_type}");
-    }
-}
-
-fn metric(output: &mut String, name: &str, value: u64) {
-'''
-          if text.count(function_marker) != 1:
-              raise SystemExit('metric function marker mismatch')
-          text = text.replace(function_marker, metadata, 1)
-          path.write_text(text)
-          PY
+          echo 'CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKcm9vdCA9IFBhdGgoImNyYXRlcy9jb250cm9sbGVyLWFwaS9zcmMiKQpmb3IgcGF0aCBpbiByb290LnJnbG9iKCIqLnJzIik6CiAgICB0ZXh0ID0gcGF0aC5yZWFkX3RleHQoKQogICAgdGV4dCA9IHRleHQucmVwbGFjZSgiY29tbWFuZF9xdWV1ZV9kZXB0aCIsICJjb21tYW5kX3N1Ym1pc3Npb25zX2luX2ZsaWdodCIpCiAgICB0ZXh0ID0gdGV4dC5yZXBsYWNlKCJ2cmNfd29ya2VyX2NvbW1hbmRfcXVldWVfZGVwdGgiLCAidnJjX3dvcmtlcl9jb21tYW5kX3N1Ym1pc3Npb25zX2luX2ZsaWdodCIpCiAgICB0ZXh0ID0gdGV4dC5yZXBsYWNlKCJyZWxlYXNlX3F1ZXVlX2RlcHRoIiwgInJlbGVhc2Vfc3VibWlzc2lvbiIpCiAgICBwYXRoLndyaXRlX3RleHQodGV4dCkKCnBhdGggPSBQYXRoKCJjcmF0ZXMvY29udHJvbGxlci1hcGkvc3JjL29ic2VydmFiaWxpdHkucnMiKQp0ZXh0ID0gcGF0aC5yZWFkX3RleHQoKQptYXJrZXIgPSAiICAgICAgICBsZXQgbXV0IG91dHB1dCA9IFN0cmluZzo6bmV3KCk7XG4iCnJlcGxhY2VtZW50ID0gIiAgICAgICAgbGV0IG11dCBvdXRwdXQgPSBTdHJpbmc6Om5ldygpO1xuICAgICAgICByZW5kZXJfbWV0YWRhdGEoJm11dCBvdXRwdXQpO1xuIgppZiAicmVuZGVyX21ldGFkYXRhKCZtdXQgb3V0cHV0KTsiIG5vdCBpbiB0ZXh0OgogICAgaWYgdGV4dC5jb3VudChtYXJrZXIpICE9IDE6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgicmVuZGVyIG91dHB1dCBtYXJrZXIgbWlzbWF0Y2giKQogICAgdGV4dCA9IHRleHQucmVwbGFjZShtYXJrZXIsIHJlcGxhY2VtZW50LCAxKQoKZnVuY3Rpb25fbWFya2VyID0gImZuIG1ldHJpYyhvdXRwdXQ6ICZtdXQgU3RyaW5nLCBuYW1lOiAmc3RyLCB2YWx1ZTogdTY0KSB7XG4iCm1ldGFkYXRhID0gcicnJ2ZuIHJlbmRlcl9tZXRhZGF0YShvdXRwdXQ6ICZtdXQgU3RyaW5nKSB7CiAgICBjb25zdCBNRVRSSUNTOiAmWygmc3RyLCAmc3RyLCAmc3RyKV0gPSAmWwogICAgICAgICgidnJjX2Nvbm5lY3Rpb25fc3RhdGUiLCAiQ3VycmVudCB3b3JrZXIgY29ubmVjdGlvbiBzdGF0ZSBhcyBhIG9uZS1ob3QgZ2F1Z2UuIiwgImdhdWdlIiksCiAgICAgICAgKCJ2cmNfd29ya2VyX2xhc3RfZmFpbHVyZSIsICJMYXN0IGJvdW5kZWQgd29ya2VyIGZhaWx1cmUgY2F0ZWdvcnkgYXMgYSBvbmUtaG90IGdhdWdlLiIsICJnYXVnZSIpLAogICAgICAgICgidnJjX2h0dHBfcmVxdWVzdHNfdG90YWwiLCAiQ29tcGxldGVkIEhUVFAgcmVxdWVzdHMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19odHRwX2Vycm9yc190b3RhbCIsICJDb21wbGV0ZWQgSFRUUCByZXF1ZXN0cyB3aXRoIHN0YXR1cyA0MDAgb3IgZ3JlYXRlci4iLCAiY291bnRlciIpLAogICAgICAgICgidnJjX2F1dGhfZmFpbHVyZXNfdG90YWwiLCAiUmVqZWN0ZWQgYXV0aGVudGljYXRpb24gYXR0ZW1wdHMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19jb21tYW5kc190b3RhbCIsICJBY2NlcHRlZCBjb21tYW5kIGF0dGVtcHRzIGJ5IGJvdW5kZWQgY29tbWFuZCBraW5kLiIsICJjb3VudGVyIiksCiAgICAgICAgKCJ2cmNfY29tbWFuZF9lcnJvcnNfdG90YWwiLCAiV29ya2VyIGNvbW1hbmQgZmFpbHVyZXMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19jb21tYW5kX3RpbWVvdXRzX3RvdGFsIiwgIldvcmtlciBjb21tYW5kIHRpbWVvdXQgZmFpbHVyZXMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY193b3JrZXJfY29tbWFuZF9zdWJtaXNzaW9uc19pbl9mbGlnaHQiLCAiQ29tbWFuZCBzdWJtaXNzaW9ucyB3aG9zZSBvd25lcnNoaXAgcGVybWl0IHJlbWFpbnMgbGl2ZTsgdGhpcyBjYW4gdHJhbnNpZW50bHkgZXhjZWVkIHF1ZXVlIGNhcGFjaXR5IGJlZm9yZSB0cnlfc2VuZC4iLCAiZ2F1Z2UiKSwKICAgICAgICAoInZyY193b3JrZXJfY29tbWFuZF9xdWV1ZV9jYXBhY2l0eSIsICJDb25maWd1cmVkIGJvdW5kZWQgd29ya2VyIGNvbW1hbmQgY2hhbm5lbCBjYXBhY2l0eS4iLCAiZ2F1Z2UiKSwKICAgICAgICAoInZyY193b3JrZXJfcmVqZWN0ZWRfY29tbWFuZHNfdG90YWwiLCAiQ29tbWFuZHMgcmVqZWN0ZWQgYmVjYXVzZSB0aGUgYm91bmRlZCBjaGFubmVsIHdhcyBmdWxsLiIsICJjb3VudGVyIiksCiAgICAgICAgKCJ2cmNfd29ya2VyX2Ryb3BwZWRfZXZlbnRzX3RvdGFsIiwgIldvcmtlciBldmVudHMgZHJvcHBlZCBiZWNhdXNlIHRoZSBib3VuZGVkIGV2ZW50IGNoYW5uZWwgd2FzIGZ1bGwuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY193b3JrZXJfcmVjb25uZWN0X2F0dGVtcHRzIiwgIkN1cnJlbnQgY29uc2VjdXRpdmUgcmVjb25uZWN0IGF0dGVtcHQgY291bnQuIiwgImdhdWdlIiksCiAgICAgICAgKCJ2cmNfZnJhbWVidWZmZXJfcmV2aXNpb24iLCAiQ3VycmVudCBjYW5vbmljYWwgZnJhbWVidWZmZXIgcmV2aXNpb24sIG9yIHplcm8gd2hlbiB1bmF2YWlsYWJsZS4iLCAiZ2F1Z2UiKSwKICAgICAgICAoInZyY19zY3JlZW5zaG90X3JlcXVlc3RzX3RvdGFsIiwgIlNjcmVlbnNob3QgcmVxdWVzdHMgc3RhcnRlZC4iLCAiY291bnRlciIpLAogICAgICAgICgidnJjX3NjcmVlbnNob3Rfc3VjY2Vzc190b3RhbCIsICJQTkcgc2NyZWVuc2hvdCByZXNwb25zZXMgY29tcGxldGVkLiIsICJjb3VudGVyIiksCiAgICAgICAgKCJ2cmNfc2NyZWVuc2hvdF9ub3RfbW9kaWZpZWRfdG90YWwiLCAiQ29uZGl0aW9uYWwgc2NyZWVuc2hvdCByZXF1ZXN0cyBhbnN3ZXJlZCB3aXRoIG5vdCBtb2RpZmllZC4iLCAiY291bnRlciIpLAogICAgICAgICgidnJjX3NjcmVlbnNob3RfYnVzeV90b3RhbCIsICJTY3JlZW5zaG90IHJlcXVlc3RzIHJlamVjdGVkIGJ5IGJvdW5kZWQgY29uY3VycmVuY3kuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19zY3JlZW5zaG90X3RpbWVvdXRzX3RvdGFsIiwgIlNjcmVlbnNob3QgZW5jb2RpbmcgdGltZW91dHMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19zY3JlZW5zaG90X2ZhaWx1cmVzX3RvdGFsIiwgIk90aGVyIHNjcmVlbnNob3QgZmFpbHVyZXMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19zY3JlZW5zaG90X2R1cmF0aW9uX21pbGxpc2Vjb25kc190b3RhbCIsICJDdW11bGF0aXZlIHNjcmVlbnNob3QgcHJvY2Vzc2luZyBkdXJhdGlvbiBpbiBtaWxsaXNlY29uZHMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY193ZWJzb2NrZXRfY2xpZW50cyIsICJDdXJyZW50IGF1dGhlbnRpY2F0ZWQgV2ViU29ja2V0IGNsaWVudHMuIiwgImdhdWdlIiksCiAgICAgICAgKCJ2cmNfd2Vic29ja2V0X3JlamVjdGVkX3RvdGFsIiwgIldlYlNvY2tldCBjbGllbnRzIHJlamVjdGVkIGF0IGNhcGFjaXR5LiIsICJjb3VudGVyIiksCiAgICAgICAgKCJ2cmNfd2Vic29ja2V0X3Nsb3dfZGlzY29ubmVjdHNfdG90YWwiLCAiV2ViU29ja2V0IGNsaWVudHMgZGlzY29ubmVjdGVkIGFmdGVyIGZhbGxpbmcgYmVoaW5kLiIsICJjb3VudGVyIiksCiAgICAgICAgKCJ2cmNfd2Vic29ja2V0X2lkbGVfZGlzY29ubmVjdHNfdG90YWwiLCAiV2ViU29ja2V0IGNsaWVudHMgZGlzY29ubmVjdGVkIGJ5IGhlYXJ0YmVhdCB0aW1lb3V0LiIsICJjb3VudGVyIiksCiAgICAgICAgKCJ2cmNfZXZlbnRzX3RvdGFsIiwgIlBheWxvYWQtZnJlZSB3b3JrZXIgZXZlbnRzIGJ5IGJvdW5kZWQgdHlwZS4iLCAiY291bnRlciIpLAogICAgICAgICgidnJjX3JlY29ubmVjdF9ldmVudHNfdG90YWwiLCAiV29ya2VyIHJlY29ubmVjdGluZyBzdGF0ZSBldmVudHMuIiwgImNvdW50ZXIiKSwKICAgICAgICAoInZyY19wcm90b2NvbF9lcnJvcnNfdG90YWwiLCAiT2JzZXJ2ZWQgcHJvdG9jb2wgZXJyb3JzLiIsICJjb3VudGVyIiksCiAgICBdOwogICAgZm9yIChuYW1lLCBoZWxwLCBtZXRyaWNfdHlwZSkgaW4gTUVUUklDUyB7CiAgICAgICAgbGV0IF8gPSB3cml0ZWxuIShvdXRwdXQsICIjIEhFTFAge25hbWV9IHtoZWxwfSIpOwogICAgICAgIGxldCBfID0gd3JpdGVsbiEob3V0cHV0LCAiIyBUWVBFIHtuYW1lfSB7bWV0cmljX3R5cGV9Iik7CiAgICB9Cn0KCmZuIG1ldHJpYyhvdXRwdXQ6ICZtdXQgU3RyaW5nLCBuYW1lOiAmc3RyLCB2YWx1ZTogdTY0KSB7CicnJwppZiAiZm4gcmVuZGVyX21ldGFkYXRhKG91dHB1dDogJm11dCBTdHJpbmcpIiBub3QgaW4gdGV4dDoKICAgIGlmIHRleHQuY291bnQoZnVuY3Rpb25fbWFya2VyKSAhPSAxOgogICAgICAgIHJhaXNlIFN5c3RlbUV4aXQoIm1ldHJpYyBmdW5jdGlvbiBtYXJrZXIgbWlzbWF0Y2giKQogICAgdGV4dCA9IHRleHQucmVwbGFjZShmdW5jdGlvbl9tYXJrZXIsIG1ldGFkYXRhLCAxKQpwYXRoLndyaXRlX3RleHQodGV4dCkK' | base64 -d > /tmp/refactor.py
+          python /tmp/refactor.py
           cargo fmt --all
           git diff --check
           ! grep -R 'vrc_worker_command_queue_depth\|command_queue_depth\|release_queue_depth' crates/controller-api/src
