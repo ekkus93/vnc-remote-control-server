@@ -215,6 +215,8 @@ PY
 }
 
 assert_secret_absent_from_home() {
+    # Expansion is intentionally deferred to the shell inside the desktop container.
+    # shellcheck disable=SC2016
     printf '%s' "$vnc_password" \
         | "${persistent[@]}" exec -T desktop sh -ec '
             secret="$(cat)"

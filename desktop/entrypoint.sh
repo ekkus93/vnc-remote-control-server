@@ -65,6 +65,8 @@ create_password_file() {
     chmod 0600 "$encoded_password_file"
 }
 
+# Invoked indirectly by cleanup and signal traps.
+# shellcheck disable=SC2317
 stop_children() {
     local signal="${1:-TERM}"
     if [[ -n "$desktop_pid" ]] && kill -0 "$desktop_pid" 2>/dev/null; then
@@ -75,6 +77,8 @@ stop_children() {
     fi
 }
 
+# Invoked indirectly by TERM, INT, and EXIT traps.
+# shellcheck disable=SC2317
 cleanup() {
     rm -f -- "$readiness_file" "$supervisor_pid_file"
     stop_children TERM

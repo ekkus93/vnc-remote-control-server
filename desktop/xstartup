@@ -5,6 +5,8 @@ export DISPLAY="${DISPLAY:-:1}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/runtime-$(id -u)}"
 install -d -m 0700 "$XDG_RUNTIME_DIR"
 
+# Expansion is intentionally deferred to the inner Bash process.
+# shellcheck disable=SC2016
 exec dbus-launch --exit-with-session bash -euo pipefail -c '
     xfconf-query -c xfce4-session -p /general/SaveOnExit -n -t bool -s false >/dev/null 2>&1 || true
     startxfce4 >/tmp/xfce-session.log 2>&1 &
