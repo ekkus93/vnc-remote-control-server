@@ -8,6 +8,8 @@ use libvnc_adapter::{
     PollOutcome,
 };
 use remote_desktop_core::{ConnectionState, Coordinate, KeyboardKey, MAX_FRAMEBUFFER_BYTES};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -182,6 +184,101 @@ impl WorkerSession for RecordingSession {
 
     fn send_clipboard(&mut self, text: &str) -> Result<(), NativeError> {
         self.record(InputEvent::Clipboard(text.to_owned()))
+    }
+}
+
+pub(super) struct ControlledPoll {
+    entered_tx: Mutex<SyncSender<usize>>,
+    release_rx: Mutex<Receiver<()>>,
+    poll_count: AtomicUsize,
+    command_calls: AtomicUsize,
+}
+
+impl ControlledPoll {
+    pub(super) fn new() -> (Arc<Self>, Receiver<usize>, SyncSender<()>) {
+        let (entered_tx, entered_rx) = sync_channel(8);
+        let (release_tx, release_rx) = sync_channel(8);
+        (
+            Arc::new(Self {
+                entered_tx: Mutex::new(entered_tx),
+                release_rx: Mutex::new(release_rx),
+                poll_count: AtomicUsize::new(0),
+                command_calls: AtomicUsize::new(0),
+            }),
+            entered_rx,
+            release_tx,
+        )
+    }
+
+    pub(super) fn command_calls(&self) -> usize {
+        self.command_calls.load(Ordering::Acquire)
+    }
+}
+
+pub(super) struct ControlledPollSession {
+    control: Arc<ControlledPoll>,
+}
+
+impl ControlledPollSession {
+    pub(super) fn new(control: Arc<ControlledPoll>) -> Self {
+        Self { control }
+    }
+}
+
+impl WorkerSession for ControlledPollSession {
+    fn poll(&mut self, _timeout: Duration) -> Result<PollOutcome, NativeError> {
+        let poll_number = self.control.poll_count.fetch_add(1, Ordering::AcqRel) + 1;
+        if poll_number == 1 {
+            return Ok(PollOutcome::MessageProcessed);
+        }
+        let _ = lock_unpoisoned(&self.control.entered_tx).send(poll_number);
+        let _ = lock_unpoisoned(&self.control.release_rx).recv();
+        Ok(PollOutcome::TimedOut)
+    }
+
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 1,
+            complete: true,
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 1,
+            bytes: vec![1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0],
+        })
+    }
+
+    fn send_pointer(
+        &mut self,
+        _coordinate: Coordinate,
+        _button_mask: u8,
+    ) -> Result<(), NativeError> {
+        self.control.command_calls.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+        self.control.command_calls.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+        self.control.command_calls.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 }
 

@@ -12,7 +12,7 @@ use remote_desktop_core::{
     ClipboardSnapshot, ConnectionState, DesktopError, DesktopEventKind, WorkerCommand,
 };
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -34,7 +34,7 @@ fn drain_pending_commands(commands: &Receiver<CommandEnvelope>, command_queue_de
 /// has been requested. Called at every loop boundary so shutdown
 /// responsiveness never depends on the normal bounded command queue having
 /// capacity or on successfully enqueueing `WorkerCommand::Shutdown`.
-fn shutdown_now(
+pub(super) fn shutdown_now(
     shutdown_requested: &AtomicBool,
     commands: &Receiver<CommandEnvelope>,
     command_queue_depth: &AtomicUsize,
@@ -44,6 +44,53 @@ fn shutdown_now(
     }
     drain_pending_commands(commands, command_queue_depth);
     true
+}
+
+
+struct WorkerExitSignal {
+    sender: Option<SyncSender<()>>,
+}
+
+impl WorkerExitSignal {
+    fn new(sender: SyncSender<()>) -> Self {
+        Self {
+            sender: Some(sender),
+        }
+    }
+}
+
+impl Drop for WorkerExitSignal {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+pub(super) enum ReceivedCommandAction {
+    Execute(CommandEnvelope),
+    Stop,
+}
+
+pub(super) fn classify_received_command(
+    envelope: CommandEnvelope,
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<CommandEnvelope>,
+    command_queue_depth: &AtomicUsize,
+) -> ReceivedCommandAction {
+    if matches!(&envelope.command, WorkerCommand::Shutdown) {
+        shutdown_requested.store(true, Ordering::Release);
+        let _ = envelope.completion.send(Ok(()));
+        return ReceivedCommandAction::Stop;
+    }
+    if shutdown_requested.load(Ordering::Acquire) {
+        let _ = envelope
+            .completion
+            .send(Err(DesktopError::WorkerUnavailable));
+        drain_pending_commands(commands, command_queue_depth);
+        return ReceivedCommandAction::Stop;
+    }
+    ReceivedCommandAction::Execute(envelope)
 }
 
 pub(super) fn run_worker<F, S>(
@@ -64,7 +111,9 @@ pub(super) fn run_worker<F, S>(
         command_queue_depth,
         pending_overload,
         shutdown_requested,
+        worker_exited,
     } = channels;
+    let _worker_exit_signal = WorkerExitSignal::new(worker_exited);
     let worker_span = tracing::info_span!("desktop_worker");
     let _worker_entered = worker_span.enter();
     let _ = startup.send(());
@@ -150,12 +199,20 @@ pub(super) fn run_worker<F, S>(
         match commands.try_recv() {
             Ok(envelope) => {
                 command_queue_depth.fetch_sub(1, Ordering::AcqRel);
-                let result = match envelope.command {
-                    WorkerCommand::Shutdown => {
-                        shutdown_requested.store(true, Ordering::Release);
+                let envelope = match classify_received_command(
+                    envelope,
+                    &shutdown_requested,
+                    &commands,
+                    &command_queue_depth,
+                ) {
+                    ReceivedCommandAction::Execute(envelope) => envelope,
+                    ReceivedCommandAction::Stop => {
                         orderly_shutdown = true;
-                        Ok(())
+                        break;
                     }
+                };
+                let result = match envelope.command {
+                    WorkerCommand::Shutdown => unreachable!("shutdown handled before execution"),
                     WorkerCommand::Reconnect => state.manual_reconnect(),
                     command => state.execute(command),
                 };

@@ -11,4 +11,5 @@ pub(super) struct WorkerChannels {
     pub(super) command_queue_depth: Arc<AtomicUsize>,
     pub(super) pending_overload: Arc<AtomicU64>,
     pub(super) shutdown_requested: Arc<AtomicBool>,
+    pub(super) worker_exited: SyncSender<()>,
 }

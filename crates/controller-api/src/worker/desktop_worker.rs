@@ -9,18 +9,20 @@ use crate::framebuffer::FramebufferStore;
 use libvnc_adapter::{NativeClient, NativeError};
 use remote_desktop_core::{ConnectionState, DesktopError};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
 const WORKER_THREAD_NAME: &str = "vnc-desktop-worker";
+pub(super) const DROP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Owning worker runtime. Dropping it requests shutdown and joins the thread.
 pub struct DesktopWorker {
     client: WorkerClient,
     events: Option<WorkerEvents>,
     join: Option<JoinHandle<()>>,
+    worker_exited: Option<Receiver<()>>,
 }
 
 impl DesktopWorker {
@@ -47,16 +49,25 @@ impl DesktopWorker {
         self.events.take().ok_or(DesktopError::WorkerUnavailable)
     }
 
-    /// Requests out-of-band shutdown and joins the native thread. The request
-    /// cannot fail on a saturated command queue: it does not enqueue
-    /// `WorkerCommand::Shutdown`, it stores directly into a shared shutdown
-    /// flag the worker loop checks independently of the bounded queue.
-    /// Shutdown responsiveness is bounded by the worker's existing native
-    /// poll interval and adapter timeouts, not by an additional timeout
-    /// here, so `timeout` is currently unused.
-    pub fn shutdown(mut self, _timeout: Duration) -> Result<(), DesktopError> {
+    /// Requests out-of-band shutdown and waits no longer than `timeout` for
+    /// the worker thread to report exit. The request cannot fail on a
+    /// saturated command queue: it does not enqueue `WorkerCommand::Shutdown`,
+    /// it stores directly into a shared shutdown flag the worker loop checks
+    /// independently of the bounded queue.
+    pub fn shutdown(mut self, timeout: Duration) -> Result<(), DesktopError> {
         self.client.request_shutdown();
-        self.join_worker()
+        match self.wait_for_worker_exit(timeout) {
+            Ok(()) => self.join_worker(),
+            Err(DesktopError::Timeout) => {
+                tracing::warn!(
+                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    "desktop_worker_shutdown_timeout"
+                );
+                self.detach_worker();
+                Err(DesktopError::Timeout)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) fn spawn_with_factory<F, S>(
@@ -77,6 +88,7 @@ impl DesktopWorker {
         let (command_tx, command_rx) = sync_channel(settings.command_capacity);
         let (event_tx, event_rx) = sync_channel(settings.event_capacity);
         let (startup_tx, startup_rx) = sync_channel(1);
+        let (worker_exited_tx, worker_exited_rx) = sync_channel(1);
         let command_queue_depth = Arc::new(AtomicUsize::new(0));
         let thread_command_queue_depth = Arc::clone(&command_queue_depth);
         let pending_overload = Arc::new(AtomicU64::new(0));
@@ -109,6 +121,7 @@ impl DesktopWorker {
                         command_queue_depth: thread_command_queue_depth,
                         pending_overload: thread_pending_overload,
                         shutdown_requested: thread_shutdown_requested,
+                        worker_exited: worker_exited_tx,
                     },
                     thread_snapshot,
                     thread_framebuffer,
@@ -134,6 +147,7 @@ impl DesktopWorker {
                 },
                 events: Some(WorkerEvents { receiver: event_rx }),
                 join: Some(join),
+                worker_exited: Some(worker_exited_rx),
             }),
             Err(RecvTimeoutError::Timeout) => {
                 // The out-of-band flag is the guaranteed cleanup signal; the
@@ -141,21 +155,69 @@ impl DesktopWorker {
                 // must not matter.
                 shutdown_requested.store(true, Ordering::Release);
                 let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter());
-                let _ = join.join();
+                cleanup_startup_worker_after_timeout(join, worker_exited_rx, startup_timeout);
                 Err(DesktopError::Timeout)
             }
             Err(RecvTimeoutError::Disconnected) => {
-                let _ = join.join();
+                shutdown_requested.store(true, Ordering::Release);
+                let _ = worker_exited_rx.recv_timeout(startup_timeout);
+                let _ = join_worker_handle(join);
                 Err(DesktopError::WorkerUnavailable)
             }
         }
+    }
+
+    fn wait_for_worker_exit(&mut self, timeout: Duration) -> Result<(), DesktopError> {
+        let Some(receiver) = self.worker_exited.take() else {
+            return Ok(());
+        };
+        match receiver.recv_timeout(timeout) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => Ok(()),
+            Err(RecvTimeoutError::Timeout) => Err(DesktopError::Timeout),
+        }
+    }
+
+    fn detach_worker(&mut self) {
+        let _ = self.worker_exited.take();
+        let _ = self.join.take();
     }
 
     fn join_worker(&mut self) -> Result<(), DesktopError> {
         let Some(join) = self.join.take() else {
             return Ok(());
         };
-        join.join().map_err(|_| DesktopError::WorkerUnavailable)
+        join_worker_handle(join)
+    }
+}
+
+fn join_worker_handle(join: JoinHandle<()>) -> Result<(), DesktopError> {
+    match join.join() {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            tracing::error!("desktop_worker_join_failed");
+            Err(DesktopError::WorkerUnavailable)
+        }
+    }
+}
+
+pub(super) fn cleanup_startup_worker_after_timeout(
+    join: JoinHandle<()>,
+    worker_exited: Receiver<()>,
+    timeout: Duration,
+) {
+    match worker_exited.recv_timeout(timeout) {
+        Ok(()) | Err(RecvTimeoutError::Disconnected) => {
+            if let Err(error) = join_worker_handle(join) {
+                tracing::error!(error = ?error, "desktop_worker_startup_join_failed");
+            }
+        }
+        Err(RecvTimeoutError::Timeout) => {
+            tracing::warn!(
+                timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                "desktop_worker_startup_cleanup_timeout"
+            );
+            drop(join);
+        }
     }
 }
 
@@ -165,6 +227,23 @@ impl Drop for DesktopWorker {
             return;
         }
         self.client.request_shutdown();
-        let _ = self.join_worker();
+        match self.wait_for_worker_exit(DROP_SHUTDOWN_TIMEOUT) {
+            Ok(()) => {
+                if let Err(error) = self.join_worker() {
+                    tracing::error!(error = ?error, "desktop_worker_drop_join_failed");
+                }
+            }
+            Err(DesktopError::Timeout) => {
+                tracing::warn!(
+                    timeout_ms =
+                        u64::try_from(DROP_SHUTDOWN_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
+                    "desktop_worker_drop_shutdown_timeout"
+                );
+                self.detach_worker();
+            }
+            Err(_) => {
+                self.detach_worker();
+            }
+        }
     }
 }
