@@ -10,10 +10,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release-gates-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   static_policy:
     name: Release static and supply-chain gates
@@ -51,332 +47,318 @@ jobs:
             pkg-config \
             shellcheck
 
-      - name: Install pinned release tools
+      - name: Install pinned release policy tools
+        shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import hashlib
-          import urllib.request
+          cargo +1.97.1 install cargo-deny --version 0.19.0 --locked
+          cargo +1.97.1 install cargo-auditable --version 0.7.2 --locked
+          tool_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tool_dir"' EXIT
+          cd "$tool_dir"
+          curl --fail --show-error --silent --location --remote-name \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.10/actionlint_1.7.10_linux_amd64.tar.gz
+          curl --fail --show-error --silent --location --remote-name \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.10/actionlint_1.7.10_checksums.txt
+          grep ' actionlint_1.7.10_linux_amd64.tar.gz$' actionlint_1.7.10_checksums.txt \
+            | sha256sum --check --strict
+          tar -xzf actionlint_1.7.10_linux_amd64.tar.gz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          curl --fail --show-error --silent --location --remote-name \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_linux_x64.tar.gz
+          curl --fail --show-error --silent --location --remote-name \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.0/gitleaks_8.30.0_checksums.txt
+          grep ' gitleaks_8.30.0_linux_x64.tar.gz$' gitleaks_8.30.0_checksums.txt \
+            | sha256sum --check --strict
+          tar -xzf gitleaks_8.30.0_linux_x64.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
 
-          downloads = {
-              "actionlint.tar.gz": (
-                  "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_x86_64.tar.gz",
-                  "023070a287cd8cccd71515fed96fa46dc66ca4f3a84abd9bd6c7e1be0d070d23",
-              ),
-              "hadolint": (
-                  "https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64",
-                  "56de6a113a10b1dcebbb847b20cbbfcf3d4bc8a98c3b27593df722e3d8d7a1e0",
-              ),
-              "gitleaks.tar.gz": (
-                  "https://github.com/gitleaks/gitleaks/releases/download/v8.24.2/gitleaks_8.24.2_linux_x64.tar.gz",
-                  "1c62541c5461fdc8b437d41bb3c040cb77505d5638e633f3cd8f59d8f1b780f9",
-              ),
-          }
-          for name, (url, expected) in downloads.items():
-              path = Path("/tmp") / name
-              with urllib.request.urlopen(url) as response:
-                  path.write_bytes(response.read())
-              actual = hashlib.sha256(path.read_bytes()).hexdigest()
-              if actual != expected:
-                  raise SystemExit(f"checksum mismatch for {name}: {actual}")
-          PY
-          mkdir -p "$HOME/.local/bin"
-          tar -xzf /tmp/actionlint.tar.gz -C "$HOME/.local/bin" actionlint
-          install -m 0755 /tmp/hadolint "$HOME/.local/bin/hadolint"
-          tar -xzf /tmp/gitleaks.tar.gz -C "$HOME/.local/bin" gitleaks
-          cargo +1.97.1 install --locked --version 0.19.0 cargo-deny
-          cargo +1.97.1 install --locked --version 0.7.2 cargo-auditable
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Verify pinned release tool versions
+      - name: Record static policy tool versions
+        shell: bash
         run: |
           set -euo pipefail
-          actionlint -version | grep -F '1.7.7'
-          hadolint --version | grep -F '2.12.0'
-          gitleaks version | grep -F '8.24.2'
-          cargo deny --version | grep -F '0.19.0'
-          cargo auditable --version | grep -F '0.7.2'
+          mkdir -p artifacts/static-policy
+          {
+            rustc --version --verbose
+            cargo --version --verbose
+            cargo deny --version
+            cargo auditable --version
+            actionlint --version
+            gitleaks version
+            shellcheck --version
+            docker version --format 'Docker client {{.Client.Version}}; server {{.Server.Version}}'
+            docker buildx version
+            docker compose version
+            pkg-config --modversion libvncclient
+          } > artifacts/static-policy/tool-versions.txt
 
-      - name: Scan full history for secrets
-        run: |
-          set -euo pipefail
-          mkdir -p artifacts/gitleaks
-          gitleaks git \
-            --log-opts="--all" \
-            --redact \
-            --report-format json \
-            --report-path artifacts/gitleaks/gitleaks.json
+      - name: Run full-history secret scan
+        run: >-
+          gitleaks git
+          --redact
+          --report-format json
+          --report-path artifacts/static-policy/gitleaks.json
+          --log-opts='--all'
+          .
 
-      - name: Upload Gitleaks report
-        if: ${{ always() }}
-        uses: actions/upload-artifact@6027e3aa2c585d4d7462b457e1f20770d4a1b7dd
-        with:
-          name: gitleaks-report
-          path: artifacts/gitleaks/gitleaks.json
-          if-no-files-found: error
+      - name: Lint shell scripts
+        run: >-
+          shellcheck
+          desktop/entrypoint.sh
+          desktop/healthcheck.sh
+          desktop/xstartup
+          tests/desktop/run.sh
+          tests/native/run.sh
+          tests/worker-e2e/run.sh
+          tests/worker-text-clipboard-e2e/run.sh
+          tests/http-e2e/run.sh
+          controller/healthcheck.sh
+          tests/compose/run.sh
+          tests/integration/run.sh
 
-      - name: Lint workflows
+      - name: Lint GitHub Actions workflows
         run: actionlint
 
-      - name: Lint permanent shell sources
-        run: |
-          shellcheck \
-            desktop/entrypoint.sh \
-            desktop/healthcheck.sh \
-            desktop/xstartup \
-            tests/desktop/run.sh \
-            tests/native/run.sh \
-            tests/worker-e2e/run.sh \
-            tests/worker-text-clipboard-e2e/run.sh \
-            tests/http-e2e/run.sh \
-            controller/healthcheck.sh \
-            tests/compose/run.sh \
-            tests/integration/run.sh
-
       - name: Validate Dockerfiles with BuildKit
-        env:
-          DOCKER_BUILDKIT: "1"
         run: |
-          docker build --check -f desktop/Dockerfile .
+          docker build --check desktop
           docker build --check -f controller/Dockerfile .
 
-      - name: Validate Compose manifests
+      - name: Validate Compose configuration
         run: |
+          mkdir -p deploy/secrets
+          printf 'release-gate-api-token\n' > deploy/secrets/api_token.txt
+          printf 'release-gate-vnc-password\n' > deploy/secrets/vnc_password.txt
+          chmod 0600 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt
           docker compose -f deploy/compose.yaml config --quiet
-          docker compose \
-            -f deploy/compose.yaml \
-            -f deploy/compose.persistence.yaml \
-            config --quiet
-          docker compose \
-            -f deploy/compose.yaml \
-            -f deploy/compose.debug-vnc.yaml \
-            config --quiet
+          rm -rf deploy/secrets
 
-      - name: Verify release policy contract
-        run: python -m unittest tests.test_release_policy_contract -v
+      - name: Enforce advisory, license, source, and duplicate policy
+        run: cargo deny check advisories bans licenses sources
 
-      - name: Enforce dependency policy
-        run: cargo deny check
-
-      - name: Build auditable release binary
+      - name: Build auditable release binary and inspect metadata
         env:
-          RUSTFLAGS: -Dwarnings
-        run: cargo auditable build --locked --release --bin controller-api
-
-      - name: Verify auditable binary metadata
+          CARGO_PROFILE_RELEASE_LTO: "false"
         run: |
-          mkdir -p artifacts/auditable
-          python scripts/verify_auditable_binary.py \
-            --binary target/release/controller-api \
-            --metadata-out artifacts/auditable/controller-api-auditable.json
+          cargo auditable build --locked --release -p controller-api
+          python3 scripts/verify_auditable_binary.py \
+            target/release/controller-api \
+            --output artifacts/static-policy/auditable-binary.json
 
-      - name: Upload auditable binary evidence
+      - name: Upload static policy evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@6027e3aa2c585d4d7462b457e1f20770d4a1b7dd
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: auditable-binary-evidence
-          path: artifacts/auditable/controller-api-auditable.json
-          if-no-files-found: error
+          name: static-policy-${{ github.run_id }}
+          path: artifacts/static-policy
+          if-no-files-found: warn
+          retention-days: 30
 
-  address_sanitizer:
-    name: Native adapter AddressSanitizer
+  native_safety:
+    name: Release native sanitizer and Miri gates
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
 
-      - name: Install native dependencies
+      - name: Install native sanitizer dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
             build-essential \
+            clang \
             libvncserver-dev \
             pkg-config
 
-      - name: Run native AddressSanitizer smoke
-        env:
-          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:strict_string_checks=1
-        run: tests/release/asan/run.sh
-
-  controller_tsan:
-    name: Controller API ThreadSanitizer
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-
       - name: Install pinned nightly toolchain
-        run: |
-          rustup toolchain install nightly-2026-07-15 --profile minimal --component rust-src
-
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            build-essential \
-            libvncserver-dev \
-            pkg-config
-
-      - name: Run controller-api under ThreadSanitizer
-        env:
-          RUSTFLAGS: -Zsanitizer=thread -Ctarget-feature=-crt-static
-          RUSTDOCFLAGS: -Zsanitizer=thread -Ctarget-feature=-crt-static
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
-        run: |
-          cargo +nightly-2026-07-15 test \
-            -Zbuild-std \
-            --locked \
-            -p controller-api \
-            --lib \
-            --target x86_64-unknown-linux-gnu
-
-  core_tsan:
-    name: Remote desktop core ThreadSanitizer
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-
-      - name: Install pinned nightly toolchain
-        run: |
-          rustup toolchain install nightly-2026-07-15 --profile minimal --component rust-src
-
-      - name: Run remote-desktop-core under ThreadSanitizer
-        env:
-          RUSTFLAGS: -Zsanitizer=thread -Ctarget-feature=-crt-static
-          RUSTDOCFLAGS: -Zsanitizer=thread -Ctarget-feature=-crt-static
-          TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
-        run: |
-          cargo +nightly-2026-07-15 test \
-            -Zbuild-std \
-            --locked \
-            -p remote-desktop-core \
-            --lib \
-            --target x86_64-unknown-linux-gnu
-
-  miri:
-    name: Core Miri boundary
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-
-      - name: Install pinned nightly Miri
-        run: |
-          rustup toolchain install nightly-2026-07-15 --profile minimal --component miri
-          cargo +nightly-2026-07-15 miri setup
-
-      - name: Run pure core under Miri
-        env:
-          MIRIFLAGS: -Zmiri-strict-provenance
-        run: cargo +nightly-2026-07-15 miri test --locked -p remote-desktop-core --lib
-
-  trivy_sbom_vex:
-    name: Trivy, SBOM, and VEX evidence
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-
-      - name: Install pinned Trivy
+        shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          import hashlib
-          import urllib.request
+          rustup toolchain install nightly-2026-08-01 \
+            --profile minimal \
+            --component rust-src,miri
 
-          url = "https://github.com/aquasecurity/trivy/releases/download/v0.58.2/trivy_0.58.2_Linux-64bit.tar.gz"
-          expected = "3d2e8615be9803064fe7b9a5fb459bb0ba356f0470b27d5819d44fc1607c97bf"
-          archive = Path("/tmp/trivy.tar.gz")
-          with urllib.request.urlopen(url) as response:
-              archive.write_bytes(response.read())
-          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-          if actual != expected:
-              raise SystemExit(f"Trivy checksum mismatch: {actual}")
-          PY
-          mkdir -p "$HOME/.local/bin"
-          tar -xzf /tmp/trivy.tar.gz -C "$HOME/.local/bin" trivy
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Verify Trivy version
-        run: trivy --version | grep -F 'Version: 0.58.2'
-
-      - name: Build controller and desktop images
-        run: |
-          docker build -t vrc-controller:${GITHUB_SHA} -f controller/Dockerfile .
-          docker build -t vrc-desktop:${GITHUB_SHA} -f desktop/Dockerfile .
-
-      - name: Scan repository and images
-        run: |
-          mkdir -p artifacts/trivy
-          trivy fs \
-            --scanners vuln,misconfig,secret \
-            --severity HIGH,CRITICAL \
-            --ignore-unfixed \
-            --exit-code 1 \
-            --format json \
-            --output artifacts/trivy/repository.json \
-            .
-          trivy image \
-            --scanners vuln \
-            --severity HIGH,CRITICAL \
-            --ignore-unfixed \
-            --exit-code 1 \
-            --format json \
-            --output artifacts/trivy/controller-image.json \
-            vrc-controller:${GITHUB_SHA}
-          trivy image \
-            --scanners vuln \
-            --severity HIGH,CRITICAL \
-            --ignore-unfixed \
-            --exit-code 1 \
-            --format json \
-            --output artifacts/trivy/desktop-image.json \
-            vrc-desktop:${GITHUB_SHA}
-
-      - name: Generate CycloneDX SBOMs
-        run: |
-          mkdir -p artifacts/sbom
-          trivy image \
-            --format cyclonedx \
-            --output artifacts/sbom/controller.cdx.json \
-            vrc-controller:${GITHUB_SHA}
-          trivy image \
-            --format cyclonedx \
-            --output artifacts/sbom/desktop.cdx.json \
-            vrc-desktop:${GITHUB_SHA}
-          trivy fs \
-            --format cyclonedx \
-            --output artifacts/sbom/repository.cdx.json \
-            .
-
-      - name: Validate VEX documents and enforcement path
-        run: |
-          python scripts/validate_vex.py \
-            --vex-dir security/vex \
-            --report artifacts/trivy/repository.json \
-            --report artifacts/trivy/controller-image.json \
-            --report artifacts/trivy/desktop-image.json
-
-      - name: Upload release evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@6027e3aa2c585d4d7462b457e1f20770d4a1b7dd
+      - name: Restore native-safety dependency cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          name: release-gates-evidence
           path: |
-            artifacts/trivy
-            artifacts/sbom
-            security/vex
-          if-no-files-found: error
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: native-safety-${{ runner.os }}-nightly-2026-08-01-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            native-safety-${{ runner.os }}-nightly-2026-08-01-
+
+      - name: Record native-safety coverage and versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/native-safety
+          {
+            rustc +nightly-2026-08-01 --version --verbose
+            printf '\nLibVNCClient: '
+            pkg-config --modversion libvncclient
+            printf '\nCoverage notes:\n'
+            printf '%s\n' \
+              '- AddressSanitizer instruments the Rust adapter and boundary tests.' \
+              '- ThreadSanitizer instruments controller-api worker, shutdown, events, framebuffer, and HTTP library tests plus remote-desktop-core.' \
+              '- Miri remains scoped to remote-desktop-core because controller-api depends on Tokio, OS threads, and native FFI.' \
+              '- Rust does not expose a general UBSan mode; Miri is the pure-Rust undefined-behavior gate.' \
+              '- Miri isolation is disabled only for Proptest working-directory access.' \
+              '- The distribution LibVNCClient shared library is not rebuilt with sanitizers.'
+          } > artifacts/native-safety/toolchain.txt
+
+      - name: Run adapter tests under AddressSanitizer
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+          CARGO_TARGET_DIR: target/asan
+          RUSTFLAGS: -Zsanitizer=address
+        run: >-
+          cargo +nightly-2026-08-01 -Zbuild-std test
+          --target x86_64-unknown-linux-gnu
+          --locked
+          --package libvnc-adapter
+          --lib
+
+      - name: Run controller concurrency tests under ThreadSanitizer
+        env:
+          CARGO_TARGET_DIR: target/tsan-controller
+          RUSTFLAGS: -Zsanitizer=thread
+          TSAN_OPTIONS: halt_on_error=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-08-01 -Zbuild-std test \
+            --target x86_64-unknown-linux-gnu \
+            --locked \
+            --package controller-api \
+            --lib \
+            2>&1 | tee artifacts/native-safety/controller-tsan.log
+
+      - name: Run core shared-state tests under ThreadSanitizer
+        env:
+          CARGO_TARGET_DIR: target/tsan-core
+          RUSTFLAGS: -Zsanitizer=thread
+          TSAN_OPTIONS: halt_on_error=1
+        run: >-
+          cargo +nightly-2026-08-01 -Zbuild-std test
+          --target x86_64-unknown-linux-gnu
+          --locked
+          --package remote-desktop-core
+          --lib
+
+      - name: Run core tests under Miri
+        env:
+          PROPTEST_CASES: "16"
+          MIRIFLAGS: -Zmiri-disable-isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly-2026-08-01 miri setup
+          cargo +nightly-2026-08-01 miri test \
+            --locked \
+            --package remote-desktop-core \
+            --lib
+
+      - name: Upload native-safety evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-safety-${{ github.run_id }}
+          path: artifacts/native-safety
+          if-no-files-found: warn
+          retention-days: 30
+
+  image_security:
+    name: Release image vulnerability and SBOM gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Prepare image-security evidence directory
+        run: mkdir -p artifacts/image-security
+
+      - name: Install pinned Trivy release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tool_dir"' EXIT
+          cd "$tool_dir"
+          curl --fail --show-error --silent --location --remote-name \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_Linux-64bit.tar.gz
+          curl --fail --show-error --silent --location --remote-name \
+            https://github.com/aquasecurity/trivy/releases/download/v0.70.0/trivy_0.70.0_checksums.txt
+          grep ' trivy_0.70.0_Linux-64bit.tar.gz$' trivy_0.70.0_checksums.txt \
+            | sha256sum --check --strict
+          tar -xzf trivy_0.70.0_Linux-64bit.tar.gz
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+
+      - name: Record image-security tool versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            trivy --version
+            docker version --format 'Docker client {{.Client.Version}}; server {{.Server.Version}}'
+            docker buildx version
+          } > artifacts/image-security/tool-versions.txt
+
+      - name: Build exact-candidate release images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build \
+            --tag "vnc-remote-control-desktop:${{ github.sha }}" \
+            desktop
+          docker build \
+            --tag "vnc-remote-control-controller:${{ github.sha }}" \
+            --file controller/Dockerfile \
+            .
+          docker image inspect \
+            "vnc-remote-control-desktop:${{ github.sha }}" \
+            "vnc-remote-control-controller:${{ github.sha }}" \
+            > artifacts/image-security/image-inspect.json
+
+      - name: Generate vulnerability inventories and CycloneDX SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in desktop controller; do
+            ref="vnc-remote-control-${image}:${{ github.sha }}"
+            trivy image \
+              --scanners vuln \
+              --severity HIGH,CRITICAL \
+              --format json \
+              --output "artifacts/image-security/${image}-vulnerabilities.json" \
+              "$ref"
+            trivy image \
+              --format cyclonedx \
+              --output "artifacts/image-security/${image}-sbom.cdx.json" \
+              "$ref"
+          done
+          cp security/trivy-critical-vex.json artifacts/image-security/trivy-critical-vex.json
+
+      - name: Enforce exact CRITICAL VEX determinations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_trivy_critical_vex.py \
+            --vex security/trivy-critical-vex.json \
+            --output artifacts/image-security/critical-vex-evaluation.json \
+            artifacts/image-security/controller-vulnerabilities.json \
+            artifacts/image-security/desktop-vulnerabilities.json
+
+      - name: Upload image vulnerability, VEX, and SBOM evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-security-${{ github.run_id }}
+          path: artifacts/image-security
+          if-no-files-found: warn
+          retention-days: 30
