@@ -1,0 +1,69 @@
+name: Apply compatibility shutdown test repair
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-compat-shutdown-test-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make compatibility shutdown test deterministic
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/controller-api/src/worker/tests/shutdown.rs")
+          source = path.read_text()
+          old = '''    release_tx.send(()).expect("release controlled poll");
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker joins after compatibility shutdown");
+
+    shutdown_ticket
+        .wait(Duration::from_secs(1))
+        .expect("compatibility shutdown is acknowledged");
+'''
+          new = '''    release_tx.send(()).expect("release controlled poll");
+    wait_for_state(&client, ConnectionState::Stopped);
+
+    shutdown_ticket
+        .wait(Duration::from_secs(1))
+        .expect("compatibility shutdown is acknowledged");
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("stopped worker joins after compatibility shutdown");
+'''
+          if source.count(old) != 1:
+              raise SystemExit("expected compatibility shutdown test block exactly once")
+          path.write_text(source.replace(old, new))
+          PY
+
+      - name: Format and verify patch
+        shell: bash
+        run: |
+          cargo fmt --all
+          grep -q 'wait_for_state(&client, ConnectionState::Stopped);' crates/controller-api/src/worker/tests/shutdown.rs
+          grep -q 'stopped worker joins after compatibility shutdown' crates/controller-api/src/worker/tests/shutdown.rs
+          git diff --check
+
+      - name: Commit repair and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-compat-shutdown-test-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/controller-api/src/worker/tests/shutdown.rs .github/workflows/apply-compat-shutdown-test-fix.yml
+          git commit -m "Make compatibility shutdown regression deterministic"
+          git push origin HEAD:master
