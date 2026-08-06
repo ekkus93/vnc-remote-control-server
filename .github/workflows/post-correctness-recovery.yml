@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: post-correctness-recovery-master-slim
+  group: post-correctness-recovery-master-slim-final
   cancel-in-progress: true
 
 jobs:
