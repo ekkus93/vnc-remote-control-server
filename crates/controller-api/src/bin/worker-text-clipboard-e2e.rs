@@ -133,7 +133,13 @@ fn verify_colors(
     blue: (u32, u32),
 ) -> Result<(), Box<dyn Error>> {
     let snapshot = client.framebuffer_snapshot()?;
-    assert_color(snapshot.rgba(), snapshot.width(), snapshot.height(), red, true)?;
+    assert_color(
+        snapshot.rgba(),
+        snapshot.width(),
+        snapshot.height(),
+        red,
+        true,
+    )?;
     assert_color(
         snapshot.rgba(),
         snapshot.width(),
@@ -180,13 +186,9 @@ fn assert_color(
         .get(pixel..pixel + 4)
         .ok_or_else(|| io::Error::other("pixel bytes are unavailable"))?;
     let valid = if expect_red {
-        channels[0] > DOMINANT_MINIMUM
-            && channels[1] < OTHER_MAXIMUM
-            && channels[2] < OTHER_MAXIMUM
+        channels[0] > DOMINANT_MINIMUM && channels[1] < OTHER_MAXIMUM && channels[2] < OTHER_MAXIMUM
     } else {
-        channels[2] > DOMINANT_MINIMUM
-            && channels[0] < OTHER_MAXIMUM
-            && channels[1] < OTHER_MAXIMUM
+        channels[2] > DOMINANT_MINIMUM && channels[0] < OTHER_MAXIMUM && channels[1] < OTHER_MAXIMUM
     };
     if !valid || channels[3] != u8::MAX {
         return Err(io::Error::other("RGBX channel-order assertion failed").into());

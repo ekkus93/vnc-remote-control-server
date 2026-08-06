@@ -1,7 +1,9 @@
 use super::*;
 use crate::framebuffer::{FramebufferError, FramebufferStore};
 use crate::input::InputController;
-use remote_desktop_core::{ClipboardSnapshot, Coordinate, DesktopError, KeyboardKey, WorkerCommand};
+use remote_desktop_core::{
+    ClipboardSnapshot, Coordinate, DesktopError, KeyboardKey, WorkerCommand,
+};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
