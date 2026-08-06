@@ -51,8 +51,10 @@ jobs:
           set -euo pipefail
           python .github/post-correctness-recovery.py
           python .github/post-correctness-recovery-boundary-fix.py
+          python .github/post-correctness-recovery-api-fix.py
           test ! -e .github/post-correctness-recovery.py
           test ! -e .github/post-correctness-recovery-boundary-fix.py
+          test ! -e .github/post-correctness-recovery-api-fix.py
           test ! -e .github/workflows/post-correctness-recovery.yml
           git diff --check
 
