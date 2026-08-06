@@ -53,6 +53,7 @@ struct EventBridgeStartSettings {
 pub struct EventHub {
     sender: broadcast::Sender<ServerEvent>,
     sequence: Arc<AtomicU64>,
+    sequence_exhausted: Arc<AtomicBool>,
     clients: Arc<Semaphore>,
     metrics: Metrics,
     ping_interval: Duration,
@@ -159,11 +160,18 @@ impl EventHub {
         Self {
             sender,
             sequence: Arc::new(AtomicU64::new(1)),
+            sequence_exhausted: Arc::new(AtomicBool::new(false)),
             clients: Arc::new(Semaphore::new(maximum_clients)),
             metrics,
             ping_interval,
             idle_timeout,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_sequence_for_test(&self, sequence: u64) {
+        self.sequence.store(sequence, Ordering::Release);
+        self.sequence_exhausted.store(false, Ordering::Release);
     }
 
     /// Acquires one bounded client slot and subscribes to future events.
@@ -187,7 +195,7 @@ impl EventHub {
         &self,
         snapshot: &WorkerSnapshot,
         clipboard_revision: Option<u64>,
-    ) -> ServerEvent {
+    ) -> Result<ServerEvent, EventSequenceError> {
         self.event(
             SystemTime::now(),
             EventPayload::Snapshot {
@@ -219,6 +227,15 @@ impl EventHub {
         let mut last_activity = Instant::now();
 
         loop {
+            if self.sequence_exhausted.load(Ordering::Acquire) {
+                let _ = socket
+                    .send(Message::Close(Some(CloseFrame {
+                        code: 1011,
+                        reason: "event sequence exhausted".into(),
+                    })))
+                    .await;
+                break;
+            }
             tokio::select! {
                 event = subscription.receiver.recv() => {
                     match event {
@@ -298,29 +315,47 @@ impl EventHub {
             DesktopEventKind::Overload => EventPayload::Overload,
             DesktopEventKind::ProtocolError => EventPayload::ProtocolError,
         };
-        let event = self.event(worker.observed_at, payload);
-        let _ = self.sender.send(event);
-    }
-
-    fn event(&self, observed_at: SystemTime, payload: EventPayload) -> ServerEvent {
-        let sequence = self
-            .sequence
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                value.checked_add(1)
-            })
-            .expect("worker event sequence exhausted");
-        ServerEvent {
-            sequence,
-            timestamp_unix_ms: unix_milliseconds(observed_at),
-            payload,
+        match self.event(worker.observed_at, payload) {
+            Ok(event) => {
+                let _ = self.sender.send(event);
+            }
+            Err(EventSequenceError::Exhausted) => {}
         }
     }
 
+    fn event(
+        &self,
+        observed_at: SystemTime,
+        payload: EventPayload,
+    ) -> Result<ServerEvent, EventSequenceError> {
+        if self.sequence_exhausted.load(Ordering::Acquire) {
+            return Err(EventSequenceError::Exhausted);
+        }
+        let sequence = self.sequence.try_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |value| value.checked_add(1),
+        );
+        let sequence = match sequence {
+            Ok(sequence) => sequence,
+            Err(_) => {
+                self.sequence_exhausted.store(true, Ordering::Release);
+                tracing::error!("worker_event_sequence_exhausted");
+                return Err(EventSequenceError::Exhausted);
+            }
+        };
+        Ok(ServerEvent {
+            sequence,
+            timestamp_unix_ms: unix_milliseconds(observed_at),
+            payload,
+        })
+    }
+
     #[cfg(test)]
-    fn publish_test(&self, payload: EventPayload) -> ServerEvent {
-        let event = self.event(SystemTime::now(), payload);
+    fn publish_test(&self, payload: EventPayload) -> Result<ServerEvent, EventSequenceError> {
+        let event = self.event(SystemTime::now(), payload)?;
         let _ = self.sender.send(event.clone());
-        event
+        Ok(event)
     }
 }
 
@@ -467,6 +502,23 @@ impl fmt::Display for WebSocketCapacityError {
 
 impl Error for WebSocketCapacityError {}
 
+/// Event sequence allocation failed without wrapping or reusing a sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventSequenceError {
+    /// The process-local event sequence reached its maximum value.
+    Exhausted,
+}
+
+impl fmt::Display for EventSequenceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Exhausted => formatter.write_str("worker event sequence is exhausted"),
+        }
+    }
+}
+
+impl Error for EventSequenceError {}
+
 /// One bounded event subscription and its client permit.
 pub struct EventSubscription {
     receiver: broadcast::Receiver<ServerEvent>,
@@ -591,8 +643,12 @@ mod tests {
             Duration::from_secs(3),
             Metrics::default(),
         );
-        let first = hub.snapshot_event(&snapshot(), Some(4));
-        let second = hub.publish_test(EventPayload::ProtocolError);
+        let first = hub
+            .snapshot_event(&snapshot(), Some(4))
+            .expect("snapshot sequence allocates");
+        let second = hub
+            .publish_test(EventPayload::ProtocolError)
+            .expect("test event sequence allocates");
         assert!(second.sequence > first.sequence);
         let serialized = serde_json::to_string(&first).expect("serialize snapshot");
         assert!(serialized.contains("\"type\":\"snapshot\""));
@@ -609,8 +665,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "worker event sequence exhausted")]
-    fn sequence_overflow_panics_instead_of_reusing_max_sequence() {
+    fn sequence_overflow_fails_closed_instead_of_panicking() {
         let hub = EventHub::detached(
             4,
             2,
@@ -619,7 +674,12 @@ mod tests {
             Metrics::default(),
         );
         hub.sequence.store(u64::MAX, Ordering::Release);
-        let _ = hub.publish_test(EventPayload::ProtocolError);
+        let (result, logs) = crate::test_support::capture_logs(|| {
+            hub.publish_test(EventPayload::ProtocolError)
+        });
+        assert_eq!(result, Err(EventSequenceError::Exhausted));
+        assert!(hub.sequence_exhausted.load(Ordering::Acquire));
+        assert!(logs.contains("worker_event_sequence_exhausted"));
     }
 
     #[tokio::test]
@@ -635,7 +695,8 @@ mod tests {
         let mut first = hub.subscribe().expect("first client");
         assert!(hub.subscribe().is_err());
         for revision in 1..=10_000 {
-            hub.publish_test(EventPayload::FramebufferRevision { revision });
+            hub.publish_test(EventPayload::FramebufferRevision { revision })
+                .expect("sequence allocates");
         }
         assert!(matches!(
             first.receiver.recv().await,
