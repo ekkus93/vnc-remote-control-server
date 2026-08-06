@@ -60,8 +60,8 @@ fn command_failure_json_logs_exclude_text_and_clipboard_sentinels() {
             })
         });
 
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(body["error"]["code"], "native_failure");
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(body["error"]["code"], "desktop_operation_failed");
         assert!(crate::test_support::json_logs_contain(
             &records,
             "desktop_command_failed"
