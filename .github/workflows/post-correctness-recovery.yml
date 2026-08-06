@@ -26,6 +26,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install pinned Rust formatter
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+
       - name: Apply fail-closed recovery patches
         shell: bash
         run: |
@@ -37,7 +43,17 @@ jobs:
           test ! -e .github/post-correctness-recovery-boundary-fix.py
           test ! -e .github/post-correctness-recovery-api-fix.py
           test ! -e .github/workflows/post-correctness-recovery.yml
+          cargo fmt --all
           git diff --check
+
+      - name: Run recovery source and documentation contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest \
+            tests.test_native_contract \
+            tests.test_documentation_contract \
+            -v
 
       - name: Commit exact-anchor recovery patch
         shell: bash
