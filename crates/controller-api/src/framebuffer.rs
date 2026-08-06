@@ -353,9 +353,7 @@ impl FramebufferStore {
         } else {
             FramebufferStatus::Incomplete
         };
-        if current.status == target_status
-            && next_pixels.as_slice() == current.rgba.as_ref()
-        {
+        if current.status == target_status && next_pixels.as_slice() == current.rgba.as_ref() {
             return Ok(current.revision);
         }
 
