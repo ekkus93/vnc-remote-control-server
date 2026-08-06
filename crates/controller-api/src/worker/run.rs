@@ -1,0 +1,192 @@
+use super::channels::WorkerChannels;
+use super::command::CommandEnvelope;
+use super::helpers::{classify_native_error, lock_unpoisoned};
+use super::loop_state::LoopState;
+use super::session::WorkerSession;
+use super::snapshot::WorkerSnapshot;
+use super::{WorkerFailureKind, WorkerSettings};
+use crate::framebuffer::FramebufferStore;
+use crate::input::InputController;
+use libvnc_adapter::NativeError;
+use remote_desktop_core::{
+    ClipboardSnapshot, ConnectionState, DesktopError, DesktopEventKind, WorkerCommand,
+};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Drains queued command envelopes without executing them, resolving each
+/// pending caller with `WorkerUnavailable` so command tickets do not hang
+/// until an arbitrary timeout during shutdown. Never inspects or logs
+/// command payloads.
+fn drain_pending_commands(commands: &Receiver<CommandEnvelope>, command_queue_depth: &AtomicUsize) {
+    while let Ok(envelope) = commands.try_recv() {
+        command_queue_depth.fetch_sub(1, Ordering::AcqRel);
+        let _ = envelope
+            .completion
+            .send(Err(DesktopError::WorkerUnavailable));
+    }
+}
+
+/// Returns `true` and drains any pending commands if out-of-band shutdown
+/// has been requested. Called at every loop boundary so shutdown
+/// responsiveness never depends on the normal bounded command queue having
+/// capacity or on successfully enqueueing `WorkerCommand::Shutdown`.
+fn shutdown_now(
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<CommandEnvelope>,
+    command_queue_depth: &AtomicUsize,
+) -> bool {
+    if !shutdown_requested.load(Ordering::Acquire) {
+        return false;
+    }
+    drain_pending_commands(commands, command_queue_depth);
+    true
+}
+
+pub(super) fn run_worker<F, S>(
+    settings: WorkerSettings,
+    mut factory: F,
+    channels: WorkerChannels,
+    snapshot: Arc<Mutex<WorkerSnapshot>>,
+    framebuffer: FramebufferStore,
+    clipboard: Arc<Mutex<Option<ClipboardSnapshot>>>,
+) where
+    F: FnMut() -> Result<S, NativeError>,
+    S: WorkerSession,
+{
+    let WorkerChannels {
+        commands,
+        events,
+        startup,
+        command_queue_depth,
+        pending_overload,
+        shutdown_requested,
+    } = channels;
+    let worker_span = tracing::info_span!("desktop_worker");
+    let _worker_entered = worker_span.enter();
+    let _ = startup.send(());
+    let mut state = LoopState {
+        settings: &settings,
+        snapshot: &snapshot,
+        events: &events,
+        framebuffer,
+        clipboard: &clipboard,
+        event_sequence: 0,
+        session: None,
+        last_native_revision: None,
+        last_native_clipboard_revision: None,
+        clipboard_revision: 0,
+        clipboard_decode_failed: false,
+        input: InputController::default(),
+        next_connect: Some(Instant::now()),
+        reconnect_attempt: 0,
+        connected_since: None,
+        last_message: Instant::now(),
+        probe_sent: None,
+        last_manual_reconnect: None,
+    };
+    let mut orderly_shutdown = false;
+
+    loop {
+        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+            orderly_shutdown = true;
+            break;
+        }
+
+        if pending_overload.swap(0, Ordering::AcqRel) > 0 {
+            state.publish(DesktopEventKind::Overload);
+        }
+
+        if state.session.is_none()
+            && state
+                .next_connect
+                .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            if state.begin_connect().is_err() {
+                break;
+            }
+            let connection_span =
+                tracing::info_span!("vnc_connection_attempt", attempt = state.reconnect_attempt);
+            let _connection_entered = connection_span.enter();
+            match factory() {
+                Ok(mut session) => match session.request_full_refresh() {
+                    Ok(()) => {
+                        state.session = Some(session);
+                        state.last_message = Instant::now();
+                        state.probe_sent = None;
+                        state.next_connect = None;
+                    }
+                    Err(error) => {
+                        state.record_failure(classify_native_error(&error));
+                        state.schedule_reconnect();
+                    }
+                },
+                Err(error) => {
+                    let failure = classify_native_error(&error);
+                    state.record_failure(failure);
+                    match failure {
+                        WorkerFailureKind::Authentication => {
+                            let _ = state.transition(ConnectionState::AuthenticationFailed);
+                            state.next_connect = None;
+                        }
+                        WorkerFailureKind::Configuration => {
+                            let _ = state.transition(ConnectionState::Stopped);
+                            break;
+                        }
+                        _ => state.schedule_reconnect(),
+                    }
+                }
+            }
+        }
+
+        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+            orderly_shutdown = true;
+            break;
+        }
+
+        match commands.try_recv() {
+            Ok(envelope) => {
+                command_queue_depth.fetch_sub(1, Ordering::AcqRel);
+                let result = match envelope.command {
+                    WorkerCommand::Shutdown => {
+                        shutdown_requested.store(true, Ordering::Release);
+                        orderly_shutdown = true;
+                        Ok(())
+                    }
+                    WorkerCommand::Reconnect => state.manual_reconnect(),
+                    command => state.execute(command),
+                };
+                let _ = envelope.completion.send(result);
+                if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+                    orderly_shutdown = true;
+                    break;
+                }
+                continue;
+            }
+            Err(TryRecvError::Disconnected) => break,
+            Err(TryRecvError::Empty) => {}
+        }
+
+        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+            orderly_shutdown = true;
+            break;
+        }
+
+        if state.session.is_some() {
+            if state.poll().is_err() {
+                break;
+            }
+        } else {
+            thread::sleep(settings.poll_interval.min(Duration::from_millis(50)));
+        }
+    }
+
+    state.invalidate();
+    let _ = state.transition(ConnectionState::Stopped);
+    if !orderly_shutdown {
+        lock_unpoisoned(&snapshot).fatal_exit = true;
+    }
+}
