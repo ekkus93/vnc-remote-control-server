@@ -63,18 +63,37 @@ class TestApplication:
             button.grid(row=0, column=column, padx=6)
             self.control_widgets[name] = button
 
+        self.swatches = tk.Frame(self.root)
+        self.swatches.pack(pady=10)
+        self.swatch_widgets: dict[str, tk.Frame] = {}
+        for name, color, column in (
+            ("red", "#ff0000", 0),
+            ("blue", "#0000ff", 1),
+        ):
+            swatch = tk.Frame(
+                self.swatches,
+                width=120,
+                height=80,
+                bg=color,
+                highlightthickness=0,
+                borderwidth=0,
+            )
+            swatch.grid(row=0, column=column, padx=24)
+            swatch.grid_propagate(False)
+            self.swatch_widgets[name] = swatch
+
         self.click_target = tk.Label(
             self.root,
             text="CLICK TARGET",
             width=30,
-            height=8,
+            height=6,
             bg="#336699",
             fg="white",
             font=("DejaVu Sans", 16, "bold"),
             relief=tk.RAISED,
             borderwidth=4,
         )
-        self.click_target.pack(pady=24)
+        self.click_target.pack(pady=12)
         self.root.update_idletasks()
 
     def _bind_events(self) -> None:
@@ -205,12 +224,22 @@ class TestApplication:
             for name, widget in self.control_widgets.items()
         }
 
+    def _swatch_centers(self) -> dict[str, dict[str, int]]:
+        return {
+            name: {
+                "x": int(widget.winfo_rootx() + widget.winfo_width() // 2),
+                "y": int(widget.winfo_rooty() + widget.winfo_height() // 2),
+            }
+            for name, widget in self.swatch_widgets.items()
+        }
+
     def _write_state(self) -> None:
         payload = {
             "schema_version": 1,
             "ready": True,
             "pointer": self.pointer,
             "controls": self._control_centers(),
+            "swatches": self._swatch_centers(),
             "buttons": self.buttons,
             "scroll": self.scroll,
             "keys_down": self.keys_down,
