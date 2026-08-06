@@ -7,12 +7,11 @@
 //! error mapping. Liveness and readiness remain public orchestration endpoints.
 //!
 //! Submodules split the surface by responsibility: the backend trait and its
-//! production implementation ([`backend`]), shared router state and its build
-//! errors ([`state`]), route registration ([`router`]), the redacted request
-//! identifier ([`ids`]), response and error payload shapes ([`responses`]),
-//! auth/logging middleware ([`middleware`]), the route handlers themselves
-//! ([`handlers`]), and small pure helpers shared across handlers
-//! ([`support`]).
+//! production implementation (`backend`), shared router state and its build
+//! errors (`state`), route registration (`router`), the redacted request
+//! identifier (`ids`), response and error payload shapes (`responses`),
+//! auth/logging middleware (`middleware`), the route handlers themselves
+//! (`handlers`), and small pure helpers shared across handlers (`support`).
 
 mod backend;
 mod handlers;
