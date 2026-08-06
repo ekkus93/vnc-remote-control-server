@@ -46,7 +46,6 @@ pub(super) fn shutdown_now(
     true
 }
 
-
 struct WorkerExitSignal {
     sender: Option<SyncSender<()>>,
 }
