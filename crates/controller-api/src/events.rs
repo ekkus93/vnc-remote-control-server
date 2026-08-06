@@ -21,7 +21,22 @@ use tokio::sync::broadcast;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{self, Instant, MissedTickBehavior};
 
-const EVENT_BRIDGE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const EVENT_BRIDGE_POLL_INTERVAL_MS: u64 = 50;
+const BASE_PROCESS_SHUTDOWN_MINIMUM_MS: u64 = 500;
+const PROCESS_SHUTDOWN_POLL_MULTIPLIER: u64 = 8;
+
+/// Poll interval used by the dependency-free bridge stop loop.
+pub(crate) const EVENT_BRIDGE_POLL_INTERVAL: Duration =
+    Duration::from_millis(EVENT_BRIDGE_POLL_INTERVAL_MS);
+/// Minimum accepted total process-cleanup budget, derived from the bridge poll interval.
+pub(crate) const MIN_PROCESS_SHUTDOWN_TIMEOUT_MS: u64 = {
+    let poll_floor = EVENT_BRIDGE_POLL_INTERVAL_MS * PROCESS_SHUTDOWN_POLL_MULTIPLIER;
+    if BASE_PROCESS_SHUTDOWN_MINIMUM_MS > poll_floor {
+        BASE_PROCESS_SHUTDOWN_MINIMUM_MS
+    } else {
+        poll_floor
+    }
+};
 const EVENT_BRIDGE_DROP_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct EventBridgeStartSettings {
@@ -329,6 +344,12 @@ impl Drop for EventBridgeExitSignal {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitWait {
+    Exited,
+    TimedOut,
+}
+
 /// Owning bridge thread handle with an independent bounded stop path.
 pub struct EventBridge {
     join: Option<JoinHandle<()>>,
@@ -339,11 +360,13 @@ pub struct EventBridge {
 
 impl EventBridge {
     /// Requests bridge stop and waits no longer than `timeout` for exit.
+    /// A zero timeout still performs a nonblocking exit observation before
+    /// deliberate detach.
     pub fn shutdown(mut self, timeout: Duration) -> Result<(), EventBridgeError> {
         self.request_stop();
         match self.wait_for_exit(timeout) {
-            Ok(()) => self.join_bridge(),
-            Err(EventBridgeError::Timeout) => {
+            ExitWait::Exited => self.join_bridge(),
+            ExitWait::TimedOut => {
                 tracing::warn!(
                     timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
                     "event_bridge_shutdown_timeout"
@@ -351,7 +374,6 @@ impl EventBridge {
                 self.detach();
                 Err(EventBridgeError::Timeout)
             }
-            Err(error) => Err(error),
         }
     }
 
@@ -359,13 +381,13 @@ impl EventBridge {
         self.stop_requested.store(true, Ordering::Release);
     }
 
-    fn wait_for_exit(&mut self, timeout: Duration) -> Result<(), EventBridgeError> {
+    fn wait_for_exit(&mut self, timeout: Duration) -> ExitWait {
         let Some(exited) = self.exited.take() else {
-            return Ok(());
+            return ExitWait::Exited;
         };
         match exited.recv_timeout(timeout) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => Ok(()),
-            Err(RecvTimeoutError::Timeout) => Err(EventBridgeError::Timeout),
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => ExitWait::Exited,
+            Err(RecvTimeoutError::Timeout) => ExitWait::TimedOut,
         }
     }
 
@@ -395,20 +417,16 @@ impl Drop for EventBridge {
         }
         self.request_stop();
         match self.wait_for_exit(self.drop_timeout) {
-            Ok(()) => {
+            ExitWait::Exited => {
                 if let Err(error) = self.join_bridge() {
                     tracing::error!(error = ?error, "event_bridge_drop_join_failed");
                 }
             }
-            Err(EventBridgeError::Timeout) => {
+            ExitWait::TimedOut => {
                 tracing::warn!(
                     timeout_ms = u64::try_from(self.drop_timeout.as_millis()).unwrap_or(u64::MAX),
                     "event_bridge_drop_shutdown_timeout"
                 );
-                self.detach();
-            }
-            Err(error) => {
-                tracing::error!(error = ?error, "event_bridge_drop_wait_failed");
                 self.detach();
             }
         }
@@ -628,6 +646,7 @@ mod tests {
         assert!(rendered.contains("vrc_websocket_clients 0"));
         assert!(rendered.contains("vrc_websocket_rejected_total 1"));
     }
+
     #[test]
     fn event_bridge_shutdown_does_not_require_worker_sender_drop() {
         let (_sender, worker_events) = WorkerEvents::test_channel(4);
