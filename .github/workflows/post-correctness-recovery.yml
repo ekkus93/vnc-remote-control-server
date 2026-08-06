@@ -11,13 +11,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: post-correctness-recovery-master-final
+  group: post-correctness-recovery-master-arm
   cancel-in-progress: true
 
 jobs:
   recover:
     name: Apply and validate recovery
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
 
     steps:
