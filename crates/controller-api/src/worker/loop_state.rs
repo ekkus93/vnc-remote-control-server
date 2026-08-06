@@ -38,16 +38,12 @@ pub(super) struct LoopState<'a, S> {
 
 impl<S: WorkerSession> LoopState<'_, S> {
     pub(super) fn transition(&mut self, next: ConnectionState) -> Result<(), DesktopError> {
-        let previous = {
-            let mut current = lock_unpoisoned(self.snapshot);
-            if !current.state.can_transition_to(next) {
-                current.fatal_exit = true;
-                return Err(DesktopError::Protocol);
-            }
-            let previous = current.state;
-            current.state = next;
-            previous
-        };
+        let previous = lock_unpoisoned(self.snapshot).state;
+        if !previous.can_transition_to(next) {
+            tracing::error!(from = ?previous, to = ?next, "worker_illegal_state_transition");
+            return Err(DesktopError::Protocol);
+        }
+        lock_unpoisoned(self.snapshot).state = next;
         tracing::info!(from = ?previous, to = ?next, "worker_state_transition");
         self.publish(DesktopEventKind::ConnectionState { state: next });
         Ok(())
@@ -55,6 +51,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
 
     pub(super) fn publish(&mut self, kind: DesktopEventKind) {
         let Some(sequence) = self.event_sequence.checked_add(1) else {
+            tracing::error!("worker_event_sequence_exhausted");
             lock_unpoisoned(self.snapshot).fatal_exit = true;
             return;
         };
@@ -225,10 +222,26 @@ impl<S: WorkerSession> LoopState<'_, S> {
     pub(super) fn schedule_reconnect(&mut self) {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
         lock_unpoisoned(self.snapshot).reconnect_attempts = self.reconnect_attempt;
-        if lock_unpoisoned(self.snapshot).state != ConnectionState::Disconnected {
-            let _ = self.transition(ConnectionState::Disconnected);
+        let current = lock_unpoisoned(self.snapshot).state;
+        let transition_result = match current {
+            ConnectionState::Connecting
+            | ConnectionState::Connected
+            | ConnectionState::Degraded
+            | ConnectionState::Reconnecting => self
+                .transition(ConnectionState::Disconnected)
+                .and_then(|()| self.transition(ConnectionState::Reconnecting)),
+            ConnectionState::Disconnected | ConnectionState::AuthenticationFailed => {
+                self.transition(ConnectionState::Reconnecting)
+            }
+            ConnectionState::Starting | ConnectionState::Stopped => {
+                tracing::error!(state = ?current, "worker_reconnect_state_invalid");
+                Err(DesktopError::Protocol)
+            }
+        };
+        if transition_result.is_err() {
+            self.next_connect = None;
+            return;
         }
-        let _ = self.transition(ConnectionState::Reconnecting);
         let delay = reconnect_delay(self.settings, self.reconnect_attempt);
         tracing::info!(
             attempt = self.reconnect_attempt,
@@ -398,7 +411,16 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 }) {
                     self.record_failure(WorkerFailureKind::Timeout);
                     tracing::warn!("worker_stall_timeout");
-                    self.transition(ConnectionState::Degraded)?;
+                    match lock_unpoisoned(self.snapshot).state {
+                        ConnectionState::Connected => {
+                            self.transition(ConnectionState::Degraded)?;
+                        }
+                        ConnectionState::Connecting | ConnectionState::Reconnecting => {}
+                        state => {
+                            tracing::error!(state = ?state, "worker_stall_state_invalid");
+                            return Err(DesktopError::Protocol);
+                        }
+                    }
                     self.invalidate();
                     self.schedule_reconnect();
                 }
