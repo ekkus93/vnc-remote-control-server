@@ -1,12 +1,13 @@
+use controller_api::screenshot::ScreenshotOutcome;
 use controller_api::worker::{DesktopWorker, WorkerClient, WorkerSettings};
-use libvnc_adapter::NativeClientConfig;
+use libvnc_adapter::{NativeClientConfig, SecretString};
 use remote_desktop_core::{
     ConnectionState, DesktopError, DesktopEventKind, MAX_FRAMEBUFFER_BYTES, WorkerCommand,
 };
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io;
+use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -18,6 +19,8 @@ const SUPPORTED_TEXT: &str = "worker text 123";
 const UNSUPPORTED_TEXT: &str = "blocked☃";
 const OUTBOUND_CLIPBOARD: &str = "worker outbound clipboard";
 const INBOUND_CLIPBOARD: &str = "desktop inbound clipboard";
+const DOMINANT_MINIMUM: u8 = 200;
+const OTHER_MAXIMUM: u8 = 60;
 
 fn main() {
     if let Err(error) = run() {
@@ -31,6 +34,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let port = required_env("VRC_VNC_PORT")?.parse::<u16>()?;
     let password_path = PathBuf::from(required_env("VRC_VNC_PASSWORD_FILE")?);
     let password = read_secret(&password_path)?;
+    let red = required_coordinate("VRC_RED_SWATCH_X", "VRC_RED_SWATCH_Y")?;
+    let blue = required_coordinate("VRC_BLUE_SWATCH_X", "VRC_BLUE_SWATCH_Y")?;
 
     let settings = WorkerSettings {
         native: NativeClientConfig {
@@ -57,6 +62,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let worker = DesktopWorker::spawn(settings)?;
     let client = worker.client();
     wait_for_complete_frame(&client, READY_TIMEOUT)?;
+    verify_colors(&client, red, blue)?;
+    println!("worker_rgbx_color_proof=1");
 
     execute(
         &client,
@@ -120,6 +127,73 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn verify_colors(
+    client: &WorkerClient,
+    red: (u32, u32),
+    blue: (u32, u32),
+) -> Result<(), Box<dyn Error>> {
+    let snapshot = client.framebuffer_snapshot()?;
+    assert_color(snapshot.rgba(), snapshot.width(), snapshot.height(), red, true)?;
+    assert_color(
+        snapshot.rgba(),
+        snapshot.width(),
+        snapshot.height(),
+        blue,
+        false,
+    )?;
+
+    let service = client.screenshot_service("rgbx-e2e", 1, Duration::from_secs(5))?;
+    let png_bytes = match service.capture(None)? {
+        ScreenshotOutcome::Png { bytes, .. } => bytes,
+        ScreenshotOutcome::NotModified { .. } => {
+            return Err(io::Error::other("unconditional screenshot returned not modified").into());
+        }
+    };
+    let decoder = png::Decoder::new(Cursor::new(png_bytes));
+    let mut reader = decoder.read_info()?;
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut pixels)?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return Err(io::Error::other("screenshot PNG is not RGBA8").into());
+    }
+    let pixels = &pixels[..info.buffer_size()];
+    assert_color(pixels, info.width, info.height, red, true)?;
+    assert_color(pixels, info.width, info.height, blue, false)?;
+    Ok(())
+}
+
+fn assert_color(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    coordinate: (u32, u32),
+    expect_red: bool,
+) -> Result<(), Box<dyn Error>> {
+    let (x, y) = coordinate;
+    if x >= width || y >= height {
+        return Err(io::Error::other("swatch coordinate is outside framebuffer").into());
+    }
+    let pixel = usize::try_from(u64::from(y) * u64::from(width) + u64::from(x))?
+        .checked_mul(4)
+        .ok_or_else(|| io::Error::other("pixel offset overflow"))?;
+    let channels = rgba
+        .get(pixel..pixel + 4)
+        .ok_or_else(|| io::Error::other("pixel bytes are unavailable"))?;
+    let valid = if expect_red {
+        channels[0] > DOMINANT_MINIMUM
+            && channels[1] < OTHER_MAXIMUM
+            && channels[2] < OTHER_MAXIMUM
+    } else {
+        channels[2] > DOMINANT_MINIMUM
+            && channels[0] < OTHER_MAXIMUM
+            && channels[1] < OTHER_MAXIMUM
+    };
+    if !valid || channels[3] != u8::MAX {
+        return Err(io::Error::other("RGBX channel-order assertion failed").into());
+    }
+    Ok(())
+}
+
 fn execute(client: &WorkerClient, command: WorkerCommand) -> Result<(), Box<dyn Error>> {
     client.submit(command)?.wait(COMMAND_TIMEOUT)?;
     Ok(())
@@ -171,6 +245,13 @@ fn wait_for_clipboard(
     .into())
 }
 
+fn required_coordinate(x_name: &str, y_name: &str) -> Result<(u32, u32), Box<dyn Error>> {
+    Ok((
+        required_env(x_name)?.parse::<u32>()?,
+        required_env(y_name)?.parse::<u32>()?,
+    ))
+}
+
 fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
     env::var(name).map_err(|_| {
         io::Error::new(
@@ -181,7 +262,7 @@ fn required_env(name: &str) -> Result<String, Box<dyn Error>> {
     })
 }
 
-fn read_secret(path: &Path) -> Result<String, Box<dyn Error>> {
+fn read_secret(path: &Path) -> Result<SecretString, Box<dyn Error>> {
     let mut value = fs::read_to_string(path)?;
     while value.ends_with('\n') || value.ends_with('\r') {
         value.pop();
@@ -189,5 +270,5 @@ fn read_secret(path: &Path) -> Result<String, Box<dyn Error>> {
     if value.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "VNC password is empty").into());
     }
-    Ok(value)
+    Ok(SecretString::from(value))
 }
