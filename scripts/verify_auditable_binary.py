@@ -142,7 +142,8 @@ def validate_metadata(metadata: Any, expected_root: str) -> tuple[list[dict[str,
             visit(dependency)
         states[index] = 2
 
-    visit(root_index)
+    for index in range(len(packages)):
+        visit(index)
     return packages, root_index
 
 
