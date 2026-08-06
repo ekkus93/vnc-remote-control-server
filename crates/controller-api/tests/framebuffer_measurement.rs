@@ -58,6 +58,20 @@ fn counts() -> (u64, u64) {
 }
 
 #[test]
+fn native_rgbx_conversion_preserves_channel_order() {
+    let store = FramebufferStore::new(8).expect("two-pixel store");
+    let revision = store
+        .replace_native_rgbx(2, 1, &[0x11, 0x22, 0x33, 0, 0xaa, 0xbb, 0xcc, 0x7f])
+        .expect("native frame converts");
+    assert_eq!(revision, 1);
+    let snapshot = store.current_snapshot().expect("canonical frame");
+    assert_eq!(
+        snapshot.rgba(),
+        &[0x11, 0x22, 0x33, 0xff, 0xaa, 0xbb, 0xcc, 0xff]
+    );
+}
+
+#[test]
 #[ignore = "explicit reproducible performance evidence utility"]
 fn measure_representative_frame_pipeline() {
     let source = vec![0x7f_u8; BYTES];
