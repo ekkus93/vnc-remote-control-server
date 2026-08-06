@@ -1,0 +1,42 @@
+name: Apply correctness test wiring
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-correctness-test-wiring.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Wire privacy module and format tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/controller-api/src/worker/tests/mod.rs')
+          text = path.read_text()
+          if 'mod privacy;\n' not in text:
+              text = text.replace('mod lifecycle;\n', 'mod lifecycle;\nmod privacy;\n', 1)
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit and remove workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-correctness-test-wiring.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/controller-api/src/worker/tests .github/workflows/apply-correctness-test-wiring.yml
+          git commit -m "Wire structured privacy regression"
+          git push origin HEAD:master
