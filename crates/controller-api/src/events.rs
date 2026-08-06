@@ -13,12 +13,16 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::broadcast;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{self, Instant, MissedTickBehavior};
+
+const EVENT_BRIDGE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const EVENT_BRIDGE_DROP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Process-wide WebSocket event transport.
 #[derive(Clone)]
@@ -41,6 +45,31 @@ impl EventHub {
         idle_timeout: Duration,
         metrics: Metrics,
     ) -> io::Result<(Self, EventBridge)> {
+        Self::start_with_hook(
+            worker_events,
+            event_capacity,
+            maximum_clients,
+            ping_interval,
+            idle_timeout,
+            metrics,
+            || {},
+            EVENT_BRIDGE_DROP_TIMEOUT,
+        )
+    }
+
+    fn start_with_hook<H>(
+        worker_events: WorkerEvents,
+        event_capacity: usize,
+        maximum_clients: usize,
+        ping_interval: Duration,
+        idle_timeout: Duration,
+        metrics: Metrics,
+        before_loop: H,
+        drop_timeout: Duration,
+    ) -> io::Result<(Self, EventBridge)>
+    where
+        H: FnOnce() + Send + 'static,
+    {
         let hub = Self::detached(
             event_capacity,
             maximum_clients,
@@ -49,17 +78,38 @@ impl EventHub {
             metrics,
         );
         let bridge_hub = hub.clone();
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let thread_stop_requested = Arc::clone(&stop_requested);
+        let (exited_tx, exited_rx) = sync_channel(1);
+        let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let join = thread::Builder::new()
             .name("worker-event-bridge".to_owned())
-            .spawn(move || {
+            .spawn(move || tracing::dispatcher::with_default(&dispatcher, || {
+                let _exit_signal = EventBridgeExitSignal::new(exited_tx);
                 let span = tracing::info_span!("worker_event_bridge");
                 let _entered = span.enter();
-                while let Ok(event) = worker_events.recv() {
-                    bridge_hub.publish_worker(event);
+                before_loop();
+                loop {
+                    if thread_stop_requested.load(Ordering::Acquire) {
+                        break;
+                    }
+                    match worker_events.recv_timeout(EVENT_BRIDGE_POLL_INTERVAL) {
+                        Ok(event) => bridge_hub.publish_worker(event),
+                        Err(RecvTimeoutError::Timeout) => {},
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
                 }
                 tracing::info!("worker_event_bridge_stopped");
-            })?;
-        Ok((hub, EventBridge { join: Some(join) }))
+            }))?;
+        Ok((
+            hub,
+            EventBridge {
+                join: Some(join),
+                stop_requested,
+                exited: Some(exited_rx),
+                drop_timeout,
+            },
+        ))
     }
 
     /// Constructs a transport without a bridge for deterministic router tests.
@@ -243,28 +293,129 @@ impl EventHub {
     }
 }
 
-/// Owning bridge thread handle.
-pub struct EventBridge {
-    join: Option<JoinHandle<()>>,
+struct EventBridgeExitSignal {
+    sender: Option<SyncSender<()>>,
 }
 
-impl EventBridge {
-    /// Joins the bridge after worker shutdown closes the source channel.
-    pub fn join(mut self) -> Result<(), EventBridgeError> {
-        let Some(join) = self.join.take() else {
-            return Ok(());
-        };
-        join.join().map_err(|_| EventBridgeError)
+impl EventBridgeExitSignal {
+    fn new(sender: SyncSender<()>) -> Self {
+        Self {
+            sender: Some(sender),
+        }
     }
 }
 
-/// Bridge thread terminated through a panic.
+impl Drop for EventBridgeExitSignal {
+    fn drop(&mut self) {
+        if let Some(sender) = self.sender.take() {
+            let _ = sender.try_send(());
+        }
+    }
+}
+
+/// Owning bridge thread handle with an independent bounded stop path.
+pub struct EventBridge {
+    join: Option<JoinHandle<()>>,
+    stop_requested: Arc<AtomicBool>,
+    exited: Option<Receiver<()>>,
+    drop_timeout: Duration,
+}
+
+impl EventBridge {
+    /// Requests bridge stop and waits no longer than `timeout` for exit.
+    pub fn shutdown(mut self, timeout: Duration) -> Result<(), EventBridgeError> {
+        self.request_stop();
+        match self.wait_for_exit(timeout) {
+            Ok(()) => self.join_bridge(),
+            Err(EventBridgeError::Timeout) => {
+                tracing::warn!(
+                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+                    "event_bridge_shutdown_timeout"
+                );
+                self.detach();
+                Err(EventBridgeError::Timeout)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn request_stop(&self) {
+        self.stop_requested.store(true, Ordering::Release);
+    }
+
+    fn wait_for_exit(&mut self, timeout: Duration) -> Result<(), EventBridgeError> {
+        let Some(exited) = self.exited.take() else {
+            return Ok(());
+        };
+        match exited.recv_timeout(timeout) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => Ok(()),
+            Err(RecvTimeoutError::Timeout) => Err(EventBridgeError::Timeout),
+        }
+    }
+
+    fn join_bridge(&mut self) -> Result<(), EventBridgeError> {
+        let Some(join) = self.join.take() else {
+            return Ok(());
+        };
+        match join.join() {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                tracing::error!("event_bridge_join_failed");
+                Err(EventBridgeError::ThreadPanicked)
+            }
+        }
+    }
+
+    fn detach(&mut self) {
+        drop(self.exited.take());
+        drop(self.join.take());
+    }
+}
+
+impl Drop for EventBridge {
+    fn drop(&mut self) {
+        if self.join.is_none() {
+            return;
+        }
+        self.request_stop();
+        match self.wait_for_exit(self.drop_timeout) {
+            Ok(()) => {
+                if let Err(error) = self.join_bridge() {
+                    tracing::error!(error = ?error, "event_bridge_drop_join_failed");
+                }
+            }
+            Err(EventBridgeError::Timeout) => {
+                tracing::warn!(
+                    timeout_ms = u64::try_from(self.drop_timeout.as_millis()).unwrap_or(u64::MAX),
+                    "event_bridge_drop_shutdown_timeout"
+                );
+                self.detach();
+            }
+            Err(error) => {
+                tracing::error!(error = ?error, "event_bridge_drop_wait_failed");
+                self.detach();
+            }
+        }
+    }
+}
+
+/// Bounded event-bridge shutdown failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EventBridgeError;
+pub enum EventBridgeError {
+    /// The bridge did not report exit by the requested deadline.
+    Timeout,
+    /// The bridge thread panicked.
+    ThreadPanicked,
+}
 
 impl fmt::Display for EventBridgeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("worker event bridge terminated unexpectedly")
+        match self {
+            Self::Timeout => formatter.write_str("worker event bridge shutdown timed out"),
+            Self::ThreadPanicked => {
+                formatter.write_str("worker event bridge terminated through a panic")
+            }
+        }
     }
 }
 
@@ -460,5 +611,110 @@ mod tests {
         let rendered = metrics.render(&snapshot(), 0, 4);
         assert!(rendered.contains("vrc_websocket_clients 0"));
         assert!(rendered.contains("vrc_websocket_rejected_total 1"));
+    }
+
+    #[test]
+    fn event_bridge_shutdown_does_not_require_worker_sender_drop() {
+        let (_sender, worker_events) = WorkerEvents::test_channel(4);
+        let (_hub, bridge) = EventHub::start(
+            worker_events,
+            4,
+            2,
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+            Metrics::default(),
+        )
+        .expect("bridge starts");
+
+        bridge
+            .shutdown(Duration::from_secs(1))
+            .expect("bridge stops while worker sender remains alive");
+    }
+
+    #[test]
+    fn event_bridge_timeout_is_observable() {
+        let (_sender, worker_events) = WorkerEvents::test_channel(4);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let ((result, elapsed), logs) = crate::test_support::capture_logs(|| {
+            let (_hub, bridge) = EventHub::start_with_hook(
+                worker_events,
+                4,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(3),
+                Metrics::default(),
+                move || {
+                    let _ = release_rx.recv();
+                },
+                Duration::from_millis(25),
+            )
+            .expect("bridge starts");
+            let started = std::time::Instant::now();
+            let result = bridge.shutdown(Duration::from_millis(25));
+            (result, started.elapsed())
+        });
+
+        assert_eq!(result, Err(EventBridgeError::Timeout));
+        assert!(elapsed < Duration::from_secs(1));
+        assert!(logs.contains("event_bridge_shutdown_timeout"));
+        release_tx.send(()).expect("release detached bridge");
+    }
+
+    #[test]
+    fn event_bridge_panic_is_returned_and_logged() {
+        let (_sender, worker_events) = WorkerEvents::test_channel(4);
+        let (result, logs) = crate::test_support::capture_logs(|| {
+            let (_hub, bridge) = EventHub::start_with_hook(
+                worker_events,
+                4,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(3),
+                Metrics::default(),
+                || panic!("test-only bridge panic"),
+                Duration::from_millis(25),
+            )
+            .expect("bridge starts");
+            bridge.shutdown(Duration::from_secs(1))
+        });
+
+        assert_eq!(result, Err(EventBridgeError::ThreadPanicked));
+        assert!(logs.contains("event_bridge_join_failed"));
+    }
+
+    #[test]
+    fn event_bridge_drop_is_bounded() {
+        let (_sender, worker_events) = WorkerEvents::test_channel(4);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let ((elapsed, done), logs) = crate::test_support::capture_logs(|| {
+            let (_hub, bridge) = EventHub::start_with_hook(
+                worker_events,
+                4,
+                2,
+                Duration::from_secs(1),
+                Duration::from_secs(3),
+                Metrics::default(),
+                move || {
+                    let _ = release_rx.recv();
+                },
+                Duration::from_millis(25),
+            )
+            .expect("bridge starts");
+            let dispatch = crate::test_support::current_dispatch();
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let started = std::time::Instant::now();
+            let drop_thread = std::thread::spawn(move || {
+                tracing::dispatcher::with_default(&dispatch, || drop(bridge));
+                let _ = done_tx.send(());
+            });
+            let done = done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+            drop_thread.join().expect("bridge drop thread does not panic");
+            (started.elapsed(), done)
+        });
+
+        assert!(done);
+        assert!(elapsed < Duration::from_secs(1));
+        assert!(logs.contains("event_bridge_drop_shutdown_timeout"));
+        release_tx.send(()).expect("release detached bridge");
     }
 }

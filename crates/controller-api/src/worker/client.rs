@@ -64,6 +64,29 @@ impl WorkerClient {
 
     /// Submits one command without touching native adapter state.
     pub fn submit(&self, command: WorkerCommand) -> Result<CommandTicket, DesktopError> {
+        self.submit_inner(command, || {})
+    }
+
+    #[cfg(test)]
+    pub(super) fn submit_with_before_send_hook<F>(
+        &self,
+        command: WorkerCommand,
+        before_send: F,
+    ) -> Result<CommandTicket, DesktopError>
+    where
+        F: FnOnce(),
+    {
+        self.submit_inner(command, before_send)
+    }
+
+    fn submit_inner<F>(
+        &self,
+        command: WorkerCommand,
+        before_send: F,
+    ) -> Result<CommandTicket, DesktopError>
+    where
+        F: FnOnce(),
+    {
         if self.shutdown_requested() {
             return Err(DesktopError::WorkerUnavailable);
         }
@@ -74,23 +97,23 @@ impl WorkerClient {
             })
             .map_err(|_| DesktopError::WorkerUnavailable)?;
         let (completion_tx, completion_rx) = sync_channel(1);
-        let envelope = CommandEnvelope {
+        let envelope = CommandEnvelope::new(
             command,
-            completion: completion_tx,
-        };
+            completion_tx,
+            Arc::clone(&self.command_queue_depth),
+        );
         // Re-check immediately before enqueueing to narrow the race between
         // a concurrent shutdown request and this submission.
         if self.shutdown_requested() {
             return Err(DesktopError::WorkerUnavailable);
         }
-        self.command_queue_depth.fetch_add(1, Ordering::AcqRel);
+        before_send();
         match self.commands.try_send(envelope) {
             Ok(()) => Ok(CommandTicket {
                 id,
                 completion: completion_rx,
             }),
             Err(TrySendError::Full(_)) => {
-                self.command_queue_depth.fetch_sub(1, Ordering::AcqRel);
                 self.pending_overload.fetch_add(1, Ordering::Relaxed);
                 let mut current = lock_unpoisoned(&self.snapshot);
                 current.rejected_commands = current.rejected_commands.saturating_add(1);
@@ -100,10 +123,7 @@ impl WorkerClient {
                 );
                 Err(DesktopError::CommandQueueFull)
             }
-            Err(TrySendError::Disconnected(_)) => {
-                self.command_queue_depth.fetch_sub(1, Ordering::AcqRel);
-                Err(DesktopError::WorkerUnavailable)
-            }
+            Err(TrySendError::Disconnected(_)) => Err(DesktopError::WorkerUnavailable),
         }
     }
 

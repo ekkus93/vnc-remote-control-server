@@ -5,6 +5,7 @@ use controller_api::events::EventHub;
 use controller_api::http::{HttpState, router};
 use controller_api::observability::{Metrics, init_tracing};
 use controller_api::runtime::{RuntimeSettings, serve_until_shutdown};
+use controller_api::shutdown::finalize_runtime;
 use controller_api::worker::DesktopWorker;
 use std::error::Error;
 use std::future::Future;
@@ -45,11 +46,12 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     .await;
 
     state.begin_shutdown();
-    let worker_result = worker.shutdown(config.command_ack_timeout);
-    let bridge_result = event_bridge.join();
-    server_result?;
-    worker_result?;
-    bridge_result?;
+    finalize_runtime(
+        server_result,
+        worker,
+        event_bridge,
+        config.command_ack_timeout,
+    )?;
     Ok(())
 }
 

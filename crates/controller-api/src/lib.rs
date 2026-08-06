@@ -10,4 +10,7 @@ pub mod input;
 pub mod observability;
 pub mod runtime;
 pub mod screenshot;
+pub mod shutdown;
 pub mod worker;
+#[cfg(test)]
+pub(crate) mod test_support;

@@ -11,7 +11,7 @@ use libvnc_adapter::NativeError;
 use remote_desktop_core::{
     ClipboardSnapshot, ConnectionState, DesktopError, DesktopEventKind, WorkerCommand,
 };
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -19,30 +19,28 @@ use std::time::{Duration, Instant};
 
 /// Drains queued command envelopes without executing them, resolving each
 /// pending caller with `WorkerUnavailable` so command tickets do not hang
-/// until an arbitrary timeout during shutdown. Never inspects or logs
-/// command payloads.
-fn drain_pending_commands(commands: &Receiver<CommandEnvelope>, command_queue_depth: &AtomicUsize) {
-    while let Ok(envelope) = commands.try_recv() {
-        command_queue_depth.fetch_sub(1, Ordering::AcqRel);
+/// until an arbitrary timeout during shutdown. Never inspects or logs command
+/// payloads. Dequeue ownership releases each envelope's queue-depth permit.
+pub(super) fn drain_pending_commands(commands: &Receiver<CommandEnvelope>) {
+    while let Ok(mut envelope) = commands.try_recv() {
+        envelope.release_queue_depth();
         let _ = envelope
             .completion
             .send(Err(DesktopError::WorkerUnavailable));
     }
 }
 
-/// Returns `true` and drains any pending commands if out-of-band shutdown
-/// has been requested. Called at every loop boundary so shutdown
-/// responsiveness never depends on the normal bounded command queue having
+/// Returns `true` and drains any pending commands if out-of-band shutdown has
+/// been requested. Shutdown responsiveness never depends on command-queue
 /// capacity or on successfully enqueueing `WorkerCommand::Shutdown`.
 pub(super) fn shutdown_now(
     shutdown_requested: &AtomicBool,
     commands: &Receiver<CommandEnvelope>,
-    command_queue_depth: &AtomicUsize,
 ) -> bool {
     if !shutdown_requested.load(Ordering::Acquire) {
         return false;
     }
-    drain_pending_commands(commands, command_queue_depth);
+    drain_pending_commands(commands);
     true
 }
 
@@ -61,7 +59,7 @@ impl WorkerExitSignal {
 impl Drop for WorkerExitSignal {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
-            let _ = sender.send(());
+            let _ = sender.try_send(());
         }
     }
 }
@@ -71,22 +69,25 @@ pub(super) enum ReceivedCommandAction {
     Stop,
 }
 
+/// Releases queue ownership, then applies receive-side shutdown authority
+/// before any ordinary command can reach the native session.
 pub(super) fn classify_received_command(
-    envelope: CommandEnvelope,
+    mut envelope: CommandEnvelope,
     shutdown_requested: &AtomicBool,
     commands: &Receiver<CommandEnvelope>,
-    command_queue_depth: &AtomicUsize,
 ) -> ReceivedCommandAction {
+    envelope.release_queue_depth();
     if matches!(&envelope.command, WorkerCommand::Shutdown) {
         shutdown_requested.store(true, Ordering::Release);
         let _ = envelope.completion.send(Ok(()));
+        drain_pending_commands(commands);
         return ReceivedCommandAction::Stop;
     }
     if shutdown_requested.load(Ordering::Acquire) {
         let _ = envelope
             .completion
             .send(Err(DesktopError::WorkerUnavailable));
-        drain_pending_commands(commands, command_queue_depth);
+        drain_pending_commands(commands);
         return ReceivedCommandAction::Stop;
     }
     ReceivedCommandAction::Execute(envelope)
@@ -107,7 +108,6 @@ pub(super) fn run_worker<F, S>(
         commands,
         events,
         startup,
-        command_queue_depth,
         pending_overload,
         shutdown_requested,
         worker_exited,
@@ -139,7 +139,7 @@ pub(super) fn run_worker<F, S>(
     let mut orderly_shutdown = false;
 
     loop {
-        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+        if shutdown_now(&shutdown_requested, &commands) {
             orderly_shutdown = true;
             break;
         }
@@ -190,19 +190,17 @@ pub(super) fn run_worker<F, S>(
             }
         }
 
-        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+        if shutdown_now(&shutdown_requested, &commands) {
             orderly_shutdown = true;
             break;
         }
 
         match commands.try_recv() {
             Ok(envelope) => {
-                command_queue_depth.fetch_sub(1, Ordering::AcqRel);
                 let envelope = match classify_received_command(
                     envelope,
                     &shutdown_requested,
                     &commands,
-                    &command_queue_depth,
                 ) {
                     ReceivedCommandAction::Execute(envelope) => envelope,
                     ReceivedCommandAction::Stop => {
@@ -216,7 +214,7 @@ pub(super) fn run_worker<F, S>(
                     command => state.execute(command),
                 };
                 let _ = envelope.completion.send(result);
-                if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+                if shutdown_now(&shutdown_requested, &commands) {
                     orderly_shutdown = true;
                     break;
                 }
@@ -226,7 +224,7 @@ pub(super) fn run_worker<F, S>(
             Err(TryRecvError::Empty) => {}
         }
 
-        if shutdown_now(&shutdown_requested, &commands, &command_queue_depth) {
+        if shutdown_now(&shutdown_requested, &commands) {
             orderly_shutdown = true;
             break;
         }
@@ -240,6 +238,10 @@ pub(super) fn run_worker<F, S>(
         }
     }
 
+    // Closing the receiver drops any envelope that raced the final drain. Its
+    // queue-depth permit releases automatically, and a racing `try_send()`
+    // receives `Disconnected` and drops its returned permit as well.
+    drop(commands);
     state.invalidate();
     let _ = state.transition(ConnectionState::Stopped);
     if !orderly_shutdown {

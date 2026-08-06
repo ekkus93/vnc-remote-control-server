@@ -78,6 +78,19 @@ impl DesktopWorker {
         F: FnMut() -> Result<S, NativeError> + Send + 'static,
         S: WorkerSession + 'static,
     {
+        Self::spawn_with_factory_and_startup_hook(settings, factory, || {})
+    }
+
+    pub(super) fn spawn_with_factory_and_startup_hook<F, S, H>(
+        settings: WorkerSettings,
+        factory: F,
+        before_startup: H,
+    ) -> Result<Self, DesktopError>
+    where
+        F: FnMut() -> Result<S, NativeError> + Send + 'static,
+        S: WorkerSession + 'static,
+        H: FnOnce() + Send + 'static,
+    {
         settings.validate()?;
         let startup_timeout = settings.startup_timeout;
         let command_capacity = settings.command_capacity;
@@ -90,7 +103,6 @@ impl DesktopWorker {
         let (startup_tx, startup_rx) = sync_channel(1);
         let (worker_exited_tx, worker_exited_rx) = sync_channel(1);
         let command_queue_depth = Arc::new(AtomicUsize::new(0));
-        let thread_command_queue_depth = Arc::clone(&command_queue_depth);
         let pending_overload = Arc::new(AtomicU64::new(0));
         let thread_pending_overload = Arc::clone(&pending_overload);
         let shutdown_requested = Arc::new(AtomicBool::new(false));
@@ -108,26 +120,28 @@ impl DesktopWorker {
             fatal_exit: false,
         }));
         let thread_snapshot = Arc::clone(&snapshot);
+        let dispatcher = tracing::dispatcher::get_default(Clone::clone);
         let join = thread::Builder::new()
             .name(WORKER_THREAD_NAME.to_owned())
-            .spawn(move || {
+            .spawn(move || tracing::dispatcher::with_default(&dispatcher, || {
+                let channels = WorkerChannels {
+                    commands: command_rx,
+                    events: event_tx,
+                    startup: startup_tx,
+                    pending_overload: thread_pending_overload,
+                    shutdown_requested: thread_shutdown_requested,
+                    worker_exited: worker_exited_tx,
+                };
+                before_startup();
                 run_worker(
                     settings,
                     factory,
-                    WorkerChannels {
-                        commands: command_rx,
-                        events: event_tx,
-                        startup: startup_tx,
-                        command_queue_depth: thread_command_queue_depth,
-                        pending_overload: thread_pending_overload,
-                        shutdown_requested: thread_shutdown_requested,
-                        worker_exited: worker_exited_tx,
-                    },
+                    channels,
                     thread_snapshot,
                     thread_framebuffer,
                     thread_clipboard,
                 );
-            })
+            }))
             .map_err(|error| {
                 DesktopError::Configuration(format!("failed to spawn desktop worker: {error}"))
             })?;
@@ -154,15 +168,29 @@ impl DesktopWorker {
                 // queue nudge below is a best-effort extra and its failure
                 // must not matter.
                 shutdown_requested.store(true, Ordering::Release);
-                let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter());
-                cleanup_startup_worker_after_timeout(join, worker_exited_rx, startup_timeout);
-                Err(DesktopError::Timeout)
+                let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter(
+                    Arc::clone(&command_queue_depth),
+                ));
+                match cleanup_startup_worker_after_timeout(
+                    join,
+                    worker_exited_rx,
+                    startup_timeout,
+                ) {
+                    Err(DesktopError::WorkerUnavailable) => Err(DesktopError::WorkerUnavailable),
+                    Ok(()) | Err(DesktopError::Timeout) => Err(DesktopError::Timeout),
+                    Err(error) => Err(error),
+                }
             }
             Err(RecvTimeoutError::Disconnected) => {
                 shutdown_requested.store(true, Ordering::Release);
-                let _ = worker_exited_rx.recv_timeout(startup_timeout);
-                let _ = join_worker_handle(join);
-                Err(DesktopError::WorkerUnavailable)
+                match cleanup_startup_worker_after_timeout(
+                    join,
+                    worker_exited_rx,
+                    startup_timeout,
+                ) {
+                    Ok(()) => Err(DesktopError::WorkerUnavailable),
+                    Err(error) => Err(error),
+                }
             }
         }
     }
@@ -178,8 +206,8 @@ impl DesktopWorker {
     }
 
     fn detach_worker(&mut self) {
-        let _ = self.worker_exited.take();
-        let _ = self.join.take();
+        drop(self.worker_exited.take());
+        drop(self.join.take());
     }
 
     fn join_worker(&mut self) -> Result<(), DesktopError> {
@@ -204,12 +232,14 @@ pub(super) fn cleanup_startup_worker_after_timeout(
     join: JoinHandle<()>,
     worker_exited: Receiver<()>,
     timeout: Duration,
-) {
+) -> Result<(), DesktopError> {
     match worker_exited.recv_timeout(timeout) {
         Ok(()) | Err(RecvTimeoutError::Disconnected) => {
-            if let Err(error) = join_worker_handle(join) {
+            let result = join_worker_handle(join);
+            if let Err(error) = &result {
                 tracing::error!(error = ?error, "desktop_worker_startup_join_failed");
             }
+            result
         }
         Err(RecvTimeoutError::Timeout) => {
             tracing::warn!(
@@ -217,6 +247,7 @@ pub(super) fn cleanup_startup_worker_after_timeout(
                 "desktop_worker_startup_cleanup_timeout"
             );
             drop(join);
+            Err(DesktopError::Timeout)
         }
     }
 }
@@ -241,7 +272,8 @@ impl Drop for DesktopWorker {
                 );
                 self.detach_worker();
             }
-            Err(_) => {
+            Err(error) => {
+                tracing::error!(error = ?error, "desktop_worker_drop_wait_failed");
                 self.detach_worker();
             }
         }

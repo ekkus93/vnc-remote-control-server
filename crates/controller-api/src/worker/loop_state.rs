@@ -181,15 +181,32 @@ impl<S: WorkerSession> LoopState<'_, S> {
 
     pub(super) fn release_input(&mut self) {
         if let Some(session) = self.session.as_mut() {
-            self.input.release_all(session);
-        } else {
-            self.input.clear();
+            let report = self.input.release_all(session);
+            if !report.is_complete() {
+                tracing::warn!(
+                    pointer_release_failed = report.pointer_release_failed(),
+                    key_release_failures = report.key_release_failures(),
+                    "worker_input_release_incomplete"
+                );
+            }
+        }
+    }
+
+    fn abandon_input(&mut self) {
+        let report = self.input.abandon();
+        if !report.is_complete() {
+            tracing::warn!(
+                pointer_release_abandoned = report.pointer_release_failed(),
+                key_releases_abandoned = report.key_release_failures(),
+                "worker_input_release_abandoned"
+            );
         }
     }
 
     pub(super) fn invalidate(&mut self) {
         self.release_input();
         self.session = None;
+        self.abandon_input();
         self.last_native_revision = None;
         self.last_native_clipboard_revision = None;
         self.clipboard_decode_failed = false;

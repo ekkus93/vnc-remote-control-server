@@ -1,6 +1,8 @@
 use super::WorkerFailureKind;
 use remote_desktop_core::{ConnectionState, DesktopEventKind};
 use std::sync::mpsc::{Receiver, RecvError, RecvTimeoutError};
+#[cfg(test)]
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::{Duration, SystemTime};
 
 /// Read-only worker status snapshot.
@@ -45,6 +47,12 @@ pub struct WorkerEvents {
 }
 
 impl WorkerEvents {
+    #[cfg(test)]
+    pub(crate) fn test_channel(capacity: usize) -> (SyncSender<WorkerEvent>, Self) {
+        let (sender, receiver) = sync_channel(capacity);
+        (sender, Self { receiver })
+    }
+
     /// Waits indefinitely for one worker event.
     pub fn recv(&self) -> Result<WorkerEvent, RecvError> {
         self.receiver.recv()

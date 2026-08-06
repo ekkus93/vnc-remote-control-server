@@ -192,6 +192,7 @@ pub(super) struct ControlledPoll {
     release_rx: Mutex<Receiver<()>>,
     poll_count: AtomicUsize,
     command_calls: AtomicUsize,
+    refresh_calls: AtomicUsize,
 }
 
 impl ControlledPoll {
@@ -204,6 +205,7 @@ impl ControlledPoll {
                 release_rx: Mutex::new(release_rx),
                 poll_count: AtomicUsize::new(0),
                 command_calls: AtomicUsize::new(0),
+                refresh_calls: AtomicUsize::new(0),
             }),
             entered_rx,
             release_tx,
@@ -212,6 +214,10 @@ impl ControlledPoll {
 
     pub(super) fn command_calls(&self) -> usize {
         self.command_calls.load(Ordering::Acquire)
+    }
+
+    pub(super) fn refresh_calls(&self) -> usize {
+        self.refresh_calls.load(Ordering::Acquire)
     }
 }
 
@@ -237,6 +243,7 @@ impl WorkerSession for ControlledPollSession {
     }
 
     fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        self.control.refresh_calls.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 

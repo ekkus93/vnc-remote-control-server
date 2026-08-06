@@ -33,6 +33,27 @@ pub(crate) trait InputSink {
     fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError>;
 }
 
+/// Payload-free outcome of one best-effort tracked-input release pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct InputReleaseReport {
+    pointer_release_failed: bool,
+    key_release_failures: usize,
+}
+
+impl InputReleaseReport {
+    pub(crate) const fn pointer_release_failed(self) -> bool {
+        self.pointer_release_failed
+    }
+
+    pub(crate) const fn key_release_failures(self) -> usize {
+        self.key_release_failures
+    }
+
+    pub(crate) const fn is_complete(self) -> bool {
+        !self.pointer_release_failed && self.key_release_failures == 0
+    }
+}
+
 /// Worker-owned input state.
 #[derive(Default)]
 pub(crate) struct InputController {
@@ -260,17 +281,43 @@ impl InputController {
         Ok(character_count)
     }
 
-    /// Best-effort releases every locally tracked input and clears local state.
-    pub(crate) fn release_all<S: InputSink>(&mut self, sink: &mut S) {
-        if self.button_mask != 0
-            && let Some(coordinate) = self.last_coordinate
-        {
-            let _ = sink.send_pointer(coordinate, 0);
+    /// Best-effort releases every locally tracked input.
+    ///
+    /// Successfully released state is removed immediately. Failed state remains
+    /// tracked until the caller explicitly abandons the irrecoverable session.
+    pub(crate) fn release_all<S: InputSink>(&mut self, sink: &mut S) -> InputReleaseReport {
+        let mut report = InputReleaseReport::default();
+        if self.button_mask != 0 {
+            match self.last_coordinate {
+                Some(coordinate) if sink.send_pointer(coordinate, 0).is_ok() => {
+                    self.button_mask = 0;
+                }
+                Some(_) | None => report.pointer_release_failed = true,
+            }
         }
-        for key in self.pressed_keys.iter().rev() {
-            let _ = sink.send_key(*key, false);
+
+        let keys = self.pressed_keys.clone();
+        for key in keys.iter().rev() {
+            if sink.send_key(*key, false).is_ok() {
+                self.remove_pressed_key(*key);
+            } else {
+                report.key_release_failures = report.key_release_failures.saturating_add(1);
+            }
         }
+        if self.button_mask == 0 && self.pressed_keys.is_empty() {
+            self.last_coordinate = None;
+        }
+        report
+    }
+
+    /// Explicitly abandons unresolved input state after a session is dropped.
+    pub(crate) fn abandon(&mut self) -> InputReleaseReport {
+        let report = InputReleaseReport {
+            pointer_release_failed: self.button_mask != 0,
+            key_release_failures: self.pressed_keys.len(),
+        };
         self.clear();
+        report
     }
 
     /// Clears local state when no native session exists.
@@ -672,6 +719,49 @@ mod tests {
     }
 
     #[test]
+    fn release_all_reports_failed_pointer_release_without_silent_clear() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+        let point = coordinate(1, 1);
+        controller
+            .set_button(&mut sink, point, display(), MouseButton::Left, true)
+            .expect("button down");
+        sink.fail_on_call = Some(sink.call_count + 1);
+
+        let report = controller.release_all(&mut sink);
+
+        assert!(report.pointer_release_failed());
+        assert_eq!(report.key_release_failures(), 0);
+        assert_eq!(controller.button_mask, MouseButton::Left.rfb_mask());
+        assert_eq!(controller.last_coordinate, Some(point));
+        let abandoned = controller.abandon();
+        assert!(abandoned.pointer_release_failed());
+        assert_eq!(controller.button_mask, 0);
+    }
+
+    #[test]
+    fn release_all_retains_failed_keys_until_explicit_abandon() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+        controller
+            .set_key(&mut sink, KeyboardKey::CtrlLeft, true)
+            .expect("control down");
+        controller
+            .set_key(&mut sink, KeyboardKey::AltLeft, true)
+            .expect("alt down");
+        sink.fail_on_call = Some(sink.call_count + 1);
+
+        let report = controller.release_all(&mut sink);
+
+        assert!(!report.pointer_release_failed());
+        assert_eq!(report.key_release_failures(), 1);
+        assert_eq!(controller.pressed_keys, vec![KeyboardKey::AltLeft]);
+        let abandoned = controller.abandon();
+        assert_eq!(abandoned.key_release_failures(), 1);
+        assert!(controller.pressed_keys.is_empty());
+    }
+
+    #[test]
     fn disconnect_release_clears_buttons_and_keys() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::default();
@@ -686,7 +776,7 @@ mod tests {
             .set_key(&mut sink, KeyboardKey::AltLeft, true)
             .expect("alt down");
         sink.events.clear();
-        controller.release_all(&mut sink);
+        assert!(controller.release_all(&mut sink).is_complete());
         assert_eq!(
             sink.events,
             vec![
@@ -696,7 +786,7 @@ mod tests {
             ]
         );
         sink.events.clear();
-        controller.release_all(&mut sink);
+        assert!(controller.release_all(&mut sink).is_complete());
         assert!(sink.events.is_empty());
     }
 }
