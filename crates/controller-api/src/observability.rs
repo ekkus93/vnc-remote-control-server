@@ -168,7 +168,7 @@ impl Metrics {
 
     /// Records cleanup of one WebSocket client.
     pub fn websocket_closed(&self) {
-        let _ = self.inner.websocket_clients.fetch_update(
+        let _ = self.inner.websocket_clients.try_update(
             Ordering::Relaxed,
             Ordering::Relaxed,
             |value| value.checked_sub(1),

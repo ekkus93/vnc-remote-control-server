@@ -30,7 +30,7 @@ impl SubmissionPermit {
         self.released = true;
         if self
             .submissions_in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_sub(1)
             })
             .is_err()
