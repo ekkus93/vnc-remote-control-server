@@ -166,7 +166,10 @@ fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
     }
 
     assert!(calls.load(Ordering::SeqCst) >= 2, "stall did not reconnect");
-    assert!(!client.snapshot().fatal_exit, "recoverable stall became fatal");
+    assert!(
+        !client.snapshot().fatal_exit,
+        "recoverable stall became fatal"
+    );
     assert_ne!(client.snapshot().state, ConnectionState::Stopped);
     worker
         .shutdown(Duration::from_secs(1))
