@@ -106,7 +106,7 @@ impl DesktopWorker {
         let (event_tx, event_rx) = sync_channel(settings.event_capacity);
         let (startup_tx, startup_rx) = sync_channel(1);
         let (worker_exited_tx, worker_exited_rx) = sync_channel(1);
-        let command_queue_depth = Arc::new(AtomicUsize::new(0));
+        let command_submissions_in_flight = Arc::new(AtomicUsize::new(0));
         let pending_overload = Arc::new(AtomicU64::new(0));
         let thread_pending_overload = Arc::clone(&pending_overload);
         let shutdown_requested = Arc::new(AtomicBool::new(false));
@@ -160,7 +160,7 @@ impl DesktopWorker {
                     framebuffer,
                     clipboard,
                     next_command_id: Arc::new(AtomicU64::new(1)),
-                    command_queue_depth,
+                    command_submissions_in_flight,
                     command_queue_capacity: command_capacity,
                     pending_overload,
                     shutdown_requested,
@@ -175,7 +175,7 @@ impl DesktopWorker {
                 // must not matter.
                 shutdown_requested.store(true, Ordering::Release);
                 let _ = command_tx.try_send(CommandEnvelope::shutdown_without_waiter(Arc::clone(
-                    &command_queue_depth,
+                    &command_submissions_in_flight,
                 )));
                 match cleanup_startup_worker_after_timeout(
                     join,
