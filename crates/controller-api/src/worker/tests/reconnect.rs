@@ -165,6 +165,7 @@ impl WorkerSession for NeverCompleteSession {
 fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_factory = Arc::clone(&calls);
+    let (factory_call_tx, factory_call_rx) = sync_channel(4);
     let mut config = settings();
     config.poll_interval = Duration::from_millis(2);
     config.stall_probe_after = Duration::from_millis(2);
@@ -173,19 +174,27 @@ fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
     config.reconnect_max_delay = Duration::from_millis(2);
 
     let worker = DesktopWorker::spawn_with_factory(config, move || {
-        calls_for_factory.fetch_add(1, Ordering::SeqCst);
+        let invocation = calls_for_factory.fetch_add(1, Ordering::SeqCst);
+        factory_call_tx
+            .send(invocation)
+            .expect("factory invocation remains observable");
         Ok(NeverCompleteSession)
     })
     .expect("worker spawns");
     let client = worker.client();
 
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < deadline
-        && calls.load(Ordering::SeqCst) < 2
-        && client.snapshot().state != ConnectionState::Stopped
-    {
-        thread::yield_now();
-    }
+    assert_eq!(
+        factory_call_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("initial factory invocation is observed"),
+        0
+    );
+    assert_eq!(
+        factory_call_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reconnect factory invocation is observed"),
+        1
+    );
 
     assert!(calls.load(Ordering::SeqCst) >= 2, "stall did not reconnect");
     assert!(
