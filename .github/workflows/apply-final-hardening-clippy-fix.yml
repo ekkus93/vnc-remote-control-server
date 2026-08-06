@@ -57,7 +57,7 @@ jobs:
         run: |
           cargo fmt --all
           grep -q 'struct EventBridgeStartSettings' crates/controller-api/src/events.rs
-          test "$(grep -c 'EventBridgeStartSettings {' crates/controller-api/src/events.rs)" -eq 4
+          test "$(grep -c 'EventBridgeStartSettings {' crates/controller-api/src/events.rs)" -eq 6
           ! grep -q 'fn start_with_hook<H>(.*event_capacity' crates/controller-api/src/events.rs
           git diff --check
 
