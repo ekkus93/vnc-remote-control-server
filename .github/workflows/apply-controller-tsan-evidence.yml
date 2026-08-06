@@ -1,0 +1,70 @@
+name: Apply controller TSan evidence wiring
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-controller-tsan-evidence.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Preserve controller TSan output in permanent evidence
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/release-gates.yml')
+          text = path.read_text()
+          old = (
+              '      - name: Run controller concurrency tests under ThreadSanitizer\n'
+              '        env:\n'
+              '          CARGO_TARGET_DIR: target/tsan-controller\n'
+              '          RUSTFLAGS: -Zsanitizer=thread\n'
+              '          TSAN_OPTIONS: halt_on_error=1\n'
+              '        run: >-\n'
+              '          cargo +nightly-2026-08-01 -Zbuild-std test\n'
+              '          --target x86_64-unknown-linux-gnu\n'
+              '          --locked\n'
+              '          --package controller-api\n'
+              '          --lib\n'
+          )
+          new = (
+              '      - name: Run controller concurrency tests under ThreadSanitizer\n'
+              '        env:\n'
+              '          CARGO_TARGET_DIR: target/tsan-controller\n'
+              '          RUSTFLAGS: -Zsanitizer=thread\n'
+              '          TSAN_OPTIONS: halt_on_error=1\n'
+              '        shell: bash\n'
+              '        run: |\n'
+              '          set -euo pipefail\n'
+              '          cargo +nightly-2026-08-01 -Zbuild-std test \\\n'
+              '            --target x86_64-unknown-linux-gnu \\\n'
+              '            --locked \\\n'
+              '            --package controller-api \\\n'
+              '            --lib \\\n'
+              '            2>&1 | tee artifacts/native-safety/controller-tsan.log\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit('controller TSan step marker mismatch')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+      - name: Commit and remove workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-controller-tsan-evidence.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/release-gates.yml .github/workflows/apply-controller-tsan-evidence.yml
+          git commit -m "Preserve controller TSan failure output"
+          git push origin HEAD:master
