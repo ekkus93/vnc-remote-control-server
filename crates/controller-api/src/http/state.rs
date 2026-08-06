@@ -1,6 +1,6 @@
 use super::backend::{HttpBackend, WorkerHttpBackend};
 use super::ids::{RequestId, valid_process_instance};
-use crate::config::ControllerConfig;
+use crate::config::{ApiToken, ControllerConfig};
 use crate::events::EventHub;
 use crate::observability::Metrics;
 use crate::screenshot::ScreenshotError;
@@ -15,7 +15,7 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct HttpState {
     pub(super) backend: Arc<dyn HttpBackend>,
-    pub(super) api_token: Arc<str>,
+    pub(super) api_token: ApiToken,
     process_instance: Arc<str>,
     request_sequence: Arc<AtomicU64>,
     shutting_down: Arc<AtomicBool>,
@@ -27,13 +27,16 @@ pub struct HttpState {
 
 impl HttpState {
     /// Creates validated HTTP state over one backend.
-    pub fn new(
+    pub fn new<T>(
         backend: Arc<dyn HttpBackend>,
-        api_token: Arc<str>,
+        api_token: T,
         process_instance: Arc<str>,
         maximum_json_bytes: usize,
         command_ack_timeout: Duration,
-    ) -> Result<Self, HttpBuildError> {
+    ) -> Result<Self, HttpBuildError>
+    where
+        T: Into<ApiToken>,
+    {
         let metrics = Metrics::default();
         let events = EventHub::detached(
             16,
@@ -53,15 +56,19 @@ impl HttpState {
         )
     }
 
-    fn new_with_observability(
+    fn new_with_observability<T>(
         backend: Arc<dyn HttpBackend>,
-        api_token: Arc<str>,
+        api_token: T,
         process_instance: Arc<str>,
         maximum_json_bytes: usize,
         command_ack_timeout: Duration,
         events: EventHub,
         metrics: Metrics,
-    ) -> Result<Self, HttpBuildError> {
+    ) -> Result<Self, HttpBuildError>
+    where
+        T: Into<ApiToken>,
+    {
+        let api_token = api_token.into();
         if api_token.is_empty() {
             return Err(HttpBuildError::EmptyApiToken);
         }
@@ -97,7 +104,7 @@ impl HttpState {
         let backend = WorkerHttpBackend::new(client, config).map_err(HttpBuildError::Screenshot)?;
         Self::new_with_observability(
             Arc::new(backend),
-            Arc::clone(&config.api_token),
+            config.api_token.clone(),
             Arc::clone(&config.process_instance),
             config.maximum_json_bytes,
             config.command_ack_timeout,
