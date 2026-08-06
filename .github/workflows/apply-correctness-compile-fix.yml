@@ -21,20 +21,7 @@ jobs:
       - name: Make PNG output allocation fallible
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('crates/controller-api/src/bin/worker-text-clipboard-e2e.rs')
-          text = path.read_text()
-          old = '    let mut pixels = vec![0; reader.output_buffer_size()];\n'
-          new = '''    let output_size = reader
-        .output_buffer_size()
-        .ok_or_else(|| io::Error::other("decoded PNG output size overflow"))?;
-    let mut pixels = vec![0; output_size];
-'''
-          if text.count(old) != 1:
-              raise SystemExit('PNG output allocation marker mismatch')
-          path.write_text(text.replace(old, new, 1))
-          PY
+          python -c 'from pathlib import Path; p=Path("crates/controller-api/src/bin/worker-text-clipboard-e2e.rs"); t=p.read_text(); old="    let mut pixels = vec![0; reader.output_buffer_size()];\n"; new="    let output_size = reader\n        .output_buffer_size()\n        .ok_or_else(|| io::Error::other(\"decoded PNG output size overflow\"))?;\n    let mut pixels = vec![0; output_size];\n"; assert t.count(old) == 1; p.write_text(t.replace(old, new, 1))'
           cargo fmt --all
           git diff --check
       - name: Commit and remove workflow
