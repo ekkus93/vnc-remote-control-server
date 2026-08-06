@@ -1,0 +1,58 @@
+name: Apply stall fixture threshold repair
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-stall-fixture-threshold.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Make connected stall fixture threshold deterministic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/controller-api/src/worker/tests/reconnect.rs')
+          text = path.read_text()
+          start = text.index('fn confirmed_stall_invalidates_reconnects_and_advances_revision()')
+          end = text.index('\n    let worker = DesktopWorker::spawn_with_factory', start)
+          block = text[start:end]
+          old = '''    config.poll_interval = Duration::from_millis(2);
+    config.stall_probe_after = Duration::from_millis(2);
+    config.stall_confirm_after = Duration::from_millis(2);
+'''
+          new = '''    config.poll_interval = Duration::from_millis(1);
+    config.stall_probe_after = Duration::from_nanos(1);
+    config.stall_confirm_after = Duration::from_nanos(1);
+'''
+          if block.count(old) != 1:
+              raise SystemExit('connected stall timing marker mismatch')
+          block = block.replace(old, new, 1)
+          path.write_text(text[:start] + block + text[end:])
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit source repair and remove workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/apply-stall-fixture-threshold.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/controller-api/src/worker/tests/reconnect.rs \
+            .github/workflows/apply-stall-fixture-threshold.yml
+          git commit -m "Make connected stall fixture deterministic"
+          git push origin HEAD:master
