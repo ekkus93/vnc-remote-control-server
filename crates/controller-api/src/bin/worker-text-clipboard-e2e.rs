@@ -1,3 +1,4 @@
+use controller_api::framebuffer::FramebufferError;
 use controller_api::screenshot::ScreenshotOutcome;
 use controller_api::worker::{DesktopWorker, WorkerClient, WorkerSettings};
 use libvnc_adapter::{NativeClientConfig, SecretString};
@@ -62,7 +63,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let worker = DesktopWorker::spawn(settings)?;
     let client = worker.client();
     wait_for_complete_frame(&client, READY_TIMEOUT)?;
-    verify_colors(&client, red, blue)?;
+    wait_for_colors(&client, red, blue, READY_TIMEOUT)?;
     println!("worker_rgbx_color_proof=1");
 
     execute(
@@ -125,6 +126,38 @@ fn run() -> Result<(), Box<dyn Error>> {
         clipboard.revision
     );
     Ok(())
+}
+
+fn wait_for_colors(
+    client: &WorkerClient,
+    red: (u32, u32),
+    blue: (u32, u32),
+    timeout: Duration,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + timeout;
+    let mut last_revision = None;
+    let mut last_error = String::from("no framebuffer revision was observed");
+    while Instant::now() < deadline {
+        match client.framebuffer_snapshot() {
+            Ok(snapshot) if last_revision != Some(snapshot.revision()) => {
+                last_revision = Some(snapshot.revision());
+                match verify_colors(client, red, blue) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => last_error = error.to_string(),
+                }
+            }
+            Ok(_) | Err(FramebufferError::Unavailable | FramebufferError::Stale) => {}
+            Err(error) => return Err(error.into()),
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!(
+            "no framebuffer revision contained the deterministic RGBX swatches; last_revision={last_revision:?} last_error={last_error}"
+        ),
+    )
+    .into())
 }
 
 fn verify_colors(
@@ -194,7 +227,12 @@ fn assert_color(
         channels[2] > DOMINANT_MINIMUM && channels[0] < OTHER_MAXIMUM && channels[1] < OTHER_MAXIMUM
     };
     if !valid || channels[3] != u8::MAX {
-        return Err(io::Error::other("RGBX channel-order assertion failed").into());
+        let expected = if expect_red { "red" } else { "blue" };
+        return Err(io::Error::other(format!(
+            "RGBX channel-order assertion failed: expected={expected} coordinate={x},{y} channels={:02x},{:02x},{:02x},{:02x}",
+            channels[0], channels[1], channels[2], channels[3]
+        ))
+        .into());
     }
     Ok(())
 }
