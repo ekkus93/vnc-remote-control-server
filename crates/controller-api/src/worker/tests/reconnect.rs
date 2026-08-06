@@ -88,7 +88,14 @@ fn confirmed_stall_invalidates_reconnects_and_advances_revision() {
         MockMode::Healthy,
     ])));
     let modes_for_factory = Arc::clone(&modes);
-    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+    let mut config = settings();
+    config.poll_interval = Duration::from_millis(2);
+    config.stall_probe_after = Duration::from_millis(2);
+    config.stall_confirm_after = Duration::from_millis(2);
+    config.reconnect_min_delay = Duration::from_millis(1);
+    config.reconnect_max_delay = Duration::from_millis(2);
+
+    let worker = DesktopWorker::spawn_with_factory(config, move || {
         let invocation = calls_for_factory.fetch_add(1, Ordering::SeqCst);
         factory_call_tx
             .send(invocation)
@@ -111,7 +118,7 @@ fn confirmed_stall_invalidates_reconnects_and_advances_revision() {
     );
     assert_eq!(
         factory_call_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(1))
             .expect("stall reconnect factory invocation is observed"),
         1
     );
