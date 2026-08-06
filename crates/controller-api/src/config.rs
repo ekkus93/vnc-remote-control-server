@@ -5,7 +5,7 @@
 //! implemented manually and omits both secret values.
 
 use crate::worker::WorkerSettings;
-use libvnc_adapter::NativeClientConfig;
+use libvnc_adapter::{NativeClientConfig, SecretString};
 use remote_desktop_core::{DesktopError, MAX_FRAMEBUFFER_BYTES};
 use std::env;
 use std::error::Error;
@@ -127,7 +127,8 @@ impl ControllerConfig {
             "VRC_VNC_PASSWORD_FILE",
             DEFAULT_VNC_PASSWORD_FILE,
         ));
-        let api_token = secrets.read_secret(&api_token_path)?;
+        let api_token_secret = secrets.read_secret(&api_token_path)?;
+        let api_token: Arc<str> = Arc::from(api_token_secret.expose_secret());
         let vnc_password = secrets.read_secret(&vnc_password_path)?;
 
         let process_instance = environment
@@ -200,7 +201,7 @@ impl ControllerConfig {
             native: NativeClientConfig {
                 host: vnc_host,
                 port: vnc_port,
-                password: vnc_password.to_string(),
+                password: vnc_password,
                 connect_timeout: parse_duration_ms(
                     environment,
                     "VRC_VNC_CONNECT_TIMEOUT_MS",
@@ -346,14 +347,14 @@ impl EnvironmentSource for ProcessEnvironment {
 /// File-backed secret source.
 pub trait SecretReader {
     /// Reads and validates one secret without exposing it in errors.
-    fn read_secret(&self, path: &Path) -> Result<Arc<str>, ConfigError>;
+    fn read_secret(&self, path: &Path) -> Result<SecretString, ConfigError>;
 }
 
 /// Production filesystem secret reader.
 pub struct SystemSecretReader;
 
 impl SecretReader for SystemSecretReader {
-    fn read_secret(&self, path: &Path) -> Result<Arc<str>, ConfigError> {
+    fn read_secret(&self, path: &Path) -> Result<SecretString, ConfigError> {
         let metadata = fs::metadata(path).map_err(|_| ConfigError::SecretFile {
             path: path.to_path_buf(),
             reason: "cannot read metadata",
@@ -388,7 +389,7 @@ impl SecretReader for SystemSecretReader {
                 reason: "contents are empty or contain NUL",
             });
         }
-        Ok(Arc::from(value))
+        Ok(SecretString::from(value))
     }
 }
 
@@ -499,13 +500,14 @@ mod tests {
         }
     }
 
-    struct MapSecrets(HashMap<PathBuf, Arc<str>>);
+    struct MapSecrets(HashMap<PathBuf, String>);
 
     impl SecretReader for MapSecrets {
-        fn read_secret(&self, path: &Path) -> Result<Arc<str>, ConfigError> {
+        fn read_secret(&self, path: &Path) -> Result<SecretString, ConfigError> {
             self.0
                 .get(path)
                 .cloned()
+                .map(SecretString::from)
                 .ok_or_else(|| ConfigError::SecretFile {
                     path: path.to_path_buf(),
                     reason: "fixture is missing",
@@ -517,11 +519,11 @@ mod tests {
         MapSecrets(HashMap::from([
             (
                 PathBuf::from(DEFAULT_API_TOKEN_FILE),
-                Arc::from("api-token"),
+                "api-token".to_owned(),
             ),
             (
                 PathBuf::from(DEFAULT_VNC_PASSWORD_FILE),
-                Arc::from("vnc-password"),
+                "vnc-password".to_owned(),
             ),
         ]))
     }
@@ -567,8 +569,8 @@ mod tests {
             ),
         ]));
         let secrets = MapSecrets(HashMap::from([
-            (PathBuf::from("/tmp/api"), Arc::from("selected-api")),
-            (PathBuf::from("/tmp/vnc"), Arc::from("selected-vnc")),
+            (PathBuf::from("/tmp/api"), "selected-api".to_owned()),
+            (PathBuf::from("/tmp/vnc"), "selected-vnc".to_owned()),
         ]));
         let config = ControllerConfig::load_from(&environment, &secrets).expect("config loads");
         assert_eq!(config.listen_address, "0.0.0.0:9090".parse().unwrap());
@@ -613,7 +615,10 @@ mod tests {
         ]));
         let config = ControllerConfig::load_from(&environment, &secrets()).expect("config loads");
         assert_eq!(config.api_token.as_ref(), "api-token");
-        assert_eq!(config.worker.native.password, "vnc-password");
+        assert_eq!(
+            config.worker.native.password.expose_secret(),
+            "vnc-password"
+        );
     }
 
     #[test]
@@ -637,12 +642,10 @@ mod tests {
         fs::write(&secret_path, "secret-value\n").expect("write secret");
         fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o444))
             .expect("set read-only permissions");
-        assert_eq!(
-            SystemSecretReader
-                .read_secret(&secret_path)
-                .expect("read-only secret"),
-            Arc::<str>::from("secret-value")
-        );
+        let secret = SystemSecretReader
+            .read_secret(&secret_path)
+            .expect("read-only secret");
+        assert_eq!(secret.expose_secret(), "secret-value");
 
         fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o666))
             .expect("set broad permissions");
@@ -653,7 +656,7 @@ mod tests {
     fn secret_errors_never_include_secret_contents() {
         struct FailingSecret;
         impl SecretReader for FailingSecret {
-            fn read_secret(&self, path: &Path) -> Result<Arc<str>, ConfigError> {
+            fn read_secret(&self, path: &Path) -> Result<SecretString, ConfigError> {
                 Err(ConfigError::SecretFile {
                     path: path.to_path_buf(),
                     reason: "fixture failed",
