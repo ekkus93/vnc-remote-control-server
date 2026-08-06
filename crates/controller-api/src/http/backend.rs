@@ -1,0 +1,96 @@
+use crate::config::ControllerConfig;
+use crate::framebuffer::FramebufferMetadata;
+use crate::screenshot::{ScreenshotError, ScreenshotOutcome, ScreenshotService};
+use crate::worker::{WorkerClient, WorkerSnapshot};
+use remote_desktop_core::{ClipboardSnapshot, DesktopError, WorkerCommand};
+use std::time::Duration;
+
+/// Backend required by the authenticated HTTP surface.
+pub trait HttpBackend: Send + Sync + 'static {
+    /// Returns one redacted worker lifecycle snapshot.
+    fn snapshot(&self) -> WorkerSnapshot;
+    /// Returns coherent framebuffer metadata without copying pixels.
+    fn framebuffer_metadata(&self) -> FramebufferMetadata;
+    /// Captures or conditionally validates the current PNG screenshot.
+    fn capture_screenshot(
+        &self,
+        if_none_match: Option<&str>,
+    ) -> Result<ScreenshotOutcome, ScreenshotError>;
+    /// Executes one queued command and waits for bounded worker acknowledgement.
+    fn execute_command(
+        &self,
+        command: WorkerCommand,
+        timeout: Duration,
+    ) -> Result<u64, DesktopError>;
+    /// Returns the last valid inbound clipboard snapshot.
+    fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError>;
+    /// Returns the current bounded command queue depth.
+    fn command_queue_depth(&self) -> usize {
+        0
+    }
+    /// Returns the configured bounded command queue capacity.
+    fn command_queue_capacity(&self) -> usize {
+        0
+    }
+}
+
+/// Production HTTP backend over one worker client and screenshot service.
+pub struct WorkerHttpBackend {
+    client: WorkerClient,
+    screenshots: ScreenshotService,
+}
+
+impl WorkerHttpBackend {
+    /// Creates a production backend using validated controller configuration.
+    pub fn new(client: WorkerClient, config: &ControllerConfig) -> Result<Self, ScreenshotError> {
+        let screenshots = client.screenshot_service(
+            &config.process_instance,
+            config.screenshot_concurrency,
+            config.screenshot_timeout,
+        )?;
+        Ok(Self {
+            client,
+            screenshots,
+        })
+    }
+}
+
+impl HttpBackend for WorkerHttpBackend {
+    fn snapshot(&self) -> WorkerSnapshot {
+        self.client.snapshot()
+    }
+
+    fn framebuffer_metadata(&self) -> FramebufferMetadata {
+        self.client.framebuffer_metadata()
+    }
+
+    fn capture_screenshot(
+        &self,
+        if_none_match: Option<&str>,
+    ) -> Result<ScreenshotOutcome, ScreenshotError> {
+        self.screenshots.capture(if_none_match)
+    }
+
+    fn execute_command(
+        &self,
+        command: WorkerCommand,
+        timeout: Duration,
+    ) -> Result<u64, DesktopError> {
+        let ticket = self.client.submit(command)?;
+        let command_id = ticket.id();
+        ticket.wait(timeout)?;
+        Ok(command_id)
+    }
+
+    fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {
+        self.client.clipboard_snapshot()
+    }
+
+    fn command_queue_depth(&self) -> usize {
+        self.client.command_queue_depth()
+    }
+
+    fn command_queue_capacity(&self) -> usize {
+        self.client.command_queue_capacity()
+    }
+}
