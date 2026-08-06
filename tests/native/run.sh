@@ -6,6 +6,7 @@ readonly container_name="vnc-remote-control-native-test-${GITHUB_RUN_ID:-local}-
 readonly password='vnc-test'
 temporary_directory=""
 native_pid=""
+native_spike=""
 
 log() {
     printf '[native-smoke] %s\n' "$*" >&2
@@ -63,7 +64,7 @@ run_expected_connection_failure() {
         VRC_VNC_PORT="$port" \
         VRC_VNC_PASSWORD_FILE="$password_file" \
         VRC_PROOF_HOLD_SECONDS=0 \
-        cargo run --locked --quiet -p libvnc-adapter --bin native-spike \
+        "$native_spike" \
         >"$failure_log" 2>&1
     status=$?
     set -e
@@ -90,6 +91,11 @@ temporary_directory="$(mktemp -d)"
 printf '%s\n' "$password" > "$temporary_directory/vnc_password"
 chmod 0444 "$temporary_directory/vnc_password"
 
+log "building native adapter proof binary"
+cargo build --locked --quiet -p libvnc-adapter --bin native-spike
+native_spike="${CARGO_TARGET_DIR:-target}/debug/native-spike"
+[[ -x "$native_spike" ]] || fail "native adapter proof binary was not produced"
+
 log "building project-owned desktop image"
 docker build --tag "$image_name" desktop
 
@@ -108,7 +114,7 @@ timeout --kill-after=2s 35s env \
     VRC_VNC_PORT=5901 \
     VRC_VNC_PASSWORD_FILE="$temporary_directory/vnc_password" \
     VRC_PROOF_HOLD_SECONDS=15 \
-    cargo run --locked --quiet -p libvnc-adapter --bin native-spike \
+    "$native_spike" \
     >"$spike_log" 2>&1 &
 native_pid=$!
 
