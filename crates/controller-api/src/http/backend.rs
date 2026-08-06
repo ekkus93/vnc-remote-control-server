@@ -24,8 +24,8 @@ pub trait HttpBackend: Send + Sync + 'static {
     ) -> Result<u64, DesktopError>;
     /// Returns the last valid inbound clipboard snapshot.
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError>;
-    /// Returns the current bounded command queue depth.
-    fn command_queue_depth(&self) -> usize {
+    /// Returns command submissions whose ownership permit remains live.
+    fn command_submissions_in_flight(&self) -> usize {
         0
     }
     /// Returns the configured bounded command queue capacity.
@@ -86,8 +86,8 @@ impl HttpBackend for WorkerHttpBackend {
         self.client.clipboard_snapshot()
     }
 
-    fn command_queue_depth(&self) -> usize {
-        self.client.command_queue_depth()
+    fn command_submissions_in_flight(&self) -> usize {
+        self.client.command_submissions_in_flight()
     }
 
     fn command_queue_capacity(&self) -> usize {
