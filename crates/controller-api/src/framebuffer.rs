@@ -1,8 +1,8 @@
 //! Canonical RGBA8 framebuffer storage and coherent snapshot semantics.
 //!
 //! The store has one process-local revision sequence. A revision increments
-//! exactly once after framebuffer contents or availability become a new current
-//! complete frame. Byte-identical full-frame replacements keep the existing
+//! exactly once after framebuffer contents or availability become a new coherent
+//! frame. Byte-identical commits with unchanged availability keep the existing
 //! revision so HTTP validators do not churn on duplicate native updates.
 //! Invalidation does not increment the revision; it changes availability to
 //! stale so old pixels cannot be served as current.
@@ -304,7 +304,10 @@ impl FramebufferStore {
     /// Atomically applies a batch of canonical RGBA8 dirty rectangles.
     ///
     /// All rectangles are validated before the coherent replacement becomes
-    /// visible. The batch increments the revision exactly once.
+    /// visible. The batch increments the revision exactly once when pixels or
+    /// availability change. A byte-identical dirty batch for the current
+    /// availability state returns the existing revision without updating
+    /// timestamps or advancing validators.
     pub fn commit_dirty(
         &self,
         updates: &[DirtyRectangle],
@@ -345,12 +348,19 @@ impl FramebufferStore {
             copy_dirty_rectangle(&mut next_pixels, destination_stride, update)?;
         }
 
-        let revision = next_revision(current.revision)?;
-        current.status = if complete {
+        let target_status = if complete {
             FramebufferStatus::Current
         } else {
             FramebufferStatus::Incomplete
         };
+        if current.status == target_status
+            && next_pixels.as_slice() == current.rgba.as_ref()
+        {
+            return Ok(current.revision);
+        }
+
+        let revision = next_revision(current.revision)?;
+        current.status = target_status;
         current.revision = revision;
         current.updated_at = Some(SystemTime::now());
         current.rgba = next_pixels.into();
@@ -711,6 +721,56 @@ mod tests {
         assert_eq!(second.revision(), first.revision());
         assert_eq!(second.updated_at(), first.updated_at());
         assert_eq!(second.rgba(), first.rgba());
+    }
+
+    #[test]
+    fn identical_dirty_update_keeps_revision_and_timestamp_when_status_unchanged() {
+        let store = FramebufferStore::default();
+        assert_eq!(store.replace_rgba(2, 2, solid(2, 2, 7)), Ok(1));
+        let first = store.current_snapshot().expect("first snapshot");
+        let update = DirtyRectangle::new(
+            FramebufferRect::new(0, 0, 1, 1, display(2, 2)).expect("rect"),
+            4,
+            vec![7, 7, 7, 7],
+        )
+        .expect("update");
+        assert_eq!(store.commit_dirty(&[update], true), Ok(1));
+        let second = store.current_snapshot().expect("second snapshot");
+        assert_eq!(second.revision(), first.revision());
+        assert_eq!(second.updated_at(), first.updated_at());
+        assert_eq!(second.rgba(), first.rgba());
+    }
+
+    #[test]
+    fn changed_dirty_update_advances_revision() {
+        let store = FramebufferStore::default();
+        assert_eq!(store.replace_rgba(2, 2, solid(2, 2, 7)), Ok(1));
+        let update = DirtyRectangle::new(
+            FramebufferRect::new(1, 1, 1, 1, display(2, 2)).expect("rect"),
+            4,
+            vec![8, 8, 8, 8],
+        )
+        .expect("update");
+        assert_eq!(store.commit_dirty(&[update], true), Ok(2));
+        let snapshot = store.current_snapshot().expect("snapshot");
+        assert_eq!(snapshot.revision(), 2);
+        assert_eq!(pixel(&snapshot, 1, 1), &[8, 8, 8, 8]);
+    }
+
+    #[test]
+    fn dirty_update_completing_incomplete_frame_advances_even_with_identical_pixels() {
+        let store = FramebufferStore::default();
+        store.begin_incomplete(1, 1).expect("dimensions");
+        let update = DirtyRectangle::new(
+            FramebufferRect::new(0, 0, 1, 1, display(1, 1)).expect("rect"),
+            4,
+            vec![0, 0, 0, 0],
+        )
+        .expect("update");
+        assert_eq!(store.commit_dirty(&[update], true), Ok(1));
+        let snapshot = store.current_snapshot().expect("snapshot");
+        assert_eq!(snapshot.revision(), 1);
+        assert_eq!(snapshot.rgba(), &[0, 0, 0, 0]);
     }
 
     #[test]
