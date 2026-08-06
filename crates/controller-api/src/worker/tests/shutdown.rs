@@ -499,13 +499,14 @@ fn compatibility_shutdown_drains_commands_behind_it_and_depth_returns_to_zero() 
     assert_eq!(client.command_queue_depth(), 2);
 
     release_tx.send(()).expect("release controlled poll");
-    worker
-        .shutdown(Duration::from_secs(1))
-        .expect("worker joins after compatibility shutdown");
+    wait_for_state(&client, ConnectionState::Stopped);
 
     shutdown_ticket
         .wait(Duration::from_secs(1))
         .expect("compatibility shutdown is acknowledged");
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("stopped worker joins after compatibility shutdown");
     assert!(matches!(
         pending_ticket.wait(Duration::from_secs(1)),
         Err(DesktopError::WorkerUnavailable)
