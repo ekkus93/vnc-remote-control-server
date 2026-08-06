@@ -1,0 +1,72 @@
+name: Apply final hardening Clippy repair
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/apply-final-hardening-clippy-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Replace bridge argument list with settings object
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/controller-api/src/events.rs")
+          source = path.read_text()
+          source = source.replace(
+              """const EVENT_BRIDGE_POLL_INTERVAL: Duration = Duration::from_millis(50);\nconst EVENT_BRIDGE_DROP_TIMEOUT: Duration = Duration::from_secs(2);\n\n/// Process-wide WebSocket event transport.""",
+              """const EVENT_BRIDGE_POLL_INTERVAL: Duration = Duration::from_millis(50);\nconst EVENT_BRIDGE_DROP_TIMEOUT: Duration = Duration::from_secs(2);\n\nstruct EventBridgeStartSettings {\n    event_capacity: usize,\n    maximum_clients: usize,\n    ping_interval: Duration,\n    idle_timeout: Duration,\n    metrics: Metrics,\n    drop_timeout: Duration,\n}\n\n/// Process-wide WebSocket event transport.""",
+          )
+          source = source.replace(
+              """        Self::start_with_hook(\n            worker_events,\n            event_capacity,\n            maximum_clients,\n            ping_interval,\n            idle_timeout,\n            metrics,\n            || {},\n            EVENT_BRIDGE_DROP_TIMEOUT,\n        )""",
+              """        Self::start_with_hook(\n            worker_events,\n            EventBridgeStartSettings {\n                event_capacity,\n                maximum_clients,\n                ping_interval,\n                idle_timeout,\n                metrics,\n                drop_timeout: EVENT_BRIDGE_DROP_TIMEOUT,\n            },\n            || {},\n        )""",
+          )
+          source = source.replace(
+              """    fn start_with_hook<H>(\n        worker_events: WorkerEvents,\n        event_capacity: usize,\n        maximum_clients: usize,\n        ping_interval: Duration,\n        idle_timeout: Duration,\n        metrics: Metrics,\n        before_loop: H,\n        drop_timeout: Duration,\n    ) -> io::Result<(Self, EventBridge)>\n    where\n        H: FnOnce() + Send + 'static,\n    {\n        let hub = Self::detached(\n            event_capacity,\n            maximum_clients,\n            ping_interval,\n            idle_timeout,\n            metrics,\n        );""",
+              """    fn start_with_hook<H>(\n        worker_events: WorkerEvents,\n        settings: EventBridgeStartSettings,\n        before_loop: H,\n    ) -> io::Result<(Self, EventBridge)>\n    where\n        H: FnOnce() + Send + 'static,\n    {\n        let EventBridgeStartSettings {\n            event_capacity,\n            maximum_clients,\n            ping_interval,\n            idle_timeout,\n            metrics,\n            drop_timeout,\n        } = settings;\n        let hub = Self::detached(\n            event_capacity,\n            maximum_clients,\n            ping_interval,\n            idle_timeout,\n            metrics,\n        );""",
+          )
+          old = """EventHub::start_with_hook(\n                worker_events,\n                4,\n                2,\n                Duration::from_secs(1),\n                Duration::from_secs(3),\n                Metrics::default(),\n"""
+          new = """EventHub::start_with_hook(\n                worker_events,\n                EventBridgeStartSettings {\n                    event_capacity: 4,\n                    maximum_clients: 2,\n                    ping_interval: Duration::from_secs(1),\n                    idle_timeout: Duration::from_secs(3),\n                    metrics: Metrics::default(),\n                    drop_timeout: Duration::from_millis(25),\n                },\n"""
+          source = source.replace(old, new)
+          source = source.replace(
+              """                },\n                Duration::from_millis(25),\n            )""",
+              """                },\n            )""",
+          )
+          source = source.replace(
+              """                || panic!(\"test-only bridge panic\"),\n                Duration::from_millis(25),\n            )""",
+              """                || panic!(\"test-only bridge panic\"),\n            )""",
+          )
+          path.write_text(source)
+          PY
+
+      - name: Format and verify patch
+        shell: bash
+        run: |
+          cargo fmt --all
+          grep -q 'struct EventBridgeStartSettings' crates/controller-api/src/events.rs
+          test "$(grep -c 'EventBridgeStartSettings {' crates/controller-api/src/events.rs)" -eq 4
+          ! grep -q 'fn start_with_hook<H>(.*event_capacity' crates/controller-api/src/events.rs
+          git diff --check
+
+      - name: Commit repair and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-final-hardening-clippy-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/controller-api/src/events.rs .github/workflows/apply-final-hardening-clippy-fix.yml
+          git commit -m "Refactor event bridge startup settings"
+          git push origin HEAD:master
