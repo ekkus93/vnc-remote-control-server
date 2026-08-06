@@ -50,7 +50,7 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         server_result,
         worker,
         event_bridge,
-        config.command_ack_timeout,
+        config.shutdown_timeout,
     )?;
     Ok(())
 }
