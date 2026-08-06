@@ -46,13 +46,11 @@ fn in_flight_depth_can_exceed_capacity_and_still_converges_to_zero() {
         let release = Arc::clone(&release);
         let result_tx = result_tx.clone();
         submitters.push(thread::spawn(move || {
-            let result = client.submit_with_before_send_hook(
-                WorkerCommand::RequestFullRefresh,
-                move || {
+            let result =
+                client.submit_with_before_send_hook(WorkerCommand::RequestFullRefresh, move || {
                     parked.wait();
                     release.wait();
-                },
-            );
+                });
             result_tx.send(result).expect("submit result is observed");
         }));
     }
