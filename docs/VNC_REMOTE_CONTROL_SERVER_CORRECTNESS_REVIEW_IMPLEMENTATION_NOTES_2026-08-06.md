@@ -4,6 +4,8 @@ Date: 2026-08-06
 
 Status: implementation in progress; this is not completion evidence.
 
+Implementation candidate source tree before this anchor: `ae86beded445b1324b46350d6e8742139d5a954b`.
+
 Implemented surfaces currently under permanent validation:
 
 - pre-`Connected` confirmed-stall recovery without widening the state graph;
@@ -15,7 +17,8 @@ Implemented surfaces currently under permanent validation:
 - one total process-shutdown budget and one total startup budget;
 - zero-budget nonblocking exit observation before deliberate detach;
 - project-owned Rust and C VNC-password scrubbing, with the LibVNCClient-owned callback copy retained as an explicit residual;
-- structured path-specific privacy tests for input release, command payloads, and bearer logging;
+- structured path-specific privacy tests for input release, command payloads, bearer logging, and VNC-password failure propagation;
+- a deterministic regression proving submissions in flight may exceed channel capacity and converge to zero;
 - deterministic replacements for the two known sleep-only negative proofs;
 - a committed ignored 1920×1080 framebuffer allocation/timing measurement utility.
 
