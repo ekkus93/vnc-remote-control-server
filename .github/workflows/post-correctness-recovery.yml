@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: post-correctness-recovery-master-slim-final
+  group: post-correctness-recovery-master-slim-preflight
   cancel-in-progress: true
 
 jobs:
@@ -32,13 +32,15 @@ jobs:
           toolchain: 1.97.1
           components: rustfmt
 
-      - name: Apply fail-closed recovery patches
+      - name: Preflight and apply fail-closed recovery patches
         shell: bash
         run: |
           set -euo pipefail
+          python3 .github/post-correctness-recovery-preflight.py
           python3 .github/post-correctness-recovery.py
           python3 .github/post-correctness-recovery-boundary-fix.py
           python3 .github/post-correctness-recovery-api-fix.py
+          test ! -e .github/post-correctness-recovery-preflight.py
           test ! -e .github/post-correctness-recovery.py
           test ! -e .github/post-correctness-recovery-boundary-fix.py
           test ! -e .github/post-correctness-recovery-api-fix.py
