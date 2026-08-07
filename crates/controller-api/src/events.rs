@@ -214,7 +214,17 @@ impl EventHub {
     /// Runs one authenticated WebSocket until client closure or a bounded failure.
     pub async fn serve(
         &self,
-        mut socket: WebSocket,
+        socket: WebSocket,
+        subscription: EventSubscription,
+        initial: ServerEvent,
+    ) {
+        self.serve_socket(EventSocket::Production(socket), subscription, initial)
+            .await;
+    }
+
+    async fn serve_socket(
+        &self,
+        mut socket: EventSocket,
         mut subscription: EventSubscription,
         initial: ServerEvent,
     ) {
@@ -276,10 +286,7 @@ impl EventHub {
                             last_activity = Instant::now();
                         }
                         Some(Ok(Message::Close(_))) | None => break,
-                        Some(Err(error)) => {
-                            tracing::debug!(error = %error, "websocket_receive_failed");
-                            break;
-                        }
+                        Some(Err(())) => break,
                     }
                 }
                 _ = heartbeat.tick() => {
@@ -357,6 +364,54 @@ impl EventHub {
         let event = self.event(SystemTime::now(), payload)?;
         let _ = self.sender.send(event.clone());
         Ok(event)
+    }
+}
+
+enum EventSocket {
+    Production(WebSocket),
+    #[cfg(test)]
+    Test(TestSocket),
+}
+
+impl EventSocket {
+    async fn send(&mut self, message: Message) -> Result<(), ()> {
+        match self {
+            Self::Production(socket) => socket.send(message).await.map_err(|_| ()),
+            #[cfg(test)]
+            Self::Test(socket) => socket.send(message),
+        }
+    }
+
+    async fn recv(&mut self) -> Option<Result<Message, ()>> {
+        match self {
+            Self::Production(socket) => match socket.recv().await {
+                Some(Ok(message)) => Some(Ok(message)),
+                Some(Err(error)) => {
+                    tracing::debug!(error = %error, "websocket_receive_failed");
+                    Some(Err(()))
+                }
+                None => None,
+            },
+            #[cfg(test)]
+            Self::Test(socket) => socket.recv().await.map(Ok),
+        }
+    }
+}
+
+#[cfg(test)]
+struct TestSocket {
+    outbound: tokio::sync::mpsc::UnboundedSender<Message>,
+    inbound: tokio::sync::mpsc::UnboundedReceiver<Message>,
+}
+
+#[cfg(test)]
+impl TestSocket {
+    fn send(&mut self, message: Message) -> Result<(), ()> {
+        self.outbound.send(message).map_err(|_| ())
+    }
+
+    async fn recv(&mut self) -> Option<Message> {
+        self.inbound.recv().await
     }
 }
 
@@ -576,12 +631,9 @@ enum EventPayload {
     ProtocolError,
 }
 
-async fn send_event(socket: &mut WebSocket, event: &ServerEvent) -> Result<(), ()> {
+async fn send_event(socket: &mut EventSocket, event: &ServerEvent) -> Result<(), ()> {
     let serialized = serde_json::to_string(event).map_err(|_| ())?;
-    socket
-        .send(Message::Text(serialized.into()))
-        .await
-        .map_err(|_| ())
+    socket.send(Message::Text(serialized.into())).await
 }
 
 fn unix_milliseconds(value: SystemTime) -> u64 {
@@ -685,6 +737,90 @@ mod tests {
         assert!(matches!(second, Err(EventSequenceError::Exhausted)));
         assert!(hub.sequence_exhausted.load(Ordering::Acquire));
         assert_eq!(logs.matches("event_hub_sequence_exhausted").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn established_client_closes_on_sequence_exhaustion_with_bounded_1011() {
+        let hub = EventHub::detached(
+            4,
+            1,
+            Duration::from_millis(10),
+            Duration::from_secs(1),
+            Metrics::default(),
+        );
+        let subscription = hub.subscribe().expect("client subscribes");
+        let initial = hub
+            .snapshot_event(&snapshot(), Some(4))
+            .expect("initial snapshot sequence allocates");
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let socket = EventSocket::Test(TestSocket {
+            outbound: outbound_tx,
+            inbound: inbound_rx,
+        });
+        let serving_hub = hub.clone();
+
+        let server = async move {
+            serving_hub
+                .serve_socket(socket, subscription, initial)
+                .await;
+        };
+        let client = async move {
+            let _keep_inbound_open = inbound_tx;
+            let initial_message = time::timeout(Duration::from_millis(100), outbound_rx.recv())
+                .await
+                .expect("initial snapshot is delivered within the bound")
+                .expect("event socket remains open");
+            let serialized = match initial_message {
+                Message::Text(text) => text.to_string(),
+                other => panic!("expected initial text snapshot, got {other:?}"),
+            };
+            assert!(serialized.contains("\"type\":\"snapshot\""));
+            for forbidden in [
+                "clipboard_text",
+                "typed_text",
+                "pixels",
+                "password",
+                "token",
+            ] {
+                assert!(!serialized.contains(forbidden));
+            }
+
+            hub.force_sequence_for_test(u64::MAX);
+            assert!(matches!(
+                hub.publish_test(EventPayload::ProtocolError),
+                Err(EventSequenceError::Exhausted)
+            ));
+
+            let close = time::timeout(Duration::from_millis(200), async {
+                loop {
+                    match outbound_rx.recv().await {
+                        Some(Message::Close(frame)) => break frame.expect("close frame has detail"),
+                        Some(Message::Ping(_)) => {}
+                        Some(other) => panic!("unexpected server message after exhaustion: {other:?}"),
+                        None => panic!("event socket closed without an exhaustion close frame"),
+                    }
+                }
+            })
+            .await
+            .expect("established client closes within the heartbeat bound");
+            assert_eq!(close.code, 1011);
+            let reason = close.reason.to_string();
+            assert_eq!(reason, "event sequence exhausted");
+            for forbidden in [
+                "clipboard",
+                "typed",
+                "password",
+                "token",
+                "framebuffer",
+                "screenshot",
+                "query",
+            ] {
+                assert!(!reason.contains(forbidden));
+            }
+        };
+
+        tokio::join!(server, client);
     }
 
     #[tokio::test]
