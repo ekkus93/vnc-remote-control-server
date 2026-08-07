@@ -241,6 +241,8 @@ class DocumentationContractTests(unittest.TestCase):
             "docs/WEBSOCKET_EVENTS.md",
             "127.0.0.1:8080",
             "Product boundary",
+            "request_id_exhausted",
+            "request-id-exhausted",
         ):
             self.assertIn(required, readme)
 
@@ -292,6 +294,9 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("client event buffer exhausted", document)
         self.assertIn("event sequence exhausted", document)
         self.assertIn("client heartbeat timeout", document)
+        self.assertIn("without waiting for the next heartbeat", document)
+        self.assertIn("sequence_exhausted_notify", source)
+        self.assertIn("notify_waiters", source)
         for forbidden in ("clipboard_text", "typed_text", "pixels", "password", "token"):
             self.assertIn(forbidden, source)
         self.assertIn("never contain typed text", document)
