@@ -99,8 +99,6 @@ pub enum WorkerFailureKind {
     Transport,
     /// A refresh probe exceeded its deadline.
     Timeout,
-    /// A refresh probe exceeded its deadline.
-    Timeout,
     /// The remote framebuffer or protocol contract failed.
     Protocol,
     /// Another bounded native adapter operation failed.
