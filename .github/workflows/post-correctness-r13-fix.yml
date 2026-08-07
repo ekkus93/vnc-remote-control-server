@@ -1,0 +1,85 @@
+name: Post-correctness R13 framebuffer repair
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/post-correctness-r13-fix.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: post-correctness-r13-framebuffer-repair
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact master tip
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Install native and R13 dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            libvncserver-dev \
+            pkg-config \
+            tigervnc-tools \
+            tigervnc-viewer \
+            xvfb
+
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+
+      - name: Apply exact framebuffer repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/post-correctness-r13-fix.py
+          test ! -e .github/post-correctness-r13-fix.py
+          test ! -e .github/workflows/post-correctness-r13-fix.yml
+          git diff --check
+
+      - name: Verify native source contract
+        run: python3 -m unittest tests.test_native_contract -v
+
+      - name: Run native adapter smoke
+        run: bash tests/native/run.sh
+
+      - name: Run R13 Compose integration
+        env:
+          R13_FAILURE_ARTIFACT_DIR: artifacts/r13-integration-failure
+        run: bash tests/integration/run.sh
+
+      - name: Verify malformed update requests are absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -d artifacts/r13-integration-failure ]]; then
+            printf 'unexpected R13 failure artifact directory after successful validation\n' >&2
+            exit 1
+          fi
+
+      - name: Commit validated R13 repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Repair LibVNCClient incremental framebuffer rearm"
+          git push origin HEAD:master
