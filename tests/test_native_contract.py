@@ -85,6 +85,7 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("vrc_secure_scrub(buffer, length);", primitive)
         self.assertIn("free(buffer);", primitive)
         self.assertLess(primitive.index("vrc_secure_scrub"), primitive.index("free(buffer)"))
+        self.assertEqual(source.count("vrc_secure_scrub("), 2)
 
         helper_start = source.index("static void vrc_release_clipboard")
         helper_end = source.index("static char *vrc_duplicate", helper_start)
@@ -116,6 +117,10 @@ class NativeContractTests(unittest.TestCase):
             "vrc_scrub_and_free(client->password, strlen(client->password) + 1U);",
             destroy,
         )
+        self.assertNotIn("free(client->clipboard);", source)
+        self.assertNotIn("free(client->password);", source)
+        self.assertNotIn("free(copy);", source)
+        self.assertEqual(source.count("vrc_scrub_and_free("), 4)
 
     def test_reconnect_secret_duplication_is_named_and_local(self):
         source = DESKTOP_WORKER.read_text(encoding="utf-8")
