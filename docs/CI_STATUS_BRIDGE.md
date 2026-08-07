@@ -4,7 +4,7 @@
 
 This repository publishes the latest authoritative `CI` result for `master` into a persistent GitHub issue. The issue gives ChatGPT and other connector-based tools a stable discovery point for the exact run ID, commit SHA, job IDs, step results, abnormal steps, timings, and artifact metadata.
 
-The issue is an index into GitHub Actions. It does not replace native checks, job logs, artifacts, or branch protection.
+The issue is an index into GitHub Actions. It does not replace native checks, job logs, artifacts, Release Gates, or branch protection.
 
 ## Configuration
 
@@ -65,16 +65,35 @@ The issue contains a concise Markdown summary and a fenced JSON document with:
 
 Pagination is enabled for jobs and artifacts. The renderer refuses to silently truncate invalid JSON.
 
-## CI quality gates
+## Current CI quality surface
 
-The authoritative `CI` workflow currently validates the bridge itself because the application implementation has not started yet. It performs:
+The authoritative `CI` workflow validates the implemented Rust, Python, native VNC, Docker, API, and documentation surfaces. The exact step set may evolve with the repository, so `.github/workflows/ci.yml` is the machine authority; the current high-level contract is:
 
-- Python compilation of the renderer and tests;
-- deterministic unit tests for payload generation, malformed input, branch isolation, abnormal-step reporting, same-run state monotonicity, and issue-size compaction;
-- static workflow-contract tests for permissions, no-checkout publisher behavior, branch scoping, stale-run checks, pagination, and artifact publication;
-- upload of a small `ci-evidence-<run-id>` artifact so artifact indexing is exercised end to end.
+### Repository quality gates
 
-As Rust, Docker, and integration-test code is added, their real quality gates must be added to this same authoritative workflow without weakening the bridge tests.
+- checkout and pinned Python/Rust setup;
+- native build dependencies and locked Rust dependency fetch;
+- `cargo fmt --check`;
+- Clippy with warnings denied;
+- complete Rust workspace tests;
+- rustdoc with warnings denied;
+- compilation of first-party Python;
+- Python, documentation, client/demo, and workflow contract tests;
+- first-party shell syntax checks;
+- construction and upload of sanitized CI evidence.
+
+### Secured Debian desktop and native adapter
+
+- stock desktop image smoke test;
+- native LibVNCClient adapter smoke test;
+- real TigerVNC WorkerHandle pointer/input E2E;
+- failure-diagnostics verification;
+- real TigerVNC text and clipboard E2E;
+- authenticated HTTP-to-TigerVNC E2E;
+- production controller image, Compose, and persistence smoke validation;
+- R13 Compose integration and E2E validation.
+
+The bridge publishes this `CI` workflow only. Release acceptance additionally requires the separate permanent `Release Gates` workflow to pass on the exact same candidate SHA; see [`VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md`](VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md).
 
 ## ChatGPT operating procedure
 
@@ -86,11 +105,14 @@ During an implementation loop:
 4. Use `workflow.run_id` to fetch jobs.
 5. Use the exact failed job ID to fetch its log.
 6. Fix the first meaningful failure and repeat.
-7. Claim CI success only when issue `#1` reports `completed` / `success` for the exact candidate SHA.
+7. Claim `CI` success only when issue `#1` reports `completed` / `success` for the exact candidate SHA.
+8. When release acceptance is required, independently require `Release Gates` to be `completed` / `success` on that same exact SHA.
 
-## Validation record
+## Historical bridge-validation record
 
-### Successful end-to-end path
+The records below document the original end-to-end validation of the status bridge itself. They are intentionally retained as point-in-time evidence; they are not the latest application acceptance runs.
+
+### Successful initial bridge path
 
 - Commit: `46aa19ac4e256e16c991878227bf696299e0f3c1`
 - CI run: `30859425666`, attempt `1`
@@ -100,7 +122,7 @@ During an implementation loop:
 - Artifact digest: `sha256:7b10e64f4fcb3bbbb5552e64786569c7b66fddc9f718c56545f0407668abf08f`
 - The downloaded artifact identified the same commit SHA, run ID, attempt, workflow, and successful result.
 
-### Real failure path
+### Real failure-path probe
 
 A temporary unit-test probe was committed solely to validate failure publication and then removed.
 
@@ -112,4 +134,4 @@ A temporary unit-test probe was committed solely to validate failure publication
 - Issue `#1` published the exact failed job ID and failed step without copying raw logs.
 - Probe removal commit: `b6524f77891ae8d7f089010521020aafd4b6d831`
 
-The probe file is not present in the final repository. The final candidate must be accepted only when issue `#1` reports a newer successful run for the exact final SHA.
+The probe file is not present in the current repository. For present status, always read issue `#1` and require its reported SHA to match the candidate being evaluated.
