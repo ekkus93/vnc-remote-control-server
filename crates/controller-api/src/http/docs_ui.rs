@@ -78,10 +78,9 @@ fn static_response(
         HeaderValue::from_static("same-origin"),
     );
     if let Some(policy) = csp {
-        response.headers_mut().insert(
-            "content-security-policy",
-            HeaderValue::from_static(policy),
-        );
+        response
+            .headers_mut()
+            .insert("content-security-policy", HeaderValue::from_static(policy));
     }
     response
 }
