@@ -6,17 +6,24 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-LIVING_DOCUMENTS = (
+CURRENT_MARKDOWN_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "docs" / "README.md",
     ROOT / "docs" / "OPERATOR_GUIDE.md",
     ROOT / "docs" / "WEBSOCKET_EVENTS.md",
     ROOT / "docs" / "CUSTOM_DESKTOP_IMAGES.md",
+    ROOT / "docs" / "CI_STATUS_BRIDGE.md",
+    ROOT / "docs" / "VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md",
+    ROOT / "docs" / "LIBVNCCLIENT_BINDING_DECISION.md",
     ROOT / "deploy" / "README.md",
+    ROOT / "desktop" / "README.md",
     ROOT / "python" / "README.md",
+    ROOT / "crates" / "controller-api" / "tests" / "FRAMEBUFFER_MEASUREMENT.md",
+    ROOT / "tests" / "measurement" / "framebuffer" / "README.md",
     ROOT / "SECURITY.md",
     ROOT / "CONTRIBUTING.md",
     ROOT / "CLAUDE.md",
+    ROOT / "CODE_OF_CONDUCT.md",
 )
 
 LOCAL_LINK = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
@@ -28,6 +35,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
         for required in (
             "## Current living documentation",
+            "## Current engineering support documentation",
             "## Historical engineering artifacts",
             "point-in-time records",
             "VNC_REMOTE_CONTROL_SERVER_V01_SPEC.md",
@@ -37,9 +45,16 @@ class DocumentationFreshnessTests(unittest.TestCase):
             "CUSTOM_DESKTOP_IMAGES.md",
             "../python/README.md",
             "../deploy/README.md",
+            "../desktop/README.md",
             "../SECURITY.md",
+            "../CONTRIBUTING.md",
+            "../CLAUDE.md",
+            "../CODE_OF_CONDUCT.md",
             "CI_STATUS_BRIDGE.md",
             "VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md",
+            "LIBVNCCLIENT_BINDING_DECISION.md",
+            "../crates/controller-api/tests/FRAMEBUFFER_MEASUREMENT.md",
+            "../tests/measurement/framebuffer/README.md",
         ):
             self.assertIn(required, index)
 
@@ -109,6 +124,47 @@ class DocumentationFreshnessTests(unittest.TestCase):
         ):
             self.assertIn(required, deploy_readme)
 
+    def test_component_and_measurement_docs_track_current_entry_points(self) -> None:
+        desktop_readme = (ROOT / "desktop" / "README.md").read_text(encoding="utf-8")
+        desktop_dockerfile = (ROOT / "desktop" / "Dockerfile").read_text(encoding="utf-8")
+        base = re.search(
+            r"FROM debian:13\.6-slim@(sha256:[0-9a-f]{64})",
+            desktop_dockerfile,
+        )
+        self.assertIsNotNone(base)
+        assert base is not None
+        for required in (
+            "Debian 13.6 slim",
+            base.group(1),
+            "5901/tcp",
+            "/run/secrets/vnc_password",
+            "/tmp/vnc-test-app-state.json",
+        ):
+            self.assertIn(required, desktop_readme)
+
+        launcher_doc = (ROOT / "tests" / "measurement" / "framebuffer" / "README.md").read_text(
+            encoding="utf-8"
+        )
+        measurement_doc = (
+            ROOT / "crates" / "controller-api" / "tests" / "FRAMEBUFFER_MEASUREMENT.md"
+        ).read_text(encoding="utf-8")
+        launcher = (ROOT / "tests" / "measurement" / "framebuffer" / "run.py").read_text(
+            encoding="utf-8"
+        )
+        for required in (
+            "framebuffer_measurement",
+            "measure_representative_frame_pipeline",
+            "--ignored",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ):
+            self.assertIn(required, measurement_doc)
+            self.assertIn(required, launcher)
+        self.assertIn("crates/controller-api/tests/framebuffer_measurement.rs", launcher_doc)
+        self.assertIn("crates/controller-api/tests/FRAMEBUFFER_MEASUREMENT.md", launcher_doc)
+        self.assertTrue((ROOT / "crates" / "controller-api" / "tests" / "framebuffer_measurement.rs").is_file())
+
     def test_contributor_guidance_preserves_historical_docs(self) -> None:
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
@@ -119,9 +175,25 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertIn("Ordinary focused changes do not require", contributing)
         self.assertIn("vnc-remote-control-demo", claude)
 
-    def test_local_markdown_links_in_living_docs_resolve(self) -> None:
+    def test_contributing_quality_tools_match_current_workflows(self) -> None:
+        contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        release_gates = (ROOT / ".github" / "workflows" / "release-gates.yml").read_text(
+            encoding="utf-8"
+        )
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+
+        self.assertIn("cargo-deny", contributing)
+        self.assertIn("shellcheck", contributing)
+        self.assertIn("actionlint", contributing)
+        self.assertIn("docker build --check", contributing)
+        self.assertNotIn("hadolint", contributing.lower())
+        self.assertIn("cargo deny check", makefile)
+        for required in ("shellcheck", "actionlint", "docker build --check"):
+            self.assertIn(required, release_gates)
+
+    def test_local_markdown_links_in_current_docs_resolve(self) -> None:
         failures: list[str] = []
-        for document in LIVING_DOCUMENTS:
+        for document in CURRENT_MARKDOWN_DOCUMENTS:
             text = document.read_text(encoding="utf-8")
             for target in LOCAL_LINK.findall(text):
                 target = target.split("#", 1)[0]

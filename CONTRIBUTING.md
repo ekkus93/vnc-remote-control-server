@@ -13,7 +13,8 @@ The intended branch-protection policy is documented even though direct-owner dev
 - GNU Make;
 - Docker Engine with Compose v2 for container milestones;
 - a C compiler, `pkg-config`, and Debian's `libvncserver-dev` package for native development;
-- `shellcheck`, `hadolint`, and `actionlint` for the complete local quality surface.
+- `cargo-deny` for `make security-scan`;
+- `shellcheck` and `actionlint` for reproducing the release-policy lint checks; Docker BuildKit provides Dockerfile validation through `docker build --check`.
 
 ## Quality policy
 
