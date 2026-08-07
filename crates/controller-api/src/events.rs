@@ -795,9 +795,13 @@ mod tests {
             let close = time::timeout(Duration::from_millis(200), async {
                 loop {
                     match outbound_rx.recv().await {
-                        Some(Message::Close(frame)) => break frame.expect("close frame has detail"),
+                        Some(Message::Close(frame)) => {
+                            break frame.expect("close frame has detail");
+                        }
                         Some(Message::Ping(_)) => {}
-                        Some(other) => panic!("unexpected server message after exhaustion: {other:?}"),
+                        Some(other) => {
+                            panic!("unexpected server message after exhaustion: {other:?}")
+                        }
                         None => panic!("event socket closed without an exhaustion close frame"),
                     }
                 }
