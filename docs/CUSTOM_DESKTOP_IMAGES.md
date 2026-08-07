@@ -195,7 +195,7 @@ services:
     build: !reset null
 ```
 
-The `!reset null` is intentional: it removes the stock service's inherited `build` section so Compose uses the already-built custom image instead of rebuilding the stock `desktop/Dockerfile` under the new tag.
+The `!reset null` is intentional: it removes the stock service's inherited `build` section so Compose uses the already-built custom image instead of rebuilding the stock `desktop/Dockerfile` under the new tag. A plain `build: null` is not the reset syntax used by this example; keep the explicit `!reset null` tag when merging with `deploy/compose.yaml`.
 
 Then start the stack with the stock production topology plus the override:
 
