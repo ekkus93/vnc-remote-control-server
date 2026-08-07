@@ -4,6 +4,8 @@ Typed synchronous Python client for the controller HTTP API.
 
 The core HTTP client has no third-party runtime dependencies. WebSocket event streaming is optional and uses `websocket-client`.
 
+For the project-wide documentation index and the distinction between current guides and historical milestone artifacts, see [`../docs/README.md`](../docs/README.md).
+
 ## Where the client connects
 
 The Python client connects to the **Rust controller API**, not directly to the VNC desktop container.
@@ -23,6 +25,8 @@ project-owned VNC desktop container
 `base_url` is therefore the controller's HTTP address, such as `http://127.0.0.1:8080` on the host or `http://controller:8080` from another container on a shared Docker network.
 
 The Python client does not need the desktop service name, desktop image name, VNC port, or VNC password. Those are controller/deployment concerns. Swapping a supported custom desktop image behind an unchanged controller does not require changing Python application code. See [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md) for the complete configuration chain.
+
+A running local controller also exposes Swagger UI at `http://127.0.0.1:8080/docs`, ReDoc at `http://127.0.0.1:8080/redoc`, and the raw OpenAPI document at `http://127.0.0.1:8080/openapi.json`.
 
 ## Install
 
@@ -61,12 +65,12 @@ python -m pip install \
 Installing from `master` is convenient for development, but it is not reproducible because `master` can advance. For deployments, automation, and other reproducible environments, pin the install to a full Git commit SHA:
 
 ```bash
-COMMIT_SHA=0c02f244e12e294fd078edad8b31cefb2bff5f8a
+COMMIT_SHA=cccaee213e0c66b0265ff18cd9675b0d9c24e259
 python -m pip install \
   "vnc-remote-control-client @ git+https://github.com/ekkus93/vnc-remote-control-server.git@${COMMIT_SHA}#subdirectory=python"
 ```
 
-The SHA above is an example known-good repository revision that contains the demo CLI. Replace it deliberately when upgrading so the deployed Python client version changes only when you choose to move the pin.
+The SHA above is an example known-good repository revision that contains the Python client and demo CLI and passed both permanent CI and Release Gates. Replace it deliberately when upgrading so the deployed Python client version changes only when you choose to move the pin.
 
 Installing directly from GitHub requires `git` to be available on the machine running `pip`.
 
