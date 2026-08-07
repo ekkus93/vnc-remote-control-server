@@ -58,13 +58,20 @@ static void vrc_secure_scrub(void *buffer, size_t length) {
     }
 }
 
+static void vrc_scrub_and_free(void *buffer, size_t length) {
+    if (buffer == NULL) {
+        return;
+    }
+    vrc_secure_scrub(buffer, length);
+    free(buffer);
+}
+
 static void vrc_release_clipboard(char **clipboard, size_t *length) {
     if (clipboard == NULL || length == NULL) {
         return;
     }
     if (*clipboard != NULL) {
-        vrc_secure_scrub(*clipboard, *length + 1U);
-        free(*clipboard);
+        vrc_scrub_and_free(*clipboard, *length + 1U);
     }
     *clipboard = NULL;
     *length = 0U;
@@ -421,8 +428,7 @@ vrc_status vrc_client_send_clipboard(vrc_client *client, const char *text, size_
     }
     copy[text_length] = '\0';
     sent = SendClientCutText(client->native, copy, (int)text_length);
-    vrc_secure_scrub(copy, text_length + 1U);
-    free(copy);
+    vrc_scrub_and_free(copy, text_length + 1U);
     if (!sent) {
         vrc_set_error(client, "clipboard send failed");
         return VRC_STATUS_NATIVE_FAILURE;
@@ -549,8 +555,7 @@ void vrc_client_destroy(vrc_client *client) {
     }
     vrc_release_clipboard(&client->clipboard, &client->clipboard_length);
     if (client->password != NULL) {
-        vrc_secure_scrub(client->password, strlen(client->password));
-        free(client->password);
+        vrc_scrub_and_free(client->password, strlen(client->password) + 1U);
         client->password = NULL;
     }
     free(client->host);
