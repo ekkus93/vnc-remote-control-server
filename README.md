@@ -55,16 +55,14 @@ The implementation on `master` includes:
 - authenticated HTTP and WebSocket APIs with bounded overload behavior and payload-free observability;
 - hosted Swagger UI, ReDoc, and raw OpenAPI 3.1 documentation;
 - a typed Python client with zero third-party dependencies for HTTP and optional WebSocket event support;
+- an installed `vnc-remote-control-demo` CLI for exercising status, screenshots, pointer/keyboard input, clipboard, reconnect, metrics, and bounded WebSocket event streaming;
 - non-root desktop and controller images;
 - production Compose with file-mounted secrets, internal-only raw VNC, a read-only controller filesystem, bounded temporary storage, and optional desktop-home persistence;
-- real TigerVNC, HTTP/WebSocket, Compose, reconnect, resource-bound, and shutdown E2E validation.
+- real TigerVNC, HTTP/WebSocket, Compose, reconnect, resource-bound, shutdown, Python-contract, and documentation-contract validation.
 
-The authoritative plan remains:
+The current operational/reference documentation is indexed in [`docs/README.md`](docs/README.md). Dated specs, TODOs, implementation notes, review documents, and evidence files are retained as point-in-time engineering records; they are not the authority for current `master` when later implementation work has superseded them.
 
-- [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_SPEC_2026-08-03.md)
-- [`docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md`](docs/VNC_REMOTE_CONTROL_SERVER_REBASE_TODO_2026-08-03.md)
-
-v0.1 is accepted on release-candidate commit `dd3b14917ad5e239573d584238ff67ded8138203`. Both permanent `CI` and `Release Gates` workflows passed on that exact SHA. See [`docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md`](docs/VNC_REMOTE_CONTROL_SERVER_R16_EVIDENCE_2026-08-05.md) for the acceptance matrix, retained artifacts, security determinations, and known limitations.
+Release acceptance is fail-closed: both permanent `CI` and `Release Gates` must pass on the exact candidate SHA. The current policy is documented in [`docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md`](docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md), and [`docs/CI_STATUS_BRIDGE.md`](docs/CI_STATUS_BRIDGE.md) explains the persistent issue used to discover the latest authoritative `CI` result for `master`.
 
 ## Security revalidation reminder
 
@@ -117,7 +115,7 @@ Open the hosted API reference in a browser:
 
 The documentation routes are public, but every `/v1/*` operation invoked from Swagger UI still requires the normal bearer token. Swagger UI does not persist authorization across reloads and has its external validator disabled. The UI JavaScript/CSS is loaded from exact-version CDN URLs (`swagger-ui-dist` 5.32.11 and ReDoc 2.5.3); the API specification itself is served locally from the repository-owned `docs/openapi.json` contract.
 
-### Python client
+### Python client and demo
 
 Install the in-repository Python client from a local checkout:
 
@@ -140,9 +138,9 @@ python -m pip install \
   "vnc-remote-control-client[websocket] @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
 ```
 
-For deployments and reproducible automation, pin the GitHub install to a full commit SHA instead of `master`. See [`python/README.md`](python/README.md) for the pinned-commit example and upgrade guidance.
+For deployments and reproducible automation, pin the GitHub install to a full commit SHA instead of `master`. See [`python/README.md`](python/README.md) for a known-good pinned example and upgrade guidance.
 
-Example:
+Library example:
 
 ```python
 from pathlib import Path
@@ -158,7 +156,18 @@ client.click_pointer(640, 400)
 client.type_keyboard_text("hello from Python")
 ```
 
-The HTTP client has no third-party runtime dependencies. It exposes typed responses and structured API errors, supports conditional screenshot ETags, and does not silently clamp invalid input. See [`python/README.md`](python/README.md) for the complete usage guide.
+Installing the package also installs the demo CLI:
+
+```bash
+vnc-remote-control-demo \
+  --base-url http://127.0.0.1:8080 \
+  --token-file deploy/secrets/api_token.txt \
+  overview
+```
+
+The demo intentionally accepts a token file rather than a raw bearer-token command-line argument. See [`python/README.md`](python/README.md) for screenshot, pointer, keyboard, clipboard, reconnect, metrics, and WebSocket event examples.
+
+The HTTP client has no third-party runtime dependencies. It exposes typed responses and structured API errors, supports conditional screenshot ETags, and does not silently clamp invalid input.
 
 ### Custom desktop images
 
@@ -179,17 +188,20 @@ docker compose -f deploy/compose.yaml down --volumes --remove-orphans
 
 ## Documentation
 
+Start with [`docs/README.md`](docs/README.md), which distinguishes living/current documentation from historical milestone artifacts.
+
 - Hosted Swagger UI: `/docs`.
 - Hosted ReDoc: `/redoc`.
 - Hosted raw OpenAPI: `/openapi.json`.
-- [`python/README.md`](python/README.md): Python client installation from a local checkout or directly from GitHub, reproducible commit pinning, endpoint usage, screenshots, WebSocket events, and errors.
+- [`python/README.md`](python/README.md): Python client installation from a local checkout or directly from GitHub, reproducible commit pinning, endpoint usage, demo CLI, screenshots, WebSocket events, and errors.
 - [`docs/CUSTOM_DESKTOP_IMAGES.md`](docs/CUSTOM_DESKTOP_IMAGES.md): custom project-owned VNC desktop images, controller target configuration, Docker networking, and the Python → controller → desktop configuration chain.
-- [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, and troubleshooting.
+- [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, hosted API docs, Python/demo discovery, and troubleshooting.
 - [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for the supported controller API.
 - [`docs/WEBSOCKET_EVENTS.md`](docs/WEBSOCKET_EVENTS.md): event envelope, event types, heartbeat behavior, and close codes.
 - [`deploy/README.md`](deploy/README.md): Compose topology and mode-specific commands.
+- [`docs/CI_STATUS_BRIDGE.md`](docs/CI_STATUS_BRIDGE.md): current CI status publication/discovery contract.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development prerequisites and quality commands.
-- [`SECURITY.md`](SECURITY.md): vulnerability-reporting policy.
+- [`SECURITY.md`](SECURITY.md): security boundaries, secret lifecycle, and residual-risk policy.
 
 ## Security boundaries
 
@@ -211,6 +223,12 @@ make lint
 make test
 make build
 make integration-test
+```
+
+Run all first-party Python/documentation/workflow contracts with:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Warnings and failing gates are defects. Fix their causes; do not suppress, downgrade, or silently bypass them.
