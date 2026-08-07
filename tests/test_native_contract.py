@@ -45,18 +45,27 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("impl Drop for NativeClient", adapter)
         self.assertNotIn("pub fn raw", adapter)
 
-    def test_native_framebuffer_updates_rearm_incremental_delivery(self):
+    def test_native_framebuffer_updates_use_library_incremental_rearm(self):
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         callback_start = source.index("static void vrc_finished_framebuffer_update")
         callback_end = source.index("static void vrc_store_clipboard", callback_start)
         callback = source[callback_start:callback_end]
-        self.assertIn("SendFramebufferUpdateRequest(", callback)
-        self.assertIn("native->width", callback)
-        self.assertIn("native->height", callback)
-        self.assertIn("TRUE", callback)
-        self.assertIn("incremental framebuffer request failed", callback)
-        self.assertIn("client->complete = 0;", callback)
-        self.assertIn("client->connected = 0;", callback)
+        self.assertNotIn("SendFramebufferUpdateRequest(", callback)
+        self.assertIn("client->revision += 1U;", callback)
+        self.assertIn("client->complete = 1;", callback)
+
+        connect_start = source.index("vrc_status vrc_client_connect")
+        connect_end = source.index("vrc_status vrc_client_poll", connect_start)
+        connect = source[connect_start:connect_end]
+        for assignment in (
+            "client->native->updateRect.x = 0;",
+            "client->native->updateRect.y = 0;",
+            "client->native->updateRect.w = client->native->width;",
+            "client->native->updateRect.h = client->native->height;",
+        ):
+            self.assertIn(assignment, connect)
+        self.assertIn("HandleRFBServerMessage automatically sends", connect)
+        self.assertLess(connect.index("updateRect.x = 0"), connect.index("SendFramebufferUpdateRequest("))
 
     def test_native_initialization_keeps_one_cleanup_owner(self):
         source = SHIM_SOURCE.read_text(encoding="utf-8")

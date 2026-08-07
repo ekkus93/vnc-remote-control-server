@@ -167,17 +167,6 @@ static void vrc_finished_framebuffer_update(rfbClient *native) {
     }
     client->revision += 1U;
     client->complete = 1;
-    if (!SendFramebufferUpdateRequest(
-            native,
-            0,
-            0,
-            native->width,
-            native->height,
-            TRUE)) {
-        vrc_set_error(client, "incremental framebuffer request failed");
-        client->complete = 0;
-        client->connected = 0;
-    }
 }
 
 static void vrc_store_clipboard(vrc_client *client, const char *text, int text_length) {
@@ -300,6 +289,14 @@ vrc_status vrc_client_connect(vrc_client *client) {
 
     client->native->width = client->native->si.framebufferWidth;
     client->native->height = client->native->si.framebufferHeight;
+    /* HandleRFBServerMessage automatically sends an incremental framebuffer
+     * request before FinishedFrameBufferUpdate. rfbGetClient initializes
+     * updateRect.x to -1, which serializes as 65535 if left untouched. Keep
+     * LibVNCClient's automatic rearm path, but make its rectangle explicit. */
+    client->native->updateRect.x = 0;
+    client->native->updateRect.y = 0;
+    client->native->updateRect.w = client->native->width;
+    client->native->updateRect.h = client->native->height;
     if (!client->native->MallocFrameBuffer(client->native)) {
         vrc_set_error(client, "VNC framebuffer initialization failed");
         return VRC_STATUS_NATIVE_FAILURE;

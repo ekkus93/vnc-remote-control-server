@@ -19,14 +19,27 @@ def assert_initial_state_and_screenshots(harness: Harness) -> str:
     display_json = display.json()
     require(display_json.get("width") == 1280 and display_json.get("height") == 800, f"bad display: {display_json}")
     require(display_json.get("complete") is True, "display was not complete")
-    screenshot = harness.request("GET", "/v1/screenshot.png")
-    require(screenshot.status == 200, f"screenshot failed: {screenshot.status}")
-    require(parse_png_dimensions(screenshot.body) == (1280, 800), "PNG dimensions were not 1280x800")
-    etag = screenshot.headers.get("etag")
-    require(bool(etag), "screenshot omitted ETag")
-    conditional = harness.request("GET", "/v1/screenshot.png", headers={"If-None-Match": etag})
-    require(conditional.status == 304 and not conditional.body, "conditional screenshot did not return empty 304")
-    return str(etag)
+    deadline = time.monotonic() + 12
+    last_status: int | None = None
+    while time.monotonic() < deadline:
+        screenshot = harness.request("GET", "/v1/screenshot.png")
+        require(screenshot.status == 200, f"screenshot failed: {screenshot.status}")
+        require(parse_png_dimensions(screenshot.body) == (1280, 800), "PNG dimensions were not 1280x800")
+        etag = screenshot.headers.get("etag")
+        require(bool(etag), "screenshot omitted ETag")
+        conditional = harness.request("GET", "/v1/screenshot.png", headers={"If-None-Match": etag})
+        last_status = conditional.status
+        if conditional.status == 304:
+            require(not conditional.body, "conditional screenshot 304 contained a response body")
+            return str(etag)
+        require(
+            conditional.status == 200,
+            f"conditional screenshot returned unexpected status {conditional.status}",
+        )
+        time.sleep(0.05)
+    raise AssertionError(
+        f"framebuffer did not stabilize for conditional screenshot revalidation; last status={last_status}"
+    )
 
 
 def assert_input_and_clipboard(harness: Harness, initial_etag: str) -> None:
