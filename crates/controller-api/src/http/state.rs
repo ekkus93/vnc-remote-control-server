@@ -35,6 +35,7 @@ pub struct HttpState {
     pub(super) api_token: ApiToken,
     process_instance: Arc<str>,
     request_sequence: Arc<AtomicU64>,
+    request_id_exhausted: Arc<AtomicBool>,
     shutting_down: Arc<AtomicBool>,
     pub(super) maximum_json_bytes: usize,
     pub(super) command_ack_timeout: Duration,
@@ -96,6 +97,7 @@ impl HttpState {
             api_token,
             process_instance,
             request_sequence: Arc::new(AtomicU64::new(1)),
+            request_id_exhausted: Arc::new(AtomicBool::new(false)),
             shutting_down: Arc::new(AtomicBool::new(false)),
             maximum_json_bytes,
             command_ack_timeout,
@@ -140,11 +142,53 @@ impl HttpState {
         self.shutting_down.load(Ordering::Acquire)
     }
 
-    pub(super) fn next_request_id(&self) -> RequestId {
-        let sequence = self.request_sequence.fetch_add(1, Ordering::Relaxed);
-        RequestId(Arc::from(format!("{}-{sequence}", self.process_instance)))
+    pub(super) fn request_id_sequence_exhausted(&self) -> bool {
+        if self.request_id_exhausted.load(Ordering::Acquire) {
+            return true;
+        }
+        if self.request_sequence.load(Ordering::Acquire) == u64::MAX {
+            self.mark_request_id_sequence_exhausted();
+            return true;
+        }
+        false
+    }
+
+    pub(super) fn next_request_id(&self) -> Result<RequestId, RequestIdSequenceError> {
+        if self.request_id_sequence_exhausted() {
+            return Err(RequestIdSequenceError);
+        }
+        let sequence = self
+            .request_sequence
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            });
+        match sequence {
+            Ok(sequence) => Ok(RequestId(Arc::from(format!(
+                "{}-{sequence}",
+                self.process_instance
+            )))),
+            Err(_) => {
+                self.mark_request_id_sequence_exhausted();
+                Err(RequestIdSequenceError)
+            }
+        }
+    }
+
+    fn mark_request_id_sequence_exhausted(&self) {
+        if !self.request_id_exhausted.swap(true, Ordering::AcqRel) {
+            tracing::error!("request_id_sequence_exhausted");
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn force_request_sequence_for_test(&self, sequence: u64) {
+        self.request_sequence.store(sequence, Ordering::Release);
+        self.request_id_exhausted.store(false, Ordering::Release);
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RequestIdSequenceError;
 
 /// HTTP router construction failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
