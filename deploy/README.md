@@ -1,8 +1,18 @@
 # Deployment
 
-For the complete operator lifecycle, API examples, tuning, recovery, and troubleshooting, see [`../docs/OPERATOR_GUIDE.md`](../docs/OPERATOR_GUIDE.md). The machine-readable HTTP contract is [`../docs/openapi.json`](../docs/openapi.json).
+For the complete operator lifecycle, API examples, tuning, recovery, and troubleshooting, see [`../docs/OPERATOR_GUIDE.md`](../docs/OPERATOR_GUIDE.md). The machine-readable HTTP contract is [`../docs/openapi.json`](../docs/openapi.json). For replacing the stock desktop with a project-owned customized VNC desktop, see [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md).
 
 `compose.yaml` is the production topology. It builds a non-root controller image and the Debian/TigerVNC desktop image. Both services share an internal desktop-control network; only the controller also joins a separate API-ingress bridge so Docker can publish the controller API. The default API binding is loopback-only at `127.0.0.1:8080`.
+
+The stock controller targets the `desktop` Compose service through:
+
+```text
+VRC_VNC_HOST=desktop
+VRC_VNC_PORT=5901
+VRC_VNC_PASSWORD_FILE=/run/secrets/vnc_password
+```
+
+The name `desktop` is resolved by Docker service discovery because both services share `desktop_control`. A custom image can replace the `desktop` image without changing the Rust controller or Python client as long as it preserves the supported VNC contract.
 
 ## Secrets
 
@@ -36,6 +46,28 @@ docker compose -f deploy/compose.yaml -f deploy/compose.persistence.yaml up --bu
 ```
 
 This preserves files and settings under `/home/desktop`. It does not preserve `/tmp`, controller process state, API tokens, VNC password source files, or the generated TigerVNC password file. Remove the named volume deliberately with `docker compose -f deploy/compose.yaml -f deploy/compose.persistence.yaml down --volumes`.
+
+## Custom desktop image
+
+The preferred custom-image workflow keeps the service name `desktop` and overrides only its image/build source. For example:
+
+```yaml
+services:
+  desktop:
+    image: my-firefox-discord-desktop:local
+    build: null
+```
+
+Start it with:
+
+```bash
+docker compose \
+  -f deploy/compose.yaml \
+  -f compose.custom-desktop.yaml \
+  up --detach --wait
+```
+
+Because the service remains named `desktop`, the controller can keep `VRC_VNC_HOST=desktop`. The custom target must still preserve VNC authentication, framebuffer, input, clipboard if required, lifecycle, private networking, and healthcheck behavior. Do not expose raw VNC or weaken readiness to accommodate an incompatible image. See [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md) for the complete contract and examples.
 
 ## Development-only raw VNC
 
