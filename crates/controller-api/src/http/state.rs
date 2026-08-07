@@ -1,6 +1,6 @@
 use super::backend::{HttpBackend, WorkerHttpBackend};
 use super::ids::{RequestId, valid_process_instance};
-use crate::config::{ApiToken, ControllerConfig};
+use crate::config::ApiToken;
 use crate::events::EventHub;
 use crate::observability::Metrics;
 use crate::screenshot::ScreenshotError;
@@ -87,20 +87,33 @@ impl HttpState {
         })
     }
 
-    /// Creates production HTTP state from a worker and validated configuration.
+    /// Creates production HTTP state after worker-owned configuration has moved
+    /// into the desktop worker. Only HTTP-specific values cross this boundary.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_worker(
         client: WorkerClient,
         events: EventHub,
         metrics: Metrics,
-        config: &ControllerConfig,
+        api_token: ApiToken,
+        process_instance: Arc<str>,
+        maximum_json_bytes: usize,
+        command_ack_timeout: Duration,
+        screenshot_concurrency: usize,
+        screenshot_timeout: Duration,
     ) -> Result<Self, HttpBuildError> {
-        let backend = WorkerHttpBackend::new(client, config).map_err(HttpBuildError::Screenshot)?;
+        let backend = WorkerHttpBackend::new(
+            client,
+            process_instance.as_ref(),
+            screenshot_concurrency,
+            screenshot_timeout,
+        )
+        .map_err(HttpBuildError::Screenshot)?;
         Self::new_with_observability(
             Arc::new(backend),
-            config.api_token.clone(),
-            Arc::clone(&config.process_instance),
-            config.maximum_json_bytes,
-            config.command_ack_timeout,
+            api_token,
+            process_instance,
+            maximum_json_bytes,
+            command_ack_timeout,
             events,
             metrics,
         )
