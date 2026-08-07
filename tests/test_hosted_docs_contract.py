@@ -4,6 +4,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 ROUTER = ROOT / "crates" / "controller-api" / "src" / "http" / "router.rs"
 DOCS_UI = ROOT / "crates" / "controller-api" / "src" / "http" / "docs_ui.rs"
+CONTROLLER_DOCKERFILE = ROOT / "controller" / "Dockerfile"
 README = ROOT / "README.md"
 
 
@@ -32,6 +33,13 @@ class HostedDocsContractTests(unittest.TestCase):
         self.assertIn("connect-src 'self'", source)
         self.assertIn("frame-ancestors 'none'", source)
         self.assertIn('include_str!("../../../../docs/openapi.json")', source)
+
+    def test_controller_builder_includes_the_embedded_openapi_source(self) -> None:
+        dockerfile = CONTROLLER_DOCKERFILE.read_text(encoding="utf-8")
+        self.assertIn("COPY docs/openapi.json ./docs/openapi.json", dockerfile)
+        copy_index = dockerfile.index("COPY docs/openapi.json ./docs/openapi.json")
+        build_index = dockerfile.index("RUN cargo build --locked --release --package controller-api")
+        self.assertLess(copy_index, build_index)
 
     def test_readme_documents_hosted_reference_and_external_assets(self) -> None:
         readme = README.read_text(encoding="utf-8")
