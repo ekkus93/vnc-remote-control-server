@@ -11,13 +11,21 @@ Both the authoritative `CI` workflow and the `Release Gates` workflow must compl
 The following findings block release:
 
 - any Rust advisory, prohibited license, wildcard dependency, or unapproved registry/source rejected by `cargo deny check`;
-- any secret finding from Gitleaks across the complete reachable Git history;
+- any secret finding from Gitleaks across the complete reachable Git history that is not an explicitly reviewed exact false-positive fingerprint;
 - any CRITICAL image finding that is not matched by an exact, current reachability determination;
 - any ShellCheck warning/error, actionlint error, BuildKit Dockerfile check, or Compose validation failure;
 - any AddressSanitizer, ThreadSanitizer, or Miri failure;
 - any ordinary formatting, Clippy, unit, documentation, desktop, native-adapter, Compose, integration, API, or end-to-end failure.
 
 HIGH image vulnerabilities are retained in JSON evidence and must be reviewed. They are not automatic v0.1 blockers unless they are exploitable in the shipped configuration, affect a security boundary, or are escalated by the release reviewer.
+
+## Exact Gitleaks false-positive fingerprints
+
+Gitleaks always scans the complete reachable Git history with its built-in rules. `.gitleaksignore` may contain only full finding fingerprints that have been individually reviewed and proven not to contain credentials or other secrets. Rule-wide, path-wide, wildcard, regular-expression, entropy, commit-range, baseline, or exit-code suppressions are prohibited.
+
+The current ignore file contains three exact `generic-api-key` fingerprints. One is the previously reviewed rebase-TODO fixture. The other two are the same public RFC 6455 WebSocket handshake example nonce (`dGhlIHNhbXBsZSBub25jZQ==`) as it appeared in a historical controller test and a temporary recovery script. That nonce is protocol example data, not an API key or repository credential. The release-policy contract pins the complete ordered fingerprint set, forbids wildcard entries, and fails if an unreviewed fingerprint is added or one of the approved fingerprints changes.
+
+Any future Gitleaks finding remains release-blocking until it is investigated. A finding may be added to `.gitleaksignore` only when its exact fingerprint and non-secret rationale are documented and the release-policy contract is updated in the same review. The full-history scan itself may not be narrowed or made non-blocking.
 
 ## Exact CRITICAL VEX determinations
 
