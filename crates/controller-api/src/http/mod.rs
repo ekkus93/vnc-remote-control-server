@@ -26,4 +26,4 @@ mod tests;
 
 pub use backend::{HttpBackend, WorkerHttpBackend};
 pub use router::router;
-pub use state::{HttpBuildError, HttpState};
+pub use state::{HttpBuildError, HttpState, HttpWorkerSettings};
