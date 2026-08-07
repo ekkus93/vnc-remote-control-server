@@ -102,7 +102,7 @@ text = replace_between(
     text,
     "fn parse_secret_bytes_with_rejection_observer<F>(",
     "#[cfg(unix)]",
-    '''fn parse_secret_bytes_with_rejection_observer<F>(
+    r'''fn parse_secret_bytes_with_rejection_observer<F>(
     path: &Path,
     mut bytes: Vec<u8>,
     observe_rejection: F,
