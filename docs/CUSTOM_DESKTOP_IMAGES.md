@@ -192,8 +192,10 @@ The simplest approach is a small Compose override. For example, create a local `
 services:
   desktop:
     image: my-firefox-discord-desktop:local
-    build: null
+    build: !reset null
 ```
+
+The `!reset null` is intentional: it removes the stock service's inherited `build` section so Compose uses the already-built custom image instead of rebuilding the stock `desktop/Dockerfile` under the new tag.
 
 Then start the stack with the stock production topology plus the override:
 
