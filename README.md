@@ -119,17 +119,28 @@ The documentation routes are public, but every `/v1/*` operation invoked from Sw
 
 ### Python client
 
-Install the in-repository Python client:
+Install the in-repository Python client from a local checkout:
 
 ```bash
 python -m pip install ./python
 ```
 
-For WebSocket event streaming, install the optional extra:
+Or install it directly from GitHub:
+
+```bash
+python -m pip install \
+  "vnc-remote-control-client @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
+```
+
+For WebSocket event streaming, install the optional extra locally or from GitHub:
 
 ```bash
 python -m pip install './python[websocket]'
+python -m pip install \
+  "vnc-remote-control-client[websocket] @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
 ```
+
+For deployments and reproducible automation, pin the GitHub install to a full commit SHA instead of `master`. See [`python/README.md`](python/README.md) for the pinned-commit example and upgrade guidance.
 
 Example:
 
@@ -171,7 +182,7 @@ docker compose -f deploy/compose.yaml down --volumes --remove-orphans
 - Hosted Swagger UI: `/docs`.
 - Hosted ReDoc: `/redoc`.
 - Hosted raw OpenAPI: `/openapi.json`.
-- [`python/README.md`](python/README.md): Python client installation, endpoint usage, screenshots, WebSocket events, and errors.
+- [`python/README.md`](python/README.md): Python client installation from a local checkout or directly from GitHub, reproducible commit pinning, endpoint usage, screenshots, WebSocket events, and errors.
 - [`docs/CUSTOM_DESKTOP_IMAGES.md`](docs/CUSTOM_DESKTOP_IMAGES.md): custom project-owned VNC desktop images, controller target configuration, Docker networking, and the Python → controller → desktop configuration chain.
 - [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, and troubleshooting.
 - [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for the supported controller API.
