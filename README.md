@@ -11,6 +11,8 @@ v0.1 provides pixel observation and remote-desktop input primitives for exactly 
 
 OCR, Playwright, accessibility-tree automation, AI planning, multiple sessions, arbitrary external VNC servers, and a browser viewer are outside the v0.1 scope.
 
+A project-owned desktop image may be customized or replaced without changing the Rust or Python API layers as long as it preserves the tested VNC contract. This is different from claiming support for arbitrary external VNC servers. See [`docs/CUSTOM_DESKTOP_IMAGES.md`](docs/CUSTOM_DESKTOP_IMAGES.md).
+
 ## Architecture
 
 ```mermaid
@@ -25,6 +27,22 @@ flowchart LR
 ```
 
 Production Compose keeps raw VNC on an internal-only network. Only the controller joins the API-ingress network. The controller API binds to `127.0.0.1:8080` on the host by default.
+
+The configuration chain is intentionally split into two independent hops:
+
+```text
+Python VncClient(base_url, api_token)
+        |
+        | HTTP / WebSocket
+        v
+Rust controller
+        |
+        | VRC_VNC_HOST / VRC_VNC_PORT / VRC_VNC_PASSWORD_FILE
+        v
+project-owned VNC desktop container
+```
+
+Changing the desktop image does not require changing Python code when the Rust controller remains at the same API address.
 
 ## Current status
 
@@ -131,6 +149,17 @@ client.type_keyboard_text("hello from Python")
 
 The HTTP client has no third-party runtime dependencies. It exposes typed responses and structured API errors, supports conditional screenshot ETags, and does not silently clamp invalid input. See [`python/README.md`](python/README.md) for the complete usage guide.
 
+### Custom desktop images
+
+The preferred customization workflow is to derive a desktop image from the repository's known-good TigerVNC/XFCE image, add applications, and keep the Compose service named `desktop`. The controller can then continue using:
+
+```text
+VRC_VNC_HOST=desktop
+VRC_VNC_PORT=5901
+```
+
+while the Python client continues pointing at the same Rust API URL. See [`docs/CUSTOM_DESKTOP_IMAGES.md`](docs/CUSTOM_DESKTOP_IMAGES.md) for the complete VNC-container contract, Dockerfile example, Compose override example, secret/network requirements, supported-vs-unsupported boundary, and validation checklist.
+
 Stop the stack and remove disposable state:
 
 ```bash
@@ -143,6 +172,7 @@ docker compose -f deploy/compose.yaml down --volumes --remove-orphans
 - Hosted ReDoc: `/redoc`.
 - Hosted raw OpenAPI: `/openapi.json`.
 - [`python/README.md`](python/README.md): Python client installation, endpoint usage, screenshots, WebSocket events, and errors.
+- [`docs/CUSTOM_DESKTOP_IMAGES.md`](docs/CUSTOM_DESKTOP_IMAGES.md): custom project-owned VNC desktop images, controller target configuration, Docker networking, and the Python → controller → desktop configuration chain.
 - [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, and troubleshooting.
 - [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for the supported controller API.
 - [`docs/WEBSOCKET_EVENTS.md`](docs/WEBSOCKET_EVENTS.md): event envelope, event types, heartbeat behavior, and close codes.
