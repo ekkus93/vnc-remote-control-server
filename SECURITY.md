@@ -22,12 +22,15 @@ The maintainer will acknowledge a complete report, assess severity, coordinate a
 - API and VNC credentials must come from secret files, never image layers or source control.
 - The controller is designed for the project-owned desktop container, not arbitrary untrusted VNC servers.
 - Typed text, clipboard contents, framebuffer pixels, bearer tokens, and VNC passwords must never be logged.
+- The controller does not terminate TLS; exposure beyond localhost requires a trusted TLS reverse proxy and a reviewed network boundary.
 
 ## VNC password lifecycle
 
 The shared `SecretString` abstraction is non-`Debug` and zeroizes its live byte buffer on drop. The controller uses it for the secret-file read result, validated configuration, worker settings and native-client configuration. The Rust adapter scrubs its temporary NUL-terminated connection buffer, and the C shim scrubs its persistent duplicated password before release using a C11-compatible volatile-byte loop. Tests instrument live buffers and drop behavior; no test reads freed memory.
 
-The pinned Debian LibVNCClient package is `0.9.14+dfsg-1ubuntu0.2`. Its source location is `src/libvncclient/rfbclient.c`, function `HandleVncAuth`. That function receives the allocation returned by `GetPassword`, truncates the logical password to eight bytes for classic VNC DES authentication, encrypts the challenge, overwrites only the now-visible truncated string through its NUL terminator, and then frees the allocation. Consequently, bytes beyond offset eight in a longer callback allocation are not proven scrubbed before the library frees it. The shim has no post-authentication ownership hook for that allocation, so the unverified tail remains an explicit third-party residual rather than a project-owned-zeroization claim. Operators should still use a private network and treat VNC authentication as defense in depth, not transport confidentiality.
+The production controller image is based on Debian 13.6 and installs Debian's `libvncclient1`. The exact native package version is captured in every Release Gates image SBOM; the current validated image evidence records `0.9.15+dfsg-1+deb13u2`. The builder uses the corresponding Debian `libvncserver-dev` package rather than an Ubuntu package or an undeclared host library.
+
+Classic VNC authentication uses at most the protocol-relevant first eight password bytes. Once the password callback returns a freshly allocated copy to LibVNCClient, that allocation is third-party-owned. The project therefore does **not** claim full-allocation zeroization for LibVNCClient-owned callback memory after handoff, including any bytes beyond the protocol-relevant prefix in a longer allocation. The project-owned shim does scrub the buffers it continues to own. This third-party residual must be re-reviewed whenever the native LibVNCClient package changes. Operators should still use the private VNC network and treat classic VNC authentication as access control, not transport confidentiality.
 
 ## API bearer-token lifecycle
 
@@ -43,4 +46,10 @@ The filesystem reader checks metadata, regular-file status, size, and Unix permi
 
 Project-owned native C clipboard allocations are scrubbed before replacement and destruction using the same volatile-byte primitive as the VNC password. The temporary outbound C copy passed to `SendClientCutText` is scrubbed before free on both success and failure. The stored payload length is retained so scrubbing covers the allocation through its terminating NUL.
 
-This guarantee does not cover Rust clipboard request/response values, Axum response bodies, LibVNCClient-owned copies, the VNC server, the desktop test application, toolkit or OS clipboard managers, client applications, allocator residuals, swap, or crash dumps. Clipboard contents remain sensitive product data and must never be logged.
+This guarantee does not cover Rust clipboard request/response values, Axum response bodies, LibVNCClient-owned copies, the VNC server, desktop applications, toolkit or OS clipboard managers, client applications, allocator residuals, swap, or crash dumps. Clipboard contents remain sensitive product data and must never be logged.
+
+## Release-security evidence
+
+Release acceptance is governed by [`docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md`](docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md). Both permanent `CI` and `Release Gates` must pass on the exact candidate SHA. Release Gates records static/supply-chain evidence, native sanitizer/Miri evidence, image vulnerability reports, exact CRITICAL VEX evaluation, and CycloneDX SBOMs.
+
+Current CRITICAL determinations are stored in [`security/trivy-critical-vex.json`](security/trivy-critical-vex.json). They expire on September 4, 2026; an expired determination, changed package version, or unmatched CRITICAL finding must fail closed.
