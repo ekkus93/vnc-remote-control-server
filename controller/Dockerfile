@@ -15,6 +15,7 @@ WORKDIR /workspace
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+COPY docs/openapi.json ./docs/openapi.json
 
 RUN cargo build --locked --release --package controller-api --bin controller-api \
     && strip /workspace/target/release/controller-api
