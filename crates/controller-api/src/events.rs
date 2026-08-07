@@ -218,8 +218,12 @@ impl EventHub {
         subscription: EventSubscription,
         initial: ServerEvent,
     ) {
-        self.serve_socket(EventSocket::Production(socket), subscription, initial)
-            .await;
+        self.serve_socket(
+            EventSocket::Production(Box::new(socket)),
+            subscription,
+            initial,
+        )
+        .await;
     }
 
     async fn serve_socket(
@@ -368,7 +372,7 @@ impl EventHub {
 }
 
 enum EventSocket {
-    Production(WebSocket),
+    Production(Box<WebSocket>),
     #[cfg(test)]
     Test(TestSocket),
 }
