@@ -76,14 +76,15 @@ fn state_validation_and_bearer_comparison_fail_closed() {
 fn request_id_sequence_is_monotonic_terminal_and_logged_once() {
     let state = test_state(true, MockScreenshot::Png);
     let first = state.next_request_id().expect("first request ID allocates");
-    let second = state.next_request_id().expect("second request ID allocates");
+    let second = state
+        .next_request_id()
+        .expect("second request ID allocates");
     assert_eq!(first.0.as_ref(), "test-process-1");
     assert_eq!(second.0.as_ref(), "test-process-2");
 
     state.force_request_sequence_for_test(u64::MAX);
-    let ((first_failure, second_failure), logs) = crate::test_support::capture_logs(|| {
-        (state.next_request_id(), state.next_request_id())
-    });
+    let ((first_failure, second_failure), logs) =
+        crate::test_support::capture_logs(|| (state.next_request_id(), state.next_request_id()));
     assert!(first_failure.is_err());
     assert!(second_failure.is_err());
     assert!(state.request_id_sequence_exhausted());
