@@ -1,3 +1,4 @@
+use super::docs_ui::{openapi_json, redoc, swagger_initializer, swagger_ui};
 use super::handlers::{
     clipboard, display, events, keyboard_chord, keyboard_key, keyboard_text, liveness,
     metrics_endpoint, pointer_button, pointer_click, pointer_double_click, pointer_move,
@@ -10,7 +11,7 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{get, post};
 
-/// Builds the authenticated controller router.
+/// Builds the authenticated controller router and public health/documentation routes.
 pub fn router(state: HttpState) -> Router {
     let protected = Router::new()
         .route("/status", get(status))
@@ -36,6 +37,10 @@ pub fn router(state: HttpState) -> Router {
     Router::new()
         .route("/health/live", get(liveness))
         .route("/health/ready", get(readiness))
+        .route("/openapi.json", get(openapi_json))
+        .route("/docs", get(swagger_ui))
+        .route("/docs/swagger-initializer.js", get(swagger_initializer))
+        .route("/redoc", get(redoc))
         .nest("/v1", protected)
         .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
         .layer(middleware::from_fn_with_state(state.clone(), access_log))
