@@ -22,7 +22,7 @@ const SWAGGER_UI_HTML: &str = r#"<!doctype html>
 </html>
 "#;
 
-const SWAGGER_INITIALIZER_JS: &str = r#"window.addEventListener("load", () => {
+const SWAGGER_INITIALIZER_JS: &str = r##"window.addEventListener("load", () => {
   window.ui = SwaggerUIBundle({
     url: "/openapi.json",
     dom_id: "#swagger-ui",
@@ -34,7 +34,7 @@ const SWAGGER_INITIALIZER_JS: &str = r#"window.addEventListener("load", () => {
     layout: "StandaloneLayout"
   });
 });
-"#;
+"##;
 
 const REDOC_HTML: &str = r#"<!doctype html>
 <html lang="en">
@@ -53,7 +53,11 @@ const REDOC_HTML: &str = r#"<!doctype html>
 const SWAGGER_CSP: &str = "default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src https://cdn.jsdelivr.net; img-src data:; font-src https://cdn.jsdelivr.net; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 const REDOC_CSP: &str = "default-src 'none'; script-src https://cdn.redoc.ly; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-fn static_response(body: &'static str, content_type: &'static str, csp: Option<&'static str>) -> Response {
+fn static_response(
+    body: &'static str,
+    content_type: &'static str,
+    csp: Option<&'static str>,
+) -> Response {
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = StatusCode::OK;
     response
@@ -87,7 +91,11 @@ pub(super) async fn openapi_json() -> Response {
 }
 
 pub(super) async fn swagger_ui() -> Response {
-    static_response(SWAGGER_UI_HTML, "text/html; charset=utf-8", Some(SWAGGER_CSP))
+    static_response(
+        SWAGGER_UI_HTML,
+        "text/html; charset=utf-8",
+        Some(SWAGGER_CSP),
+    )
 }
 
 pub(super) async fn swagger_initializer() -> Response {
