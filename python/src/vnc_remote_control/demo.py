@@ -40,12 +40,9 @@ def _read_token_file(path: str) -> str:
 def _read_text(stdin: TextIO, *, prompt: str) -> str:
     if stdin.isatty():
         print(prompt, file=sys.stderr, flush=True)
+        return stdin.readline().rstrip("\r\n")
     value = stdin.read()
-    if value.endswith("\n"):
-        value = value[:-1]
-    if value.endswith("\r"):
-        value = value[:-1]
-    return value
+    return value[:-1] if value.endswith("\n") else value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -172,7 +169,8 @@ def execute(
         _print_json(client.get_display(), stdout)
         return
     if command == "metrics":
-        print(client.get_metrics(), end="" if client.get_metrics().endswith("\n") else "\n", file=stdout)
+        metrics = client.get_metrics()
+        print(metrics, end="" if metrics.endswith("\n") else "\n", file=stdout)
         return
     if command == "screenshot":
         response = client.get_screenshot()
@@ -211,19 +209,15 @@ def execute(
         _print_json(client.send_keyboard_chord(args.keys), stdout)
         return
     if command == "type-text":
-        text = _read_text(stdin, prompt="Enter text, then press Ctrl-D when finished:")
+        text = _read_text(stdin, prompt="Enter one line of text to type:")
         _print_json(client.type_keyboard_text(text), stdout)
         return
     if command == "clipboard-get":
         response = client.get_clipboard()
         print(response.text, file=stdout)
-        print(
-            f"revision={response.revision} updated_at_unix_ms={response.updated_at_unix_ms}",
-            file=sys.stderr,
-        )
         return
     if command == "clipboard-set":
-        text = _read_text(stdin, prompt="Enter clipboard text, then press Ctrl-D when finished:")
+        text = _read_text(stdin, prompt="Enter one line of clipboard text:")
         _print_json(client.set_clipboard(text), stdout)
         return
     if command == "reconnect":
