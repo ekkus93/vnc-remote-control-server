@@ -8,6 +8,8 @@ The controller is a remote-desktop primitive, not a general-purpose automation p
 
 Treat every API client as fully trusted to observe and control the desktop. The v0.1 bearer token is process-wide; it does not provide per-user roles or per-operation authorization.
 
+For the distinction between current living documentation and historical milestone artifacts, see [`README.md`](README.md).
+
 ## 2. Architecture
 
 ```mermaid
@@ -22,6 +24,8 @@ flowchart TB
 ```
 
 The `desktop_control` network is `internal: true`. The desktop service does not publish port `5901` in production. The controller joins both `desktop_control` and `api_ingress`, and the host API binding defaults to `127.0.0.1:8080`.
+
+The controller's VNC target is configured independently from the API client. A supported project-owned custom desktop can replace the stock image without changing the Python application when the controller API address is unchanged. See [`CUSTOM_DESKTOP_IMAGES.md`](CUSTOM_DESKTOP_IMAGES.md).
 
 ## 3. Prerequisites
 
@@ -42,7 +46,7 @@ In addition to the runtime requirements:
 - Rust 1.97.1 through `rustup`;
 - GNU Make;
 - C compiler and `pkg-config`;
-- Debian/Ubuntu package `libvncserver-dev` for LibVNCClient headers and libraries;
+- Debian package `libvncserver-dev` for LibVNCClient headers and libraries;
 - Python 3.12 for first-party contract and integration tests.
 
 ## 4. Generate and protect secrets
@@ -169,6 +173,18 @@ The controller does not terminate TLS. Before exposing the API beyond localhost,
 - restricts network access to trusted clients.
 
 Do not place bearer tokens in query strings. URLs are commonly logged by proxies and clients.
+
+### Hosted API reference and Python tooling
+
+A running controller serves the repository-owned API reference at:
+
+- `http://127.0.0.1:8080/docs` — Swagger UI;
+- `http://127.0.0.1:8080/redoc` — ReDoc;
+- `http://127.0.0.1:8080/openapi.json` — raw OpenAPI 3.1 JSON.
+
+These documentation routes are public. Every `/v1/*` operation still requires the normal bearer token. Swagger UI does not persist authorization across reloads and its external validator is disabled. The UI assets are loaded from exact-version external CDN URLs; the OpenAPI document itself is served by the controller from the repository-owned `docs/openapi.json` source.
+
+The installable Python client points at the Rust controller, not at the VNC desktop. Installing the package also installs the small `vnc-remote-control-demo` CLI. See [`../python/README.md`](../python/README.md) for direct GitHub installation, token-file handling, screenshots, pointer/keyboard input, clipboard, reconnect, metrics, and WebSocket event examples.
 
 ## 7. Health and readiness
 
@@ -342,7 +358,7 @@ websocat \
 
 The first text frame is a `snapshot`. Later payload-free events report connection-state transitions, framebuffer revisions or invalidation, clipboard revisions, overload, and protocol errors. The server sends WebSocket ping frames; clients must remain responsive. Slow or idle clients are disconnected within configured bounds.
 
-Event sequences never wrap, reset, saturate silently, or reuse an earlier value. If sequence allocation is exhausted before the initial snapshot, the controller releases the client slot and returns `503 event_sequence_exhausted` before upgrade. Existing clients close with WebSocket code `1011` and reason `event sequence exhausted` no later than the next heartbeat wake-up.
+Event sequences never wrap, reset, saturate silently, or reuse an earlier value. If sequence allocation is exhausted before the initial snapshot, the controller releases the client slot and returns `503 event_sequence_exhausted` before upgrade. If sequence exhaustion becomes terminal after upgrade, an internal notification wakes established event loops promptly; clients close with WebSocket code `1011` and reason `event sequence exhausted` without waiting for the next heartbeat.
 
 See [`WEBSOCKET_EVENTS.md`](WEBSOCKET_EVENTS.md) for the exact event envelope and close behavior.
 
@@ -361,7 +377,7 @@ The controller handles SIGTERM by:
 7. observing an already-completed bridge exit even when no budget remains, or deliberately detaching a still-active bridge with a payload-free diagnostic;
 8. exiting before the Compose stop grace period expires under the documented defaults.
 
-The default process-cleanup budget is 5000 ms. Configuration below `max(500 ms, 8 × 50 ms)` is rejected; with the current event-bridge poll interval, the derived minimum is 500 ms. Direct bridge wake-up is deliberately deferred: the current dependency-free stop flag and bounded poll remain authoritative.
+The default process-cleanup budget is 5000 ms. Configuration below `max(500 ms, 8 × 50 ms)` is rejected; with the current event-bridge poll interval, the derived minimum is 500 ms. Direct bridge wake-up is deliberately deferred: the current dependency-free stop flag and bounded poll remain authoritative for stopping the worker-event bridge itself.
 
 Use:
 
@@ -535,10 +551,16 @@ Real Compose integration:
 make integration-test
 ```
 
-Documentation contracts:
+All first-party Python, documentation, client/demo, and workflow contract tests:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
+For the narrower documentation-only contract module:
 
 ```bash
 python3 -m unittest tests.test_documentation_contract -v
 ```
 
-The complete authoritative CI workflow runs the full quality, native, desktop, API, Compose, and integration surface.
+The complete authoritative `CI` workflow runs the full quality, native, desktop, API, Compose, and integration surface. Release acceptance additionally requires the permanent `Release Gates` workflow on the same exact candidate SHA.
