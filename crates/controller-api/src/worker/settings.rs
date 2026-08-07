@@ -3,7 +3,7 @@ use remote_desktop_core::{DesktopError, MAX_FRAMEBUFFER_BYTES};
 use std::time::Duration;
 
 /// Native worker timing and capacity configuration.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct WorkerSettings {
     /// Native VNC connection configuration. It contains the password and is
     /// intentionally not `Debug`.
@@ -97,6 +97,8 @@ pub enum WorkerFailureKind {
     Configuration,
     /// The TCP transport failed or disconnected.
     Transport,
+    /// A refresh probe exceeded its deadline.
+    Timeout,
     /// A refresh probe exceeded its deadline.
     Timeout,
     /// The remote framebuffer or protocol contract failed.
