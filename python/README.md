@@ -61,12 +61,12 @@ python -m pip install \
 Installing from `master` is convenient for development, but it is not reproducible because `master` can advance. For deployments, automation, and other reproducible environments, pin the install to a full Git commit SHA:
 
 ```bash
-COMMIT_SHA=0db57983137437d3f33aee0fc6bb7a61c474159c
+COMMIT_SHA=0c02f244e12e294fd078edad8b31cefb2bff5f8a
 python -m pip install \
   "vnc-remote-control-client @ git+https://github.com/ekkus93/vnc-remote-control-server.git@${COMMIT_SHA}#subdirectory=python"
 ```
 
-The SHA above is an example known-good repository revision. Replace it deliberately when upgrading so the deployed Python client version changes only when you choose to move the pin.
+The SHA above is an example known-good repository revision that contains the demo CLI. Replace it deliberately when upgrading so the deployed Python client version changes only when you choose to move the pin.
 
 Installing directly from GitHub requires `git` to be available on the machine running `pip`.
 
