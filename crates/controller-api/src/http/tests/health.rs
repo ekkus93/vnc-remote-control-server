@@ -82,21 +82,15 @@ async fn protected_routes_use_one_generic_bearer_failure() {
 async fn websocket_initial_snapshot_sequence_exhaustion_fails_before_upgrade() {
     let state = test_state(true, MockScreenshot::Png);
     state.events.force_sequence_for_test(u64::MAX);
-    let app = router(state.clone());
 
-    let response = app
-        .oneshot(
-            request("/v1/events")
-                .header(AUTHORIZATION, "Bearer test-token")
-                .header("connection", "upgrade")
-                .header("upgrade", "websocket")
-                .header("sec-websocket-version", "13")
-                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
-                .body(Body::empty())
-                .expect("websocket request"),
-        )
-        .await
-        .expect("response");
+    let error = match crate::http::handlers::prepare_event_session(
+        &state,
+        RequestId(Arc::from("sequence-exhaustion-test")),
+    ) {
+        Ok(_) => panic!("sequence exhaustion must fail before WebSocket upgrade use"),
+        Err(error) => error,
+    };
+    let response = axum::response::IntoResponse::into_response(error);
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = json_body(response).await;
     assert_eq!(body["error"]["code"], "event_sequence_exhausted");

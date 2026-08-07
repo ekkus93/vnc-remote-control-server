@@ -29,7 +29,7 @@ fn state_validation_and_bearer_comparison_fail_closed() {
     assert!(
         HttpState::new(
             Arc::clone(&backend),
-            Arc::from(""),
+            ApiToken::from_secret(SecretString::from("")),
             Arc::from("process"),
             1,
             Duration::from_secs(1),
@@ -39,7 +39,7 @@ fn state_validation_and_bearer_comparison_fail_closed() {
     assert!(
         HttpState::new(
             Arc::clone(&backend),
-            Arc::from("token"),
+            ApiToken::from_secret(SecretString::from("token")),
             Arc::from("bad process"),
             1,
             Duration::from_secs(1),
@@ -49,7 +49,7 @@ fn state_validation_and_bearer_comparison_fail_closed() {
     assert!(
         HttpState::new(
             Arc::clone(&backend),
-            Arc::from("token"),
+            ApiToken::from_secret(SecretString::from("token")),
             Arc::from("process"),
             0,
             Duration::from_secs(1),
@@ -59,7 +59,7 @@ fn state_validation_and_bearer_comparison_fail_closed() {
     assert!(
         HttpState::new(
             backend,
-            Arc::from("token"),
+            ApiToken::from_secret(SecretString::from("token")),
             Arc::from("process"),
             1,
             Duration::ZERO,

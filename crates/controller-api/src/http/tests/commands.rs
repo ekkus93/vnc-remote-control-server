@@ -284,7 +284,7 @@ async fn authenticated_metrics_use_fixed_labels_and_exclude_secrets() {
         .expect("bounded metrics body");
     let body = String::from_utf8(body.to_vec()).expect("UTF-8 metrics");
     assert!(body.contains("vrc_connection_state{state=\"connected\"} 1"));
-    assert!(body.contains("vrc_worker_command_queue_capacity 0"));
+    assert!(body.contains("vrc_worker_command_queue_capacity 64"));
     assert!(!body.contains("test-token"));
     assert!(!body.contains("request_id"));
 }

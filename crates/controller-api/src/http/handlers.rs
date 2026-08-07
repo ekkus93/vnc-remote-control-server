@@ -13,7 +13,7 @@ use crate::api_contract::{
     ChordRequest, ClipboardRequest, KeyRequest, PointerButtonRequest, PointerClickRequest,
     PointerDoubleClickRequest, PointerMoveRequest, PointerScrollRequest, TextRequest,
 };
-use crate::events::WebSocketCapacityError;
+use crate::events::{EventSubscription, ServerEvent, WebSocketCapacityError};
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::ScreenshotOutcome;
 use axum::Json;
@@ -27,11 +27,10 @@ use remote_desktop_core::WorkerCommand;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub(super) async fn events(
-    State(state): State<HttpState>,
-    Extension(request_id): Extension<RequestId>,
-    websocket: WebSocketUpgrade,
-) -> Result<Response, ApiError> {
+pub(super) fn prepare_event_session(
+    state: &HttpState,
+    request_id: RequestId,
+) -> Result<(EventSubscription, ServerEvent), ApiError> {
     let subscription = state.events.subscribe().map_err(|WebSocketCapacityError| {
         ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -57,6 +56,15 @@ pub(super) async fn events(
                 request_id,
             )
         })?;
+    Ok((subscription, initial))
+}
+
+pub(super) async fn events(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    websocket: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let (subscription, initial) = prepare_event_session(&state, request_id)?;
     let events = state.events.clone();
     Ok(websocket.on_upgrade(move |socket| async move {
         events.serve(socket, subscription, initial).await;

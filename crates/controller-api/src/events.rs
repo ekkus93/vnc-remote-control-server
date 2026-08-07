@@ -681,8 +681,8 @@ mod tests {
                 hub.publish_test(EventPayload::ProtocolError),
             )
         });
-        assert_eq!(first, Err(EventSequenceError::Exhausted));
-        assert_eq!(second, Err(EventSequenceError::Exhausted));
+        assert!(matches!(first, Err(EventSequenceError::Exhausted)));
+        assert!(matches!(second, Err(EventSequenceError::Exhausted)));
         assert!(hub.sequence_exhausted.load(Ordering::Acquire));
         assert_eq!(logs.matches("event_hub_sequence_exhausted").count(), 1);
     }
