@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: post-correctness-recovery-master-slim-structural
+  group: post-correctness-recovery-master-slim-authoritative
   cancel-in-progress: true
 
 jobs:
@@ -37,10 +37,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/post-correctness-recovery-config-prep.py
+          python3 .github/post-correctness-recovery-h1.py
           python3 .github/post-correctness-recovery-preflight.py
           python3 .github/post-correctness-recovery.py
           python3 .github/post-correctness-recovery-boundary-fix.py
           test ! -e .github/post-correctness-recovery-config-prep.py
+          test ! -e .github/post-correctness-recovery-h1.py
           test ! -e .github/post-correctness-recovery-preflight.py
           test ! -e .github/post-correctness-recovery.py
           test ! -e .github/post-correctness-recovery-boundary-fix.py
