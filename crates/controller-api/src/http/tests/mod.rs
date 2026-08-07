@@ -24,6 +24,7 @@ use tower::ServiceExt;
 mod access_log_and_validation;
 mod commands;
 mod display_and_screenshot;
+mod docs_ui;
 mod health;
 mod privacy;
 
