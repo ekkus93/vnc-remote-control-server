@@ -17,8 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::broadcast;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, broadcast};
 use tokio::time::{self, Instant, MissedTickBehavior};
 
 const EVENT_BRIDGE_POLL_INTERVAL_MS: u64 = 50;
@@ -54,6 +53,7 @@ pub struct EventHub {
     sender: broadcast::Sender<ServerEvent>,
     sequence: Arc<AtomicU64>,
     sequence_exhausted: Arc<AtomicBool>,
+    sequence_exhausted_notify: Arc<Notify>,
     clients: Arc<Semaphore>,
     metrics: Metrics,
     ping_interval: Duration,
@@ -161,6 +161,7 @@ impl EventHub {
             sender,
             sequence: Arc::new(AtomicU64::new(1)),
             sequence_exhausted: Arc::new(AtomicBool::new(false)),
+            sequence_exhausted_notify: Arc::new(Notify::new()),
             clients: Arc::new(Semaphore::new(maximum_clients)),
             metrics,
             ping_interval,
@@ -242,15 +243,16 @@ impl EventHub {
 
         loop {
             if self.sequence_exhausted.load(Ordering::Acquire) {
-                let _ = socket
-                    .send(Message::Close(Some(CloseFrame {
-                        code: 1011,
-                        reason: "event sequence exhausted".into(),
-                    })))
-                    .await;
+                send_sequence_exhausted_close(&mut socket).await;
                 break;
             }
             tokio::select! {
+                _ = self.sequence_exhausted_notify.notified() => {
+                    if self.sequence_exhausted.load(Ordering::Acquire) {
+                        send_sequence_exhausted_close(&mut socket).await;
+                        break;
+                    }
+                }
                 event = subscription.receiver.recv() => {
                     match event {
                         Ok(event) => {
@@ -352,6 +354,7 @@ impl EventHub {
             Err(_) => {
                 if !self.sequence_exhausted.swap(true, Ordering::AcqRel) {
                     tracing::error!("event_hub_sequence_exhausted");
+                    self.sequence_exhausted_notify.notify_waiters();
                 }
                 return Err(EventSequenceError::Exhausted);
             }
@@ -400,6 +403,15 @@ impl EventSocket {
             Self::Test(socket) => socket.recv().await.map(Ok),
         }
     }
+}
+
+async fn send_sequence_exhausted_close(socket: &mut EventSocket) {
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: 1011,
+            reason: "event sequence exhausted".into(),
+        })))
+        .await;
 }
 
 #[cfg(test)]
@@ -748,8 +760,8 @@ mod tests {
         let hub = EventHub::detached(
             4,
             1,
-            Duration::from_millis(10),
-            Duration::from_secs(1),
+            Duration::from_secs(30),
+            Duration::from_secs(60),
             Metrics::default(),
         );
         let subscription = hub.subscribe().expect("client subscribes");
@@ -811,7 +823,7 @@ mod tests {
                 }
             })
             .await
-            .expect("established client closes within the heartbeat bound");
+            .expect("established client closes promptly without waiting for heartbeat");
             assert_eq!(close.code, 1011);
             let reason = close.reason.to_string();
             assert_eq!(reason, "event sequence exhausted");
