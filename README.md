@@ -112,6 +112,8 @@ docker compose -f deploy/compose.yaml down --volumes --remove-orphans
 - Do not log typed text, clipboard contents, VNC passwords, bearer tokens, or screenshots.
 - Keep the API on loopback or behind a trusted TLS reverse proxy. The controller does not terminate TLS itself.
 
+Request IDs are process-local correlation values. The generated request-ID sequence is checked and never wraps or reuses a normal sequence value. If that sequence reaches its terminal limit, routed HTTP requests fail closed before authentication or handler execution with HTTP `503`, error code `request_id_exhausted`, and the reserved `X-Request-ID: request-id-exhausted` sentinel. A caller-provided request ID cannot bypass the terminal state. The exhaustion diagnostic is payload-free.
+
 ## Development
 
 The supported Rust toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Common commands:
