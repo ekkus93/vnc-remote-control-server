@@ -4,6 +4,26 @@ Typed synchronous Python client for the controller HTTP API.
 
 The core HTTP client has no third-party runtime dependencies. WebSocket event streaming is optional and uses `websocket-client`.
 
+## Where the client connects
+
+The Python client connects to the **Rust controller API**, not directly to the VNC desktop container.
+
+```text
+Python VncClient(base_url, api_token)
+        |
+        | HTTP / WebSocket
+        v
+Rust controller
+        |
+        | VRC_VNC_HOST / VRC_VNC_PORT / VRC_VNC_PASSWORD_FILE
+        v
+project-owned VNC desktop container
+```
+
+`base_url` is therefore the controller's HTTP address, such as `http://127.0.0.1:8080` on the host or `http://controller:8080` from another container on a shared Docker network.
+
+The Python client does not need the desktop service name, desktop image name, VNC port, or VNC password. Those are controller/deployment concerns. Swapping a supported custom desktop image behind an unchanged controller does not require changing Python application code. See [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md) for the complete configuration chain.
+
 ## Install
 
 From this repository:
@@ -39,6 +59,8 @@ client.send_keyboard_chord(["CTRL_LEFT", "a"])
 client.type_keyboard_text("hello from Python")
 client.set_clipboard("clipboard text")
 ```
+
+The API token authenticates the Python client to the Rust controller. It is separate from the VNC password that authenticates the Rust controller to the desktop's VNC server.
 
 ## Screenshots
 
