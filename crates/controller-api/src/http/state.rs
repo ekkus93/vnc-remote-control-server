@@ -27,16 +27,13 @@ pub struct HttpState {
 
 impl HttpState {
     /// Creates validated HTTP state over one backend.
-    pub fn new<T>(
+    pub fn new(
         backend: Arc<dyn HttpBackend>,
-        api_token: T,
+        api_token: ApiToken,
         process_instance: Arc<str>,
         maximum_json_bytes: usize,
         command_ack_timeout: Duration,
-    ) -> Result<Self, HttpBuildError>
-    where
-        T: Into<ApiToken>,
-    {
+    ) -> Result<Self, HttpBuildError> {
         let metrics = Metrics::default();
         let events = EventHub::detached(
             16,
@@ -56,19 +53,15 @@ impl HttpState {
         )
     }
 
-    fn new_with_observability<T>(
+    fn new_with_observability(
         backend: Arc<dyn HttpBackend>,
-        api_token: T,
+        api_token: ApiToken,
         process_instance: Arc<str>,
         maximum_json_bytes: usize,
         command_ack_timeout: Duration,
         events: EventHub,
         metrics: Metrics,
-    ) -> Result<Self, HttpBuildError>
-    where
-        T: Into<ApiToken>,
-    {
-        let api_token = api_token.into();
+    ) -> Result<Self, HttpBuildError> {
         if api_token.is_empty() {
             return Err(HttpBuildError::EmptyApiToken);
         }

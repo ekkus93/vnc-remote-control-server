@@ -58,6 +58,18 @@ static void vrc_secure_scrub(void *buffer, size_t length) {
     }
 }
 
+static void vrc_release_clipboard(char **clipboard, size_t *length) {
+    if (clipboard == NULL || length == NULL) {
+        return;
+    }
+    if (*clipboard != NULL) {
+        vrc_secure_scrub(*clipboard, *length + 1U);
+        free(*clipboard);
+    }
+    *clipboard = NULL;
+    *length = 0U;
+}
+
 static char *vrc_duplicate(const char *value) {
     size_t length;
     char *copy;
@@ -185,6 +197,10 @@ static void vrc_store_clipboard(vrc_client *client, const char *text, int text_l
         vrc_set_error(client, "invalid clipboard update");
         return;
     }
+    if (client->clipboard_revision == UINT64_MAX) {
+        vrc_set_error(client, "clipboard revision overflow");
+        return;
+    }
 
     copy = malloc(length + 1U);
     if (copy == NULL) {
@@ -196,13 +212,9 @@ static void vrc_store_clipboard(vrc_client *client, const char *text, int text_l
     }
     copy[length] = '\0';
 
-    free(client->clipboard);
+    vrc_release_clipboard(&client->clipboard, &client->clipboard_length);
     client->clipboard = copy;
     client->clipboard_length = length;
-    if (client->clipboard_revision == UINT64_MAX) {
-        vrc_set_error(client, "clipboard revision overflow");
-        return;
-    }
     client->clipboard_revision += 1U;
 }
 
@@ -412,6 +424,7 @@ vrc_status vrc_client_send_clipboard(vrc_client *client, const char *text, size_
     }
     copy[text_length] = '\0';
     sent = SendClientCutText(client->native, copy, (int)text_length);
+    vrc_secure_scrub(copy, text_length + 1U);
     free(copy);
     if (!sent) {
         vrc_set_error(client, "clipboard send failed");
@@ -537,7 +550,7 @@ void vrc_client_destroy(vrc_client *client) {
     } else {
         free(client->framebuffer);
     }
-    free(client->clipboard);
+    vrc_release_clipboard(&client->clipboard, &client->clipboard_length);
     if (client->password != NULL) {
         vrc_secure_scrub(client->password, strlen(client->password));
         free(client->password);

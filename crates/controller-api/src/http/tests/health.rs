@@ -82,7 +82,7 @@ async fn protected_routes_use_one_generic_bearer_failure() {
 async fn websocket_initial_snapshot_sequence_exhaustion_fails_before_upgrade() {
     let state = test_state(true, MockScreenshot::Png);
     state.events.force_sequence_for_test(u64::MAX);
-    let app = router(state);
+    let app = router(state.clone());
 
     let response = app
         .oneshot(
@@ -100,6 +100,12 @@ async fn websocket_initial_snapshot_sequence_exhaustion_fails_before_upgrade() {
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = json_body(response).await;
     assert_eq!(body["error"]["code"], "event_sequence_exhausted");
+    let metrics = state.metrics.render(
+        &state.backend.snapshot(),
+        state.backend.command_submissions_in_flight(),
+        state.backend.command_queue_capacity(),
+    );
+    assert!(metrics.contains("vrc_websocket_clients 0"));
 }
 
 #[tokio::test]

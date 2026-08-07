@@ -6,7 +6,7 @@
 
 use crate::events::MIN_PROCESS_SHUTDOWN_TIMEOUT_MS;
 use crate::worker::WorkerSettings;
-use libvnc_adapter::{NativeClientConfig, SecretString};
+use libvnc_adapter::{NativeClientConfig, SecretString, scrub_secret_bytes};
 use remote_desktop_core::{DesktopError, MAX_FRAMEBUFFER_BYTES};
 use std::env;
 use std::error::Error;
@@ -15,7 +15,6 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{Ordering, compiler_fence};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LISTEN_ADDRESS: &str = "127.0.0.1:8080";
@@ -56,50 +55,26 @@ pub struct ApiToken {
 }
 
 impl ApiToken {
-    /// Wraps a parsed file-backed secret as a long-lived bearer token.
-    pub fn new(secret: SecretString) -> Self {
+    /// Transfers one parsed file-backed secret into long-lived token ownership.
+    pub fn from_secret(secret: SecretString) -> Self {
         Self {
             inner: Arc::new(secret),
         }
     }
 
     /// Exposes bytes only to the constant-time bearer comparison boundary.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         self.inner.expose_secret().as_bytes()
     }
 
     /// Returns whether this token would be unusable for authentication.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.inner.expose_secret().is_empty()
     }
 
-    /// Exposes the secret for tests and narrow configuration assertions.
-    pub fn expose_secret(&self) -> &str {
+    #[cfg(test)]
+    fn expose_secret_for_test(&self) -> &str {
         self.inner.expose_secret()
-    }
-}
-
-impl From<SecretString> for ApiToken {
-    fn from(value: SecretString) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<Arc<str>> for ApiToken {
-    fn from(value: Arc<str>) -> Self {
-        Self::new(SecretString::from(value.as_ref()))
-    }
-}
-
-impl From<&str> for ApiToken {
-    fn from(value: &str) -> Self {
-        Self::new(SecretString::from(value))
-    }
-}
-
-impl AsRef<str> for ApiToken {
-    fn as_ref(&self) -> &str {
-        self.expose_secret()
     }
 }
 
@@ -188,7 +163,7 @@ impl ControllerConfig {
             "VRC_VNC_PASSWORD_FILE",
             DEFAULT_VNC_PASSWORD_FILE,
         ));
-        let api_token = ApiToken::new(secrets.read_secret(&api_token_path)?);
+        let api_token = ApiToken::from_secret(secrets.read_secret(&api_token_path)?);
         if api_token.is_empty() {
             return Err(ConfigError::SecretFile {
                 path: api_token_path,
@@ -461,35 +436,45 @@ fn parse_secret_bytes(path: &Path, bytes: Vec<u8>) -> Result<SecretString, Confi
 
 fn parse_secret_bytes_with_rejection_observer<F>(
     path: &Path,
-    bytes: Vec<u8>,
+    mut bytes: Vec<u8>,
     observe_rejection: F,
 ) -> Result<SecretString, ConfigError>
 where
     F: FnOnce(&[u8]),
 {
-    let mut value = match String::from_utf8(bytes) {
-        Ok(value) => value,
-        Err(error) => {
-            return scrub_and_reject_secret_bytes(
-                path,
-                error.into_bytes(),
-                "contents are not UTF-8",
-                observe_rejection,
-            );
-        }
-    };
-    while value.ends_with('\n') || value.ends_with('\r') {
-        value.pop();
-    }
-    if value.is_empty() || value.contains('\0') {
+    if std::str::from_utf8(&bytes).is_err() {
         return scrub_and_reject_secret_bytes(
             path,
-            value.into_bytes(),
+            bytes,
+            "contents are not UTF-8",
+            observe_rejection,
+        );
+    }
+
+    let mut trimmed_length = bytes.len();
+    while trimmed_length > 0 && matches!(bytes[trimmed_length - 1], b'\n' | b'\r') {
+        trimmed_length -= 1;
+    }
+    if trimmed_length == 0 || bytes[..trimmed_length].contains(&0) {
+        return scrub_and_reject_secret_bytes(
+            path,
+            bytes,
             "contents are empty or contain NUL",
             observe_rejection,
         );
     }
-    Ok(SecretString::from(value))
+
+    secure_scrub_bytes(&mut bytes[trimmed_length..]);
+    bytes.truncate(trimmed_length);
+    match String::from_utf8(bytes) {
+        Ok(value) => Ok(SecretString::from(value)),
+        Err(error) => scrub_and_reject_secret_bytes(
+            path,
+            error.into_bytes(),
+            "contents are not UTF-8",
+            observe_rejection,
+        ),
+    }
 }
 
 fn scrub_and_reject_secret_bytes<F>(
@@ -510,8 +495,7 @@ where
 }
 
 fn secure_scrub_bytes(bytes: &mut [u8]) {
-    bytes.fill(0);
-    compiler_fence(Ordering::SeqCst);
+    scrub_secret_bytes(bytes);
 }
 
 #[cfg(unix)]
@@ -759,7 +743,7 @@ mod tests {
             ),
         ]));
         let config = ControllerConfig::load_from(&environment, &secrets()).expect("config loads");
-        assert_eq!(config.api_token.as_ref(), "api-token");
+        assert_eq!(config.api_token.expose_secret_for_test(), "api-token");
         assert_eq!(
             config.worker.native.password.expose_secret(),
             "vnc-password"
@@ -819,21 +803,39 @@ mod tests {
     #[test]
     fn invalid_utf8_secret_bytes_are_scrubbed_before_rejection() {
         let (result, observed) = rejected_secret_observation(vec![0xff, b's', b'e', b'c']);
-        assert!(matches!(result, Err(ConfigError::SecretFile { reason: "contents are not UTF-8", .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigError::SecretFile {
+                reason: "contents are not UTF-8",
+                ..
+            })
+        ));
         assert_eq!(observed, vec![0, 0, 0, 0]);
     }
 
     #[test]
     fn nul_secret_bytes_are_scrubbed_before_rejection() {
         let (result, observed) = rejected_secret_observation(b"abc\0def".to_vec());
-        assert!(matches!(result, Err(ConfigError::SecretFile { reason: "contents are empty or contain NUL", .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigError::SecretFile {
+                reason: "contents are empty or contain NUL",
+                ..
+            })
+        ));
         assert_eq!(observed, vec![0; 7]);
     }
 
     #[test]
     fn empty_after_trim_secret_bytes_are_scrubbed_before_rejection() {
         let (result, observed) = rejected_secret_observation(b"\r\n".to_vec());
-        assert!(matches!(result, Err(ConfigError::SecretFile { reason: "contents are empty or contain NUL", .. })));
+        assert!(matches!(
+            result,
+            Err(ConfigError::SecretFile {
+                reason: "contents are empty or contain NUL",
+                ..
+            })
+        ));
         assert_eq!(observed, vec![0, 0]);
     }
 

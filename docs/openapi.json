@@ -282,7 +282,7 @@
             "$ref": "#/components/responses/Unauthorized"
           },
           "503": {
-            "description": "Configured WebSocket client capacity is exhausted.",
+            "description": "Configured WebSocket client capacity or the process-local event sequence is exhausted.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -1381,6 +1381,7 @@
               "invalid_json",
               "internal_error",
               "websocket_capacity",
+              "event_sequence_exhausted",
               "screenshot_busy",
               "screenshot_timeout",
               "invalid_coordinate",

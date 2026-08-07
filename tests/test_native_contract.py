@@ -66,6 +66,37 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("SetFormatAndEncodings(", source)
         self.assertEqual(source.count("rfbClientCleanup("), 1)
 
+    def test_project_owned_native_clipboard_buffers_are_scrubbed_before_free(self):
+        source = SHIM_SOURCE.read_text(encoding="utf-8")
+
+        helper_start = source.index("static void vrc_release_clipboard")
+        helper_end = source.index("static char *vrc_duplicate", helper_start)
+        helper = source[helper_start:helper_end]
+        self.assertIn("vrc_secure_scrub(*clipboard, *length + 1U);", helper)
+        self.assertLess(helper.index("vrc_secure_scrub"), helper.index("free(*clipboard)"))
+
+        store_start = source.index("static void vrc_store_clipboard")
+        store_end = source.index("static void vrc_got_clipboard", store_start)
+        store = source[store_start:store_end]
+        self.assertLess(store.index("clipboard revision overflow"), store.index("copy = malloc"))
+        self.assertIn(
+            "vrc_release_clipboard(&client->clipboard, &client->clipboard_length);",
+            store,
+        )
+
+        send_start = source.index("vrc_status vrc_client_send_clipboard")
+        send_end = source.index("vrc_status vrc_client_dimensions", send_start)
+        send = source[send_start:send_end]
+        self.assertIn("vrc_secure_scrub(copy, text_length + 1U);", send)
+        self.assertLess(send.index("vrc_secure_scrub"), send.index("free(copy)"))
+
+        destroy_start = source.index("void vrc_client_destroy")
+        destroy = source[destroy_start:]
+        self.assertIn(
+            "vrc_release_clipboard(&client->clipboard, &client->clipboard_length);",
+            destroy,
+        )
+
     def test_native_smoke_is_bounded_and_uses_file_mounted_password(self):
         text = NATIVE_SMOKE.read_text(encoding="utf-8")
         self.assertIn("timeout --kill-after=2s 35s", text)

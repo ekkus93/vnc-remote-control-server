@@ -164,9 +164,10 @@ The controller uses these close codes and reasons:
 |---:|---|---|
 | `1001` | `client heartbeat timeout` | Client remained inactive beyond the bounded idle timeout. |
 | `1001` | `event source stopped` | Worker event source stopped during controller shutdown or failure. |
+| `1011` | `event sequence exhausted` | The process-local sequence cannot allocate another unique event ID. |
 | `1013` | `client event buffer exhausted` | Client was too slow and lagged beyond its bounded event buffer. |
 
-A client-capacity rejection occurs before upgrade and returns HTTP `503` with error code `websocket_capacity`.
+A client-capacity rejection occurs before upgrade and returns HTTP `503` with error code `websocket_capacity`. If the initial snapshot cannot allocate a unique sequence, the controller releases the client permit and returns HTTP `503` with error code `event_sequence_exhausted` before upgrade. Existing clients close with `1011` no later than the next bounded heartbeat wake-up. The sequence never wraps, resets, saturates, or reuses an earlier value.
 
 ## Interactive example
 

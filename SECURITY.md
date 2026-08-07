@@ -29,4 +29,18 @@ The shared `SecretString` abstraction is non-`Debug` and zeroizes its live byte 
 
 The pinned Debian LibVNCClient package is `0.9.14+dfsg-1ubuntu0.2`. Its source location is `src/libvncclient/rfbclient.c`, function `HandleVncAuth`. That function receives the allocation returned by `GetPassword`, truncates the logical password to eight bytes for classic VNC DES authentication, encrypts the challenge, overwrites only the now-visible truncated string through its NUL terminator, and then frees the allocation. Consequently, bytes beyond offset eight in a longer callback allocation are not proven scrubbed before the library frees it. The shim has no post-authentication ownership hook for that allocation, so the unverified tail remains an explicit third-party residual rather than a project-owned-zeroization claim. Operators should still use a private network and treat VNC authentication as defense in depth, not transport confidentiality.
 
-API bearer-token storage and constant-time comparison are unchanged in this pass. Moving the API token to the shared zeroizing abstraction is a deferred follow-up so that this correctness repair does not mix authentication behavior changes into the shutdown and worker-state work.
+## API bearer-token lifecycle
+
+The process-wide API token is held by an explicit `ApiToken` handle backed by `Arc<SecretString>`. Cloning controller or router state clones only the shared owner; it does not clone token bytes into an ordinary `String` or `Arc<str>`. The token type implements neither `Debug` nor `Display`, and the HTTP authentication boundary exposes only borrowed bytes for constant-time comparison. When the final owner is dropped, `SecretString` overwrites its live string bytes with volatile writes before releasing the allocation.
+
+This is a project-owned live-buffer guarantee, not a claim that process crashes, core dumps, kernel memory, allocator metadata, reverse proxies, clients, or request-header storage contain no residual token bytes. Operators must still disable core dumps where appropriate, protect process memory, terminate TLS at a trusted boundary, and prevent authorization-header logging outside the controller.
+
+## Secret-file rejection lifecycle
+
+The filesystem reader checks metadata, regular-file status, size, and Unix permissions before reading. After reading, UTF-8 validation and CR/LF trimming operate on one owned byte vector. Invalid UTF-8, empty-after-trim, embedded NUL, and future parser rejection paths overwrite the complete live vector with volatile writes before returning a redaction-safe error. Successful parsing transfers the same allocation into `SecretString`; trailing CR/LF bytes are scrubbed before truncation.
+
+## Clipboard buffer lifecycle
+
+Project-owned native C clipboard allocations are scrubbed before replacement and destruction using the same volatile-byte primitive as the VNC password. The temporary outbound C copy passed to `SendClientCutText` is scrubbed before free on both success and failure. The stored payload length is retained so scrubbing covers the allocation through its terminating NUL.
+
+This guarantee does not cover Rust clipboard request/response values, Axum response bodies, LibVNCClient-owned copies, the VNC server, the desktop test application, toolkit or OS clipboard managers, client applications, allocator residuals, swap, or crash dumps. Clipboard contents remain sensitive product data and must never be logged.

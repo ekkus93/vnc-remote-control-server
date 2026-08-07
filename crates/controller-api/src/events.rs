@@ -331,16 +331,17 @@ impl EventHub {
         if self.sequence_exhausted.load(Ordering::Acquire) {
             return Err(EventSequenceError::Exhausted);
         }
-        let sequence = self.sequence.try_update(
-            Ordering::AcqRel,
-            Ordering::Acquire,
-            |value| value.checked_add(1),
-        );
+        let sequence = self
+            .sequence
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            });
         let sequence = match sequence {
             Ok(sequence) => sequence,
             Err(_) => {
-                self.sequence_exhausted.store(true, Ordering::Release);
-                tracing::error!("worker_event_sequence_exhausted");
+                if !self.sequence_exhausted.swap(true, Ordering::AcqRel) {
+                    tracing::error!("event_hub_sequence_exhausted");
+                }
                 return Err(EventSequenceError::Exhausted);
             }
         };
@@ -674,12 +675,16 @@ mod tests {
             Metrics::default(),
         );
         hub.sequence.store(u64::MAX, Ordering::Release);
-        let (result, logs) = crate::test_support::capture_logs(|| {
-            hub.publish_test(EventPayload::ProtocolError)
+        let ((first, second), logs) = crate::test_support::capture_logs(|| {
+            (
+                hub.publish_test(EventPayload::ProtocolError),
+                hub.publish_test(EventPayload::ProtocolError),
+            )
         });
-        assert_eq!(result, Err(EventSequenceError::Exhausted));
+        assert_eq!(first, Err(EventSequenceError::Exhausted));
+        assert_eq!(second, Err(EventSequenceError::Exhausted));
         assert!(hub.sequence_exhausted.load(Ordering::Acquire));
-        assert!(logs.contains("worker_event_sequence_exhausted"));
+        assert_eq!(logs.matches("event_hub_sequence_exhausted").count(), 1);
     }
 
     #[tokio::test]

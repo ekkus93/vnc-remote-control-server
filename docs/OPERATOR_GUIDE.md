@@ -299,6 +299,8 @@ curl --fail-with-body --header "$AUTH_HEADER" "$BASE_URL/v1/clipboard"
 
 The API accepts UTF-8 clipboard strings up to 1 MiB and rejects embedded NUL bytes. RFB clipboard transport is a byte-oriented legacy channel; inbound bytes must form valid UTF-8 or the adapter rejects the update. Applications and desktop toolkits may normalize line endings or provide clipboard updates only after an explicit copy operation.
 
+The native shim scrubs its project-owned stored clipboard allocation before replacement or destruction and scrubs its temporary outbound send copy before free. This does not prove that Rust request or response values, LibVNCClient, the VNC server, desktop applications, toolkit or OS clipboard managers, clients, allocators, swap, or crash dumps have no residual copies.
+
 ### Manual reconnect
 
 ```bash
@@ -339,6 +341,8 @@ websocat \
 ```
 
 The first text frame is a `snapshot`. Later payload-free events report connection-state transitions, framebuffer revisions or invalidation, clipboard revisions, overload, and protocol errors. The server sends WebSocket ping frames; clients must remain responsive. Slow or idle clients are disconnected within configured bounds.
+
+Event sequences never wrap, reset, saturate silently, or reuse an earlier value. If sequence allocation is exhausted before the initial snapshot, the controller releases the client slot and returns `503 event_sequence_exhausted` before upgrade. Existing clients close with WebSocket code `1011` and reason `event sequence exhausted` no later than the next heartbeat wake-up.
 
 See [`WEBSOCKET_EVENTS.md`](WEBSOCKET_EVENTS.md) for the exact event envelope and close behavior.
 

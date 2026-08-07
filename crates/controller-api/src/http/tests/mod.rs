@@ -4,6 +4,7 @@ use super::middleware::{AccessLogContext, REQUEST_ID_HEADER, format_access_log};
 use super::router::router;
 use super::state::HttpState;
 use super::support::bearer_matches;
+use crate::config::ApiToken;
 use crate::framebuffer::FramebufferMetadata;
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome};
@@ -11,6 +12,7 @@ use crate::worker::WorkerSnapshot;
 use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderValue, Request as HttpRequest, StatusCode};
+use libvnc_adapter::SecretString;
 use remote_desktop_core::{ClipboardSnapshot, ConnectionState, DesktopError, WorkerCommand};
 use serde_json::Value;
 use std::sync::Arc;
@@ -161,7 +163,7 @@ pub(super) fn test_state_with_backend(
     });
     let state = HttpState::new(
         backend.clone(),
-        Arc::from("test-token"),
+        ApiToken::from_secret(SecretString::from("test-token")),
         Arc::from("test-process"),
         4096,
         Duration::from_secs(1),

@@ -128,6 +128,15 @@ fn secure_scrub(bytes: &mut [u8]) {
     compiler_fence(Ordering::SeqCst);
 }
 
+/// Scrubs a live project-owned secret byte buffer with volatile writes.
+///
+/// This safe entry point keeps volatile pointer operations confined to the
+/// native-boundary crate while allowing configuration parsing to scrub rejected
+/// file contents without introducing unsafe code into `controller-api`.
+pub fn scrub_secret_bytes(bytes: &mut [u8]) {
+    secure_scrub(bytes);
+}
+
 /// Configuration copied into one native client.
 #[derive(Clone, PartialEq, Eq)]
 pub struct NativeClientConfig {

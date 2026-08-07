@@ -53,6 +53,7 @@ EXPECTED_ERROR_CODES = {
     "invalid_json",
     "internal_error",
     "websocket_capacity",
+    "event_sequence_exhausted",
     "screenshot_busy",
     "screenshot_timeout",
     "invalid_coordinate",
@@ -283,10 +284,13 @@ class DocumentationContractTests(unittest.TestCase):
         for event_type in EXPECTED_EVENT_TYPES:
             self.assertIn(f"`{event_type}`", document)
         self.assertIn("code: 1013", source)
+        self.assertIn("code: 1011", source)
         self.assertIn("code: 1001", source)
         self.assertIn("`1013`", document)
+        self.assertIn("`1011`", document)
         self.assertIn("`1001`", document)
         self.assertIn("client event buffer exhausted", document)
+        self.assertIn("event sequence exhausted", document)
         self.assertIn("client heartbeat timeout", document)
         for forbidden in ("clipboard_text", "typed_text", "pixels", "password", "token"):
             self.assertIn(forbidden, source)
