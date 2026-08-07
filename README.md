@@ -89,6 +89,14 @@ curl --fail-with-body \
   "$BASE_URL/v1/status"
 ```
 
+Open the hosted API reference in a browser:
+
+- Swagger UI: `http://127.0.0.1:8080/docs`
+- ReDoc: `http://127.0.0.1:8080/redoc`
+- Raw OpenAPI 3.1 JSON: `http://127.0.0.1:8080/openapi.json`
+
+The documentation routes are public, but every `/v1/*` operation invoked from Swagger UI still requires the normal bearer token. Swagger UI does not persist authorization across reloads and has its external validator disabled. The UI JavaScript/CSS is loaded from exact-version CDN URLs (`swagger-ui-dist` 5.32.11 and ReDoc 2.5.3); the API specification itself is served locally from the repository-owned `docs/openapi.json` contract.
+
 Stop the stack and remove disposable state:
 
 ```bash
@@ -97,8 +105,11 @@ docker compose -f deploy/compose.yaml down --volumes --remove-orphans
 
 ## Documentation
 
+- Hosted Swagger UI: `/docs`.
+- Hosted ReDoc: `/redoc`.
+- Hosted raw OpenAPI: `/openapi.json`.
 - [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, and troubleshooting.
-- [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for every HTTP route.
+- [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for the supported controller API.
 - [`docs/WEBSOCKET_EVENTS.md`](docs/WEBSOCKET_EVENTS.md): event envelope, event types, heartbeat behavior, and close codes.
 - [`deploy/README.md`](deploy/README.md): Compose topology and mode-specific commands.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): development prerequisites and quality commands.
