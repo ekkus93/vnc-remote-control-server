@@ -70,6 +70,67 @@ The SHA above is an example known-good repository revision. Replace it deliberat
 
 Installing directly from GitHub requires `git` to be available on the machine running `pip`.
 
+## Demo CLI
+
+Installing the package also installs a small command-line demo application:
+
+```bash
+vnc-remote-control-demo --help
+```
+
+The demo talks to the Rust controller through the same `VncClient` library. By default it connects to `http://127.0.0.1:8080` and reads the API bearer token from `deploy/secrets/api_token.txt`. Override those locations explicitly when needed:
+
+```bash
+vnc-remote-control-demo \
+  --base-url http://127.0.0.1:8080 \
+  --token-file deploy/secrets/api_token.txt \
+  overview
+```
+
+`--token-file` can also be supplied through `VRC_API_TOKEN_FILE`. The demo intentionally does **not** accept a raw bearer token as a command-line argument, so the token is not placed in the shell history or process argument list by the demo.
+
+Useful commands include:
+
+```bash
+# Health, connection state, and display information.
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt overview
+
+# Save the current framebuffer.
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt screenshot screen.png
+
+# Pointer input.
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt move 640 400
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt click 640 400
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt double-click 640 400
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt scroll 640 400 -3
+
+# Keyboard input.
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt key ENTER down
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt key ENTER up
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt chord CTRL_LEFT a
+printf '%s\n' 'hello from the demo' | \
+  vnc-remote-control-demo --token-file deploy/secrets/api_token.txt type-text
+
+# Clipboard operations.
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt clipboard-get
+printf '%s\n' 'clipboard from the demo' | \
+  vnc-remote-control-demo --token-file deploy/secrets/api_token.txt clipboard-set
+
+# Reconnect and metrics.
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt reconnect
+vnc-remote-control-demo --token-file deploy/secrets/api_token.txt metrics
+```
+
+For WebSocket event streaming, install the `websocket` extra and request a bounded number of events:
+
+```bash
+vnc-remote-control-demo \
+  --token-file deploy/secrets/api_token.txt \
+  events --count 10
+```
+
+The demo deliberately leaves controller validation authoritative. It does not clamp coordinates, rewrite text, retry rejected commands, or hide API failures.
+
 ## Basic usage
 
 ```python
