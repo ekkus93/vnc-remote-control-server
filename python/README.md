@@ -26,7 +26,11 @@ The Python client does not need the desktop service name, desktop image name, VN
 
 ## Install
 
-From this repository:
+The package name is `vnc-remote-control-client`. The import package is `vnc_remote_control`.
+
+### From a local checkout
+
+From the repository root:
 
 ```bash
 python -m pip install ./python
@@ -37,6 +41,34 @@ With WebSocket event support:
 ```bash
 python -m pip install './python[websocket]'
 ```
+
+### Directly from GitHub
+
+`pip` can install the package directly from this repository even though the Python project lives in the `python/` subdirectory:
+
+```bash
+python -m pip install \
+  "vnc-remote-control-client @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
+```
+
+For WebSocket event support:
+
+```bash
+python -m pip install \
+  "vnc-remote-control-client[websocket] @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
+```
+
+Installing from `master` is convenient for development, but it is not reproducible because `master` can advance. For deployments, automation, and other reproducible environments, pin the install to a full Git commit SHA:
+
+```bash
+COMMIT_SHA=0db57983137437d3f33aee0fc6bb7a61c474159c
+python -m pip install \
+  "vnc-remote-control-client @ git+https://github.com/ekkus93/vnc-remote-control-server.git@${COMMIT_SHA}#subdirectory=python"
+```
+
+The SHA above is an example known-good repository revision. Replace it deliberately when upgrading so the deployed Python client version changes only when you choose to move the pin.
+
+Installing directly from GitHub requires `git` to be available on the machine running `pip`.
 
 ## Basic usage
 
