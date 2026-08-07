@@ -1,17 +1,19 @@
-use super::ids::{RequestId, request_id, valid_request_id};
+use super::ids::{
+    REQUEST_ID_EXHAUSTED_SENTINEL, RequestId, request_id, valid_request_id,
+};
 use super::responses::ApiError;
 use super::state::HttpState;
 use super::support::bearer_matches;
 use axum::extract::{Request, State};
 use axum::http::header::AUTHORIZATION;
-use axum::http::{HeaderName, HeaderValue, Method};
+use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::Instrument;
 #[cfg(test)]
-use {axum::http::StatusCode, std::time::Duration};
+use std::time::Duration;
 
 pub(super) const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
@@ -20,19 +22,44 @@ pub(super) async fn assign_request_id(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let request_id = request
+    if state.request_id_sequence_exhausted() {
+        return request_id_exhausted_response();
+    }
+    let request_id = match request
         .headers()
         .get(&REQUEST_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .filter(|value| valid_request_id(value))
         .map(|value| RequestId(Arc::from(value)))
-        .unwrap_or_else(|| state.next_request_id());
+    {
+        Some(request_id) => request_id,
+        None => match state.next_request_id() {
+            Ok(request_id) => request_id,
+            Err(_) => return request_id_exhausted_response(),
+        },
+    };
     request.extensions_mut().insert(request_id.clone());
 
     let mut response = next.run(request).await;
     if let Ok(value) = HeaderValue::from_str(&request_id.0) {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
     }
+    response
+}
+
+fn request_id_exhausted_response() -> Response {
+    let request_id = RequestId::exhausted();
+    let mut response = ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "request_id_exhausted",
+        "request identifier sequence is exhausted",
+        request_id,
+    )
+    .into_response();
+    response.headers_mut().insert(
+        REQUEST_ID_HEADER,
+        HeaderValue::from_static(REQUEST_ID_EXHAUSTED_SENTINEL),
+    );
     response
 }
 
