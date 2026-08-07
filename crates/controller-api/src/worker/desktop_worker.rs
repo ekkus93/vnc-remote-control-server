@@ -6,7 +6,7 @@ use super::run::run_worker;
 use super::session::WorkerSession;
 use super::snapshot::{WorkerEvents, WorkerSnapshot};
 use crate::framebuffer::FramebufferStore;
-use libvnc_adapter::{NativeClient, NativeError};
+use libvnc_adapter::{NativeClient, NativeClientConfig, NativeError, SecretString};
 use remote_desktop_core::{ConnectionState, DesktopError};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
@@ -31,10 +31,26 @@ pub struct DesktopWorker {
     worker_exited: Option<Receiver<()>>,
 }
 
+fn duplicate_native_config_for_reconnect_factory(
+    config: &NativeClientConfig,
+) -> NativeClientConfig {
+    // The reconnect factory outlives `spawn`, while `WorkerSettings` is moved
+    // into the worker thread. That architecture requires one additional owned
+    // native configuration. Keep the secret-byte duplication named and local
+    // instead of hiding it behind `NativeClientConfig::clone()`.
+    NativeClientConfig {
+        host: config.host.clone(),
+        port: config.port,
+        password: SecretString::from(config.password.expose_secret()),
+        connect_timeout: config.connect_timeout,
+        read_timeout: config.read_timeout,
+    }
+}
+
 impl DesktopWorker {
     /// Spawns the production worker and waits for thread startup acknowledgement.
     pub fn spawn(settings: WorkerSettings) -> Result<Self, DesktopError> {
-        let native = settings.native.clone();
+        let native = duplicate_native_config_for_reconnect_factory(&settings.native);
         Self::spawn_with_factory(settings, move || NativeClient::connect(&native))
     }
 
