@@ -157,11 +157,11 @@ impl HttpState {
         if self.request_id_sequence_exhausted() {
             return Err(RequestIdSequenceError);
         }
-        let sequence = self
-            .request_sequence
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                value.checked_add(1)
-            });
+        let sequence =
+            self.request_sequence
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    value.checked_add(1)
+                });
         match sequence {
             Ok(sequence) => Ok(RequestId(Arc::from(format!(
                 "{}-{sequence}",
