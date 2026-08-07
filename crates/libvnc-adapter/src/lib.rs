@@ -82,8 +82,8 @@ unsafe extern "C" {
 
 /// Heap-owned UTF-8 secret that scrubs its project-owned allocation on drop.
 ///
-/// This type intentionally does not implement `Debug` or `Display`.
-#[derive(Clone, PartialEq, Eq)]
+/// This type intentionally does not implement `Clone`, `Debug`, or `Display`.
+#[derive(PartialEq, Eq)]
 pub struct SecretString(String);
 
 impl SecretString {
@@ -138,7 +138,10 @@ pub fn scrub_secret_bytes(bytes: &mut [u8]) {
 }
 
 /// Configuration copied into one native client.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// This type intentionally does not implement `Clone`; callers that require a
+/// second owned credential must make that duplication explicit at the call site.
+#[derive(PartialEq, Eq)]
 pub struct NativeClientConfig {
     /// VNC server hostname on the private deployment network.
     pub host: String,
