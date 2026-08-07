@@ -55,8 +55,10 @@ The preferred custom-image workflow keeps the service name `desktop` and overrid
 services:
   desktop:
     image: my-firefox-discord-desktop:local
-    build: null
+    build: !reset null
 ```
+
+The explicit `!reset null` clears the stock `build` section in the merged Compose model, so Compose uses the prebuilt custom image rather than rebuilding the stock desktop under the new image tag.
 
 Start it with:
 
