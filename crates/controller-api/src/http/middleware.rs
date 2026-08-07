@@ -1,6 +1,4 @@
-use super::ids::{
-    REQUEST_ID_EXHAUSTED_SENTINEL, RequestId, request_id, valid_request_id,
-};
+use super::ids::{REQUEST_ID_EXHAUSTED_SENTINEL, RequestId, request_id, valid_request_id};
 use super::responses::ApiError;
 use super::state::HttpState;
 use super::support::bearer_matches;
@@ -10,10 +8,10 @@ use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
-use std::time::Instant;
-use tracing::Instrument;
 #[cfg(test)]
 use std::time::Duration;
+use std::time::Instant;
+use tracing::Instrument;
 
 pub(super) const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
