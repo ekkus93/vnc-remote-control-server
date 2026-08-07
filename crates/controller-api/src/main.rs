@@ -2,7 +2,7 @@
 
 use controller_api::config::ControllerConfig;
 use controller_api::events::EventHub;
-use controller_api::http::{HttpState, router};
+use controller_api::http::{HttpState, HttpWorkerSettings, router};
 use controller_api::observability::{Metrics, init_tracing};
 use controller_api::runtime::{RuntimeSettings, serve_until_shutdown};
 use controller_api::shutdown::finalize_runtime;
@@ -22,20 +22,47 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let config = ControllerConfig::load()?;
-    let runtime = RuntimeSettings::load(config.maximum_json_bytes)?;
-    let listener = TcpListener::bind(config.listen_address).await?;
-    let mut worker = DesktopWorker::spawn(config.worker.clone())?;
+    let ControllerConfig {
+        listen_address,
+        api_token,
+        process_instance,
+        maximum_json_bytes,
+        command_ack_timeout,
+        shutdown_timeout,
+        screenshot_concurrency,
+        screenshot_timeout,
+        websocket_event_capacity,
+        websocket_max_clients,
+        websocket_ping_interval,
+        websocket_idle_timeout,
+        worker: worker_settings,
+    } = ControllerConfig::load()?;
+
+    let runtime = RuntimeSettings::load(maximum_json_bytes)?;
+    let listener = TcpListener::bind(listen_address).await?;
+    let mut worker = DesktopWorker::spawn(worker_settings)?;
     let metrics = Metrics::default();
     let (event_hub, event_bridge) = EventHub::start(
         worker.take_events()?,
-        config.websocket_event_capacity,
-        config.websocket_max_clients,
-        config.websocket_ping_interval,
-        config.websocket_idle_timeout,
+        websocket_event_capacity,
+        websocket_max_clients,
+        websocket_ping_interval,
+        websocket_idle_timeout,
         metrics.clone(),
     )?;
-    let state = HttpState::from_worker(worker.client(), event_hub, metrics, &config)?;
+    let state = HttpState::from_worker(
+        worker.client(),
+        event_hub,
+        metrics,
+        HttpWorkerSettings {
+            api_token,
+            process_instance,
+            maximum_json_bytes,
+            command_ack_timeout,
+            screenshot_concurrency,
+            screenshot_timeout,
+        },
+    )?;
     let app = router(state.clone());
     let termination = termination_signal()?;
     let shutdown_state = state.clone();
@@ -46,7 +73,7 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     .await;
 
     state.begin_shutdown();
-    finalize_runtime(server_result, worker, event_bridge, config.shutdown_timeout)?;
+    finalize_runtime(server_result, worker, event_bridge, shutdown_timeout)?;
     Ok(())
 }
 
