@@ -1,4 +1,3 @@
-use crate::config::ControllerConfig;
 use crate::framebuffer::FramebufferMetadata;
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome, ScreenshotService};
 use crate::worker::{WorkerClient, WorkerSnapshot};
@@ -37,12 +36,17 @@ pub struct WorkerHttpBackend {
 }
 
 impl WorkerHttpBackend {
-    /// Creates a production backend using validated controller configuration.
-    pub fn new(client: WorkerClient, config: &ControllerConfig) -> Result<Self, ScreenshotError> {
+    /// Creates a production backend using validated HTTP screenshot settings.
+    pub fn new(
+        client: WorkerClient,
+        process_instance: &str,
+        screenshot_concurrency: usize,
+        screenshot_timeout: Duration,
+    ) -> Result<Self, ScreenshotError> {
         let screenshots = client.screenshot_service(
-            &config.process_instance,
-            config.screenshot_concurrency,
-            config.screenshot_timeout,
+            process_instance,
+            screenshot_concurrency,
+            screenshot_timeout,
         )?;
         Ok(Self {
             client,
