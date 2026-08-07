@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: post-correctness-rust-integration-cleanup-v2
+  group: post-correctness-rust-integration-cleanup-v3
   cancel-in-progress: true
 
 jobs:
@@ -42,7 +42,9 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/post-correctness-duplicate-h1-fix.py
+          python3 .github/post-correctness-async-health-fix.py
           test ! -e .github/post-correctness-duplicate-h1-fix.py
+          test ! -e .github/post-correctness-async-health-fix.py
           test ! -e .github/workflows/post-correctness-fixup.yml
           cargo fmt --all
           git diff --check
