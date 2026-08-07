@@ -13,7 +13,11 @@ async fn api_documentation_routes_are_public_and_single_source_the_openapi_contr
 
     let response = app
         .clone()
-        .oneshot(request("/openapi.json").body(Body::empty()).expect("request"))
+        .oneshot(
+            request("/openapi.json")
+                .body(Body::empty())
+                .expect("request"),
+        )
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
