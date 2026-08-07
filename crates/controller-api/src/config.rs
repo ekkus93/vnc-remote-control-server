@@ -79,7 +79,11 @@ impl ApiToken {
 }
 
 /// Fully validated process configuration.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// This type intentionally does not implement `Clone`: it owns native worker
+/// credentials. `ApiToken` remains independently cloneable because that handle
+/// shares one `Arc<SecretString>` without duplicating token bytes.
+#[derive(PartialEq, Eq)]
 pub struct ControllerConfig {
     /// HTTP listener address.
     pub listen_address: SocketAddr,
