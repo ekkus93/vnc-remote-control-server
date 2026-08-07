@@ -10,6 +10,7 @@ The intended branch-protection policy is documented even though direct-owner dev
 
 - Rust 1.97.1 through `rustup`;
 - Python 3.12 for first-party client, documentation, workflow, and policy contract tests;
+- `ruff`, `pylint`, and `mypy` for `make lint-python` (configs: `ruff.toml`, `.pylintrc`, `mypy.ini`);
 - GNU Make;
 - Docker Engine with Compose v2 for container milestones;
 - a C compiler, `pkg-config`, and Debian's `libvncserver-dev` package for native development;
@@ -27,6 +28,7 @@ The permanent `CI` and `Release Gates` workflows are fail-closed. A release-cand
 ```bash
 make fmt
 make lint
+make lint-python
 make test
 make build
 make compose-up
@@ -39,6 +41,7 @@ make security-scan
 Run all first-party Python, documentation, client/demo, workflow, and policy contracts with:
 
 ```bash
+pip install -e python/
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 

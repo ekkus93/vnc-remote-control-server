@@ -1,3 +1,5 @@
+"""Contract tests asserting living documentation stays current with master."""
+
 from __future__ import annotations
 
 import re
@@ -31,7 +33,10 @@ FULL_SHA = re.compile(r"\b[0-9a-f]{40}\b")
 
 
 class DocumentationFreshnessTests(unittest.TestCase):
+    """Asserts documentation files describe the current, non-historical repository state."""
+
     def test_documentation_index_separates_living_and_historical_material(self) -> None:
+        """docs/README.md separates current living docs from historical artifacts."""
         index = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
         for required in (
             "## Current living documentation",
@@ -59,6 +64,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
             self.assertIn(required, index)
 
     def test_root_readme_does_not_present_old_milestones_as_current(self) -> None:
+        """The root README points at current docs and drops stale milestone references."""
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/README.md", readme)
         self.assertIn("vnc-remote-control-demo", readme)
@@ -67,6 +73,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertNotIn("dd3b14917ad5e239573d584238ff67ded8138203", readme)
 
     def test_operator_guide_covers_current_hosted_and_python_surfaces(self) -> None:
+        """The operator guide documents the current hosted docs and Python client surfaces."""
         guide = (ROOT / "docs" / "OPERATOR_GUIDE.md").read_text(encoding="utf-8")
         for required in (
             "http://127.0.0.1:8080/docs",
@@ -81,6 +88,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertNotIn("no later than the next heartbeat wake-up", guide)
 
     def test_ci_bridge_describes_the_implemented_quality_surface(self) -> None:
+        """The CI status bridge doc describes the implemented quality gates, not a future plan."""
         bridge = (ROOT / "docs" / "CI_STATUS_BRIDGE.md").read_text(encoding="utf-8")
         for required in (
             "## Current CI quality surface",
@@ -97,6 +105,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertNotIn("As Rust, Docker, and integration-test code is added", bridge)
 
     def test_security_document_tracks_current_debian_native_dependency(self) -> None:
+        """SECURITY.md tracks the Debian base image and libvncclient version actually in use."""
         security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         dockerfile = (ROOT / "controller" / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("debian:13.6-slim", dockerfile)
@@ -106,6 +115,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertNotIn("0.9.14+dfsg-1ubuntu0.2", security)
 
     def test_python_and_deployment_docs_expose_current_entry_points(self) -> None:
+        """The Python and deploy READMEs expose the current install and deploy entry points."""
         python_readme = (ROOT / "python" / "README.md").read_text(encoding="utf-8")
         deploy_readme = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
 
@@ -125,6 +135,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
             self.assertIn(required, deploy_readme)
 
     def test_component_and_measurement_docs_track_current_entry_points(self) -> None:
+        """Desktop and framebuffer-measurement docs track the current image digest and paths."""
         desktop_readme = (ROOT / "desktop" / "README.md").read_text(encoding="utf-8")
         desktop_dockerfile = (ROOT / "desktop" / "Dockerfile").read_text(encoding="utf-8")
         base = re.search(
@@ -163,9 +174,13 @@ class DocumentationFreshnessTests(unittest.TestCase):
             self.assertIn(required, launcher)
         self.assertIn("crates/controller-api/tests/framebuffer_measurement.rs", launcher_doc)
         self.assertIn("crates/controller-api/tests/FRAMEBUFFER_MEASUREMENT.md", launcher_doc)
-        self.assertTrue((ROOT / "crates" / "controller-api" / "tests" / "framebuffer_measurement.rs").is_file())
+        measurement_test = (
+            ROOT / "crates" / "controller-api" / "tests" / "framebuffer_measurement.rs"
+        )
+        self.assertTrue(measurement_test.is_file())
 
     def test_contributor_guidance_preserves_historical_docs(self) -> None:
+        """CONTRIBUTING.md and CLAUDE.md both preserve historical-artifact guidance."""
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         for document in (contributing, claude):
@@ -176,6 +191,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertIn("vnc-remote-control-demo", claude)
 
     def test_contributing_quality_tools_match_current_workflows(self) -> None:
+        """CONTRIBUTING.md lists the quality tools that the current CI workflows actually run."""
         contributing = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
         release_gates = (ROOT / ".github" / "workflows" / "release-gates.yml").read_text(
             encoding="utf-8"
@@ -192,6 +208,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
             self.assertIn(required, release_gates)
 
     def test_local_markdown_links_in_current_docs_resolve(self) -> None:
+        """Every local markdown link in the current documentation set resolves to a real file."""
         failures: list[str] = []
         for document in CURRENT_MARKDOWN_DOCUMENTS:
             text = document.read_text(encoding="utf-8")

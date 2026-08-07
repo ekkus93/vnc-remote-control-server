@@ -1,8 +1,11 @@
+"""Contract tests asserting the CI and CI-status-publisher workflow files stay correct."""
+
 from __future__ import annotations
 
-import re
 import unittest
 from pathlib import Path
+
+from tests.ci_workflow_assertions import assert_baseline_rust_gates
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLISHER = ROOT / ".github/workflows/publish-ci-status.yml"
@@ -14,7 +17,10 @@ UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
 class WorkflowContractTests(unittest.TestCase):
-    def test_publisher_has_minimum_permissions_and_no_checkout(self):
+    """Asserts the GitHub Actions workflow files carry required behavior and safety properties."""
+
+    def test_publisher_has_minimum_permissions_and_no_checkout(self) -> None:
+        """The publisher workflow requests only its minimum required permissions."""
         text = PUBLISHER.read_text(encoding="utf-8")
         self.assertIn("actions: read", text)
         self.assertIn("contents: read", text)
@@ -22,33 +28,39 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("write-all", text)
         self.assertNotIn("actions/checkout", text)
 
-    def test_publisher_handles_all_required_workflow_run_states(self):
+    def test_publisher_handles_all_required_workflow_run_states(self) -> None:
+        """The publisher workflow reacts to the CI workflow's requested/in_progress/completed
+        states."""
         text = PUBLISHER.read_text(encoding="utf-8")
         self.assertRegex(text, r"workflows:\s*\n\s*- CI")
         self.assertIn("- requested", text)
         self.assertIn("- in_progress", text)
         self.assertIn("- completed", text)
 
-    def test_publisher_is_branch_and_issue_specific(self):
+    def test_publisher_is_branch_and_issue_specific(self) -> None:
+        """The publisher workflow is scoped to the master branch and issue #1."""
         text = PUBLISHER.read_text(encoding="utf-8")
         self.assertIn('MONITORED_BRANCH: "master"', text)
         self.assertIn('ISSUE_NUMBER: "1"', text)
         self.assertIn("publish-ci-status-ci-master", text)
         self.assertIn('HEAD_BRANCH" != "$MONITORED_BRANCH', text)
 
-    def test_publisher_has_double_stale_run_check_and_pagination(self):
+    def test_publisher_has_double_stale_run_check_and_pagination(self) -> None:
+        """The publisher workflow double-checks for a stale run and paginates its API calls."""
         text = PUBLISHER.read_text(encoding="utf-8")
         self.assertGreaterEqual(text.count("latest_run_id"), 4)
         self.assertIn("latest_run_id_after", text)
         self.assertGreaterEqual(text.count("--paginate --slurp"), 2)
 
-    def test_publisher_fetches_trusted_default_branch_script(self):
+    def test_publisher_fetches_trusted_default_branch_script(self) -> None:
+        """The publisher workflow fetches its helper script from the trusted default branch."""
         text = PUBLISHER.read_text(encoding="utf-8")
         self.assertIn("SCRIPT_PATH", text)
         self.assertIn("ref=${DEFAULT_BRANCH}", text)
         self.assertIn("base64 --decode", text)
 
-    def test_ci_is_authoritative_for_master_and_uploads_evidence(self):
+    def test_ci_is_authoritative_for_master_and_uploads_evidence(self) -> None:
+        """The CI workflow runs on master with pinned actions and uploads evidence artifacts."""
         text = CI.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("name: CI\n"))
         self.assertRegex(text, r"push:\s*\n\s*branches:\s*\n\s*- master")
@@ -58,9 +70,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotRegex(text, r"actions/(checkout|setup-python|upload-artifact)@v\d")
         self.assertIn("rustup toolchain install 1.97.1", text)
         self.assertIn("cargo fetch --locked", text)
-        self.assertIn("cargo fmt --all --check", text)
-        self.assertIn("cargo clippy --locked --workspace --all-targets --all-features -- -D warnings", text)
-        self.assertIn("cargo test --locked --workspace --all-features", text)
+        assert_baseline_rust_gates(self, text)
         self.assertIn("cargo doc --locked --workspace --all-features --no-deps", text)
         self.assertNotIn("cargo generate-lockfile", text)
         self.assertIn("RUSTDOCFLAGS: -Dwarnings", text)

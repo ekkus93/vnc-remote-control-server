@@ -1,0 +1,36 @@
+[MASTER]
+# tests/integration/r13_*.py import each other as plain sibling modules
+# (relying on the script directory being auto-added to sys.path when run
+# directly), matching how python/src is laid out as an installable package
+# root. Teach pylint the same resolution the interpreter uses.
+init-hook=
+    import sys
+    sys.path.insert(0, "tests/integration")
+    sys.path.insert(0, "python/src")
+    sys.path.insert(0, ".")
+
+[DESIGN]
+# Deliberate, documented widenings of pylint's default design-metric
+# thresholds — not per-line suppressions. Each covers a class of legitimate
+# shape rather than one specific finding:
+#   - max-args=7: infrastructure/wrapper methods (subprocess/HTTP call
+#     wrappers) whose extra parameters are keyword-only and independently
+#     meaningful; `*` already forces callers to name them, so the readability
+#     problem this rule guards against does not apply.
+#   - max-instance-attributes=11: dataclasses that mirror a documented JSON
+#     wire shape field-for-field (e.g. StatusResponse); grouping fields to
+#     hit a lower count would break the 1:1 mapping to the API contract.
+#   - max-public-methods=21: a REST API client class with one method per
+#     documented endpoint; splitting it to hit a lower count would be a
+#     breaking change to the public client API for no behavioral benefit.
+#   - max-locals=17: a few R13 E2E check functions run a single tightly
+#     timing- or state-coupled scenario (e.g. a split-write-vs-SIGTERM race,
+#     a progressive diagnostics dump) where splitting out a helper would mean
+#     threading most of the same locals through it as parameters/returns
+#     rather than actually reducing coupling. Genuinely decomposable checks
+#     (the ones with independent phases) are split into named helpers instead
+#     of relying on this widened threshold.
+max-args=7
+max-attributes=11
+max-public-methods=21
+max-locals=17

@@ -1,3 +1,5 @@
+"""Typed Python client for the VNC Remote Control Server HTTP API."""
+
 from .client import VncClient, VncRemoteControlClient
 from .errors import (
     ApiError,

@@ -14,7 +14,15 @@ Give the subagent this prompt:
 > 1. `cargo fmt --all --check`
 > 2. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 > 3. `cargo test --workspace --all-features`
-> 4. `python -m unittest discover -s tests -p 'test_*.py' -v`
+> 4. `ruff check .`
+> 5. `pylint --rcfile=.pylintrc python/src/vnc_remote_control tests scripts tools/ci_status desktop/test-app`
+> 6. `mypy --config-file mypy.ini python/src/vnc_remote_control tests scripts tools/ci_status desktop/test-app`
+> 7. `python -m unittest discover -s tests -p 'test_*.py' -v`
+>
+> All lint errors and warnings in our own code (everything under the paths above) are bugs and
+> must be fixed — never suggest suppressing them (no `# noqa`, `# pylint: disable`,
+> `# type: ignore`, or config threshold changes) merely to get a clean run. Findings in
+> third-party/vendor code are out of scope since that code isn't ours to fix.
 >
 > Return, for each command: which ran, whether it passed or failed, and the output of any command
 > that failed (or was skipped because an earlier one failed).

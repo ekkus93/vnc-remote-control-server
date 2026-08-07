@@ -1,7 +1,10 @@
+"""Synchronous HTTP/WebSocket client for the VNC Remote Control Server API."""
+
 from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
@@ -27,26 +30,45 @@ from .models import (
     WorkerFailure,
 )
 
+try:
+    import websocket as _websocket_module  # type: ignore[import-not-found]
+except ImportError:
+    _websocket_module = None
+
 
 class _HttpResponse(Protocol):
     status: int
     headers: Any
 
-    def read(self) -> bytes: ...
+    def read(self) -> bytes:
+        """Return the full response body."""
 
-    def __enter__(self) -> "_HttpResponse": ...
+    def __enter__(self) -> _HttpResponse:
+        """Enter the response's context manager."""
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None: ...
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        """Exit the response's context manager, releasing the connection."""
 
 
 class _WebSocket(Protocol):
-    def recv(self) -> str | bytes | None: ...
+    def recv(self) -> str | bytes | None:
+        """Return the next message, or a falsy value once the socket closes."""
 
-    def close(self) -> Any: ...
+    def close(self) -> Any:
+        """Close the WebSocket connection."""
 
 
 HttpOpen = Callable[..., _HttpResponse]
 WebSocketFactory = Callable[..., _WebSocket]
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestOptions:
+    """Non-positional knobs shared by `_request` and `_json_request`."""
+
+    authenticated: bool
+    json_body: dict[str, Any] | None = None
+    extra_headers: dict[str, str] | None = None
 
 
 def _require_object(payload: bytes, context: str) -> dict[str, Any]:
@@ -71,6 +93,47 @@ def _header(headers: Any, name: str) -> str | None:
         return None
     value = headers.get(name)
     return str(value) if value is not None else None
+
+
+def _decode_message(message: str | bytes) -> str:
+    """Decode a raw WebSocket text/binary message to text."""
+    if isinstance(message, bytes):
+        try:
+            return message.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ProtocolError("WebSocket event was not valid UTF-8") from exc
+    return message
+
+
+def _parse_event(text: str) -> Event:
+    """Parse and validate one WebSocket event payload."""
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ProtocolError("WebSocket event was not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise ProtocolError("WebSocket event was not a JSON object")
+    _require_fields(value, ("sequence", "timestamp_unix_ms", "type"), "WebSocket event")
+    sequence = value["sequence"]
+    timestamp = value["timestamp_unix_ms"]
+    event_type = value["type"]
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+        raise ProtocolError("WebSocket event sequence was not an integer")
+    if not isinstance(timestamp, int) or isinstance(timestamp, bool):
+        raise ProtocolError("WebSocket event timestamp_unix_ms was not an integer")
+    if not isinstance(event_type, str):
+        raise ProtocolError("WebSocket event type was not a string")
+    payload = {
+        key: item
+        for key, item in value.items()
+        if key not in {"sequence", "timestamp_unix_ms", "type"}
+    }
+    return Event(
+        sequence=sequence,
+        timestamp_unix_ms=timestamp,
+        type=event_type,
+        payload=payload,
+    )
 
 
 class VncRemoteControlClient:
@@ -119,10 +182,12 @@ class VncRemoteControlClient:
 
     @property
     def base_url(self) -> str:
+        """The base URL requests are issued against."""
         return self._base_url
 
     @property
     def timeout(self) -> float:
+        """The per-request timeout, in seconds."""
         return self._timeout
 
     def _require_token(self) -> str:
@@ -164,22 +229,20 @@ class VncRemoteControlClient:
         self,
         method: str,
         path: str,
-        *,
         expected_statuses: set[int],
-        authenticated: bool,
-        json_body: dict[str, Any] | None = None,
-        extra_headers: dict[str, str] | None = None,
+        options: _RequestOptions,
     ) -> tuple[int, Any, bytes]:
+        """Issue one HTTP request and return `(status, headers, body)`."""
         headers = {"Accept": "application/json"}
-        if authenticated:
+        if options.authenticated:
             headers["Authorization"] = f"Bearer {self._require_token()}"
-        if json_body is not None:
-            body = json.dumps(json_body, separators=(",", ":")).encode("utf-8")
+        if options.json_body is not None:
+            body = json.dumps(options.json_body, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
         else:
             body = None
-        if extra_headers:
-            headers.update(extra_headers)
+        if options.extra_headers:
+            headers.update(options.extra_headers)
 
         request = Request(
             f"{self._base_url}{path}",
@@ -210,46 +273,39 @@ class VncRemoteControlClient:
         self,
         method: str,
         path: str,
-        *,
         expected_status: int,
-        authenticated: bool,
-        json_body: dict[str, Any] | None = None,
+        options: _RequestOptions,
     ) -> dict[str, Any]:
-        _, _, body = self._request(
-            method,
-            path,
-            expected_statuses={expected_status},
-            authenticated=authenticated,
-            json_body=json_body,
-        )
+        """Issue one HTTP request and return its parsed JSON object body."""
+        _, _, body = self._request(method, path, {expected_status}, options)
         return _require_object(body, f"{method} {path} response")
 
     def get_openapi_document(self) -> dict[str, Any]:
         """Fetch the controller-hosted OpenAPI 3.1 document."""
         return self._json_request(
-            "GET",
-            "/openapi.json",
-            expected_status=200,
-            authenticated=False,
+            "GET", "/openapi.json", 200, _RequestOptions(authenticated=False)
         )
 
     def get_liveness(self) -> HealthResponse:
+        """Fetch `/health/live`, which never requires a bearer token."""
         value = self._json_request(
-            "GET", "/health/live", expected_status=200, authenticated=False
+            "GET", "/health/live", 200, _RequestOptions(authenticated=False)
         )
         _require_fields(value, ("status",), "liveness response")
         return HealthResponse(status=str(value["status"]))
 
     def get_readiness(self) -> HealthResponse:
+        """Fetch `/health/ready`, which never requires a bearer token."""
         value = self._json_request(
-            "GET", "/health/ready", expected_status=200, authenticated=False
+            "GET", "/health/ready", 200, _RequestOptions(authenticated=False)
         )
         _require_fields(value, ("status",), "readiness response")
         return HealthResponse(status=str(value["status"]))
 
     def get_status(self) -> StatusResponse:
+        """Fetch the worker's current connection and lifecycle status."""
         value = self._json_request(
-            "GET", "/v1/status", expected_status=200, authenticated=True
+            "GET", "/v1/status", 200, _RequestOptions(authenticated=True)
         )
         fields = (
             "state",
@@ -292,8 +348,9 @@ class VncRemoteControlClient:
         )
 
     def get_display(self) -> DisplayResponse:
+        """Fetch the current framebuffer geometry and revision."""
         value = self._json_request(
-            "GET", "/v1/display", expected_status=200, authenticated=True
+            "GET", "/v1/display", 200, _RequestOptions(authenticated=True)
         )
         fields = (
             "status",
@@ -316,15 +373,19 @@ class VncRemoteControlClient:
         )
 
     def get_screenshot(self, *, etag: str | None = None) -> ScreenshotResponse:
+        """Fetch the current screenshot as PNG bytes.
+
+        Passing the previous response's ``etag`` lets the controller reply
+        304-Not-Modified (``data=None``) when the framebuffer is unchanged.
+        """
         headers = {"Accept": "image/png"}
         if etag is not None:
             headers["If-None-Match"] = etag
         status, response_headers, body = self._request(
             "GET",
             "/v1/screenshot.png",
-            expected_statuses={200, 304},
-            authenticated=True,
-            extra_headers=headers,
+            {200, 304},
+            _RequestOptions(authenticated=True, extra_headers=headers),
         )
         return ScreenshotResponse(
             data=body if status == 200 else None,
@@ -335,12 +396,12 @@ class VncRemoteControlClient:
         )
 
     def get_metrics(self) -> str:
+        """Fetch the controller's Prometheus-format metrics as plain text."""
         _, _, body = self._request(
             "GET",
             "/v1/metrics",
-            expected_statuses={200},
-            authenticated=True,
-            extra_headers={"Accept": "text/plain"},
+            {200},
+            _RequestOptions(authenticated=True, extra_headers={"Accept": "text/plain"}),
         )
         try:
             return body.decode("utf-8")
@@ -348,12 +409,12 @@ class VncRemoteControlClient:
             raise ProtocolError("metrics response was not valid UTF-8") from exc
 
     def _command(self, path: str, body: dict[str, Any] | None = None) -> CommandAcceptedResponse:
+        """POST (or PUT, for clipboard) a command and return its 202 acknowledgement."""
         value = self._json_request(
             "POST" if path != "/v1/clipboard" else "PUT",
             path,
-            expected_status=202,
-            authenticated=True,
-            json_body=body,
+            202,
+            _RequestOptions(authenticated=True, json_body=body),
         )
         _require_fields(value, ("command_id", "status"), f"{path} response")
         return CommandAcceptedResponse(
@@ -362,6 +423,7 @@ class VncRemoteControlClient:
         )
 
     def move_pointer(self, x: int, y: int) -> CommandAcceptedResponse:
+        """Move the pointer to `(x, y)` without changing button state."""
         return self._command("/v1/pointer/move", {"x": x, "y": y})
 
     def set_pointer_button(
@@ -371,6 +433,7 @@ class VncRemoteControlClient:
         button: MouseButton,
         pressed: bool,
     ) -> CommandAcceptedResponse:
+        """Move to `(x, y)` and set `button` to pressed or released."""
         return self._command(
             "/v1/pointer/button",
             {"x": x, "y": y, "button": button, "pressed": pressed},
@@ -379,6 +442,7 @@ class VncRemoteControlClient:
     def click_pointer(
         self, x: int, y: int, button: MouseButton = "left"
     ) -> CommandAcceptedResponse:
+        """Move to `(x, y)` and click `button` once."""
         return self._command(
             "/v1/pointer/click", {"x": x, "y": y, "button": button}
         )
@@ -391,6 +455,7 @@ class VncRemoteControlClient:
         *,
         interval_ms: int = 100,
     ) -> CommandAcceptedResponse:
+        """Move to `(x, y)` and double-click `button` with the given interval."""
         return self._command(
             "/v1/pointer/double-click",
             {
@@ -409,6 +474,7 @@ class VncRemoteControlClient:
         *,
         delta_x: int = 0,
     ) -> CommandAcceptedResponse:
+        """Move to `(x, y)` and scroll by `(delta_x, delta_y)`."""
         return self._command(
             "/v1/pointer/scroll",
             {"x": x, "y": y, "delta_x": delta_x, "delta_y": delta_y},
@@ -417,17 +483,21 @@ class VncRemoteControlClient:
     def set_keyboard_key(
         self, key: str, action: KeyAction
     ) -> CommandAcceptedResponse:
+        """Press or release a single named keyboard key."""
         return self._command("/v1/keyboard/key", {"key": key, "action": action})
 
     def send_keyboard_chord(self, keys: Sequence[str]) -> CommandAcceptedResponse:
+        """Press and release `keys` together as a chord."""
         return self._command("/v1/keyboard/chord", {"keys": list(keys)})
 
     def type_keyboard_text(self, text: str) -> CommandAcceptedResponse:
+        """Type `text` via per-character key events."""
         return self._command("/v1/keyboard/text", {"text": text})
 
     def get_clipboard(self) -> ClipboardResponse:
+        """Fetch the desktop's current clipboard snapshot."""
         value = self._json_request(
-            "GET", "/v1/clipboard", expected_status=200, authenticated=True
+            "GET", "/v1/clipboard", 200, _RequestOptions(authenticated=True)
         )
         _require_fields(
             value, ("text", "revision", "updated_at_unix_ms"), "clipboard response"
@@ -439,27 +509,29 @@ class VncRemoteControlClient:
         )
 
     def set_clipboard(self, text: str) -> CommandAcceptedResponse:
+        """Set the desktop's clipboard to `text`."""
         return self._command("/v1/clipboard", {"text": text})
 
     def request_reconnect(self) -> CommandAcceptedResponse:
+        """Request the worker manually reconnect to the desktop."""
         return self._command("/v1/connection/reconnect")
 
     def _event_url(self) -> str:
+        """Return the `/v1/events` WebSocket URL derived from `base_url`."""
         parsed = urlsplit(self._base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
         return urlunsplit((scheme, parsed.netloc, f"{parsed.path.rstrip('/')}/v1/events", "", ""))
 
     def _open_websocket(self) -> _WebSocket:
+        """Open (or construct via the injected factory) the events WebSocket."""
         token = self._require_token()
         factory = self._websocket_factory
         if factory is None:
-            try:
-                import websocket  # type: ignore[import-not-found]
-            except ImportError as exc:
+            if _websocket_module is None:
                 raise OptionalDependencyError(
                     "WebSocket events require: pip install 'vnc-remote-control-client[websocket]'"
-                ) from exc
-            factory = cast(WebSocketFactory, websocket.create_connection)
+                )
+            factory = cast(WebSocketFactory, _websocket_module.create_connection)
         try:
             return factory(
                 self._event_url(),
@@ -485,46 +557,7 @@ class VncRemoteControlClient:
                     raise TransportError("WebSocket receive failed for /v1/events") from exc
                 if message is None or message == "":
                     return
-                if isinstance(message, bytes):
-                    try:
-                        text = message.decode("utf-8")
-                    except UnicodeDecodeError as exc:
-                        raise ProtocolError("WebSocket event was not valid UTF-8") from exc
-                else:
-                    text = message
-                try:
-                    value = json.loads(text)
-                except json.JSONDecodeError as exc:
-                    raise ProtocolError("WebSocket event was not valid JSON") from exc
-                if not isinstance(value, dict):
-                    raise ProtocolError("WebSocket event was not a JSON object")
-                _require_fields(
-                    value,
-                    ("sequence", "timestamp_unix_ms", "type"),
-                    "WebSocket event",
-                )
-                sequence = value["sequence"]
-                timestamp = value["timestamp_unix_ms"]
-                event_type = value["type"]
-                if not isinstance(sequence, int) or isinstance(sequence, bool):
-                    raise ProtocolError("WebSocket event sequence was not an integer")
-                if not isinstance(timestamp, int) or isinstance(timestamp, bool):
-                    raise ProtocolError(
-                        "WebSocket event timestamp_unix_ms was not an integer"
-                    )
-                if not isinstance(event_type, str):
-                    raise ProtocolError("WebSocket event type was not a string")
-                payload = {
-                    key: item
-                    for key, item in value.items()
-                    if key not in {"sequence", "timestamp_unix_ms", "type"}
-                }
-                yield Event(
-                    sequence=sequence,
-                    timestamp_unix_ms=timestamp,
-                    type=event_type,
-                    payload=payload,
-                )
+                yield _parse_event(_decode_message(message))
         except BaseException as exc:
             primary_error = exc
             raise
@@ -537,6 +570,7 @@ class VncRemoteControlClient:
                 primary_error.add_note(
                     f"additional WebSocket close failure: {type(close_exc).__name__}"
                 )
+                raise primary_error from close_exc
 
 
 VncClient = VncRemoteControlClient

@@ -11,6 +11,7 @@ from r13_helpers import error_code, require, websocket_status
 
 
 def assert_auth_contract(harness: Harness) -> None:
+    """Verify every protected route rejects missing/wrong tokens and query-string tokens."""
     harness.log("verifying all protected routes reject missing and wrong bearer tokens")
     routes: list[tuple[str, str, dict[str, Any] | None]] = [
         ("GET", "/v1/status", None),
@@ -33,11 +34,20 @@ def assert_auth_contract(harness: Harness) -> None:
     for method, path, payload in routes:
         for token in (None, "wrong-token"):
             response = harness.request(method, path, payload, token=token)
-            require(response.status == 401, f"{method} {path} accepted token={token!r}: {response.status}")
-            require(error_code(response) == "unauthorized", f"{method} {path} did not return unauthorized")
+            require(
+                response.status == 401,
+                f"{method} {path} accepted token={token!r}: {response.status}",
+            )
+            require(
+                error_code(response) == "unauthorized",
+                f"{method} {path} did not return unauthorized",
+            )
     query = harness.request("GET", f"/v1/status?token={API_TOKEN}", token=None)
     require(query.status == 401, "query-string API token was accepted")
-    require(websocket_status(harness.api_port, "/v1/events", None) == 401, "unauthenticated WebSocket upgraded")
+    require(
+        websocket_status(harness.api_port, "/v1/events", None) == 401,
+        "unauthenticated WebSocket upgraded",
+    )
     require(
         websocket_status(harness.api_port, f"/v1/events?token={API_TOKEN}", None) == 401,
         "query-string WebSocket token was accepted",
@@ -49,6 +59,7 @@ def assert_auth_contract(harness: Harness) -> None:
 
 
 def assert_wrong_password_and_missing_secret(harness: Harness) -> None:
+    """Verify a missing VNC secret fails startup closed and a wrong one authenticates-fails."""
     harness.log("building R13 production images once")
     harness.compose("build")
 

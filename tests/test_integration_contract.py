@@ -1,12 +1,16 @@
-from pathlib import Path
-import unittest
+"""Contract tests for the R13 Compose integration/E2E driver and its CI wiring."""
 
+import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class R13IntegrationContractTests(unittest.TestCase):
+    """The R13 driver is a real, bounded, self-cleaning Compose harness wired into CI."""
+
     def setUp(self) -> None:
+        """Load the runner script, the concatenated R13 driver source, and the CI workflow."""
         self.runner = (ROOT / "tests/integration/run.sh").read_text(encoding="utf-8")
         # The R13 driver is split across sibling `r13_*.py` modules by
         # responsibility (config, types, helpers, harness, checks); the
@@ -22,6 +26,7 @@ class R13IntegrationContractTests(unittest.TestCase):
         self.workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     def test_harness_is_real_compose_bounded_and_self_cleaning(self) -> None:
+        """The harness drives real Docker Compose, waits for readiness, and cleans up after."""
         for marker in (
             '"docker",\n            "compose"',
             "free_port()",
@@ -36,6 +41,7 @@ class R13IntegrationContractTests(unittest.TestCase):
         self.assertIn("exec python3 tests/integration/r13_integration.py", self.runner)
 
     def test_connection_screenshot_input_clipboard_and_abuse_are_covered(self) -> None:
+        """The driver covers connection, screenshot, input, clipboard, and abuse-handling."""
         for marker in (
             "authentication_failed",
             "missing VNC secret",
@@ -56,6 +62,7 @@ class R13IntegrationContractTests(unittest.TestCase):
             self.assertIn(marker, self.driver)
 
     def test_shutdown_and_redaction_are_fail_closed(self) -> None:
+        """Shutdown waits for bounded container exit and diagnostic redaction fails closed."""
         for marker in (
             '"docker", "kill", "--signal", "TERM"',
             "shutting_down",
@@ -68,6 +75,7 @@ class R13IntegrationContractTests(unittest.TestCase):
             self.assertIn(marker, self.driver)
 
     def test_authoritative_ci_runs_and_uploads_failure_diagnostics(self) -> None:
+        """CI runs the R13 integration suite and uploads failure diagnostics as build artifacts."""
         self.assertIn("Run R13 Compose integration and E2E validation", self.workflow)
         self.assertIn("bash tests/integration/run.sh", self.workflow)
         self.assertIn("R13_FAILURE_ARTIFACT_DIR", self.workflow)

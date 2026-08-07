@@ -1,7 +1,16 @@
+"""Contract tests asserting the CI and Release Gates workflows enforce release policy.
+
+These tests read the CI workflow, Release Gates workflow, release policy
+document, gitleaks ignore list, and auditable-binary verifier as text and
+assert on required fail-closed patterns and forbidden compatibility escapes.
+"""
+
 from __future__ import annotations
 
 import unittest
 from pathlib import Path
+
+from tests.ci_workflow_assertions import assert_baseline_rust_gates
 
 ROOT = Path(__file__).resolve().parents[1]
 CI = ROOT / ".github/workflows/ci.yml"
@@ -29,18 +38,17 @@ EXPECTED_GITLEAKS_FALSE_POSITIVES = [
 
 
 class ReleasePolicyContractTests(unittest.TestCase):
-    def test_functional_ci_remains_authoritative(self):
+    """Assert the CI and Release Gates workflows and their supporting docs hold policy."""
+
+    def test_functional_ci_remains_authoritative(self) -> None:
+        """CI must remain the authoritative gate: fmt, clippy -D warnings, tests, R13."""
         text = CI.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("name: CI\n"))
-        self.assertIn("cargo fmt --all --check", text)
-        self.assertIn(
-            "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
-            text,
-        )
-        self.assertIn("cargo test --locked --workspace --all-features", text)
+        assert_baseline_rust_gates(self, text)
         self.assertIn("Run R13 Compose integration and E2E validation", text)
 
-    def test_release_workflow_contains_fail_closed_jobs(self):
+    def test_release_workflow_contains_fail_closed_jobs(self) -> None:
+        """Release Gates must run every required fail-closed job with no escape hatches."""
         text = RELEASE.read_text(encoding="utf-8")
         required = (
             "name: Release Gates",
@@ -75,7 +83,8 @@ class ReleasePolicyContractTests(unittest.TestCase):
         self.assertNotIn("continue-on-error: true", text)
         self.assertNotIn("--ignore-unfixed", text)
 
-    def test_auditable_verifier_is_committed_and_fail_closed(self):
+    def test_auditable_verifier_is_committed_and_fail_closed(self) -> None:
+        """The auditable-binary verifier must enforce its documented fail-closed checks."""
         text = AUDITABLE_VERIFIER.read_text(encoding="utf-8")
         self.assertIn('SECTION_NAME = ".dep-v0"', text)
         self.assertIn("MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024", text)
@@ -90,7 +99,8 @@ class ReleasePolicyContractTests(unittest.TestCase):
         self.assertNotIn('"CratesIo"', text)
         self.assertNotIn("except Exception", text)
 
-    def test_cache_and_actions_are_immutably_pinned(self):
+    def test_cache_and_actions_are_immutably_pinned(self) -> None:
+        """Release Gates actions/cache must be pinned to an immutable commit SHA."""
         text = RELEASE.read_text(encoding="utf-8")
         self.assertIn(
             "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
@@ -99,7 +109,8 @@ class ReleasePolicyContractTests(unittest.TestCase):
         self.assertNotIn("actions/cache@v", text)
         self.assertIn("fetch-depth: 0", text)
 
-    def test_gitleaks_ignore_is_exact_false_positive_fingerprints_only(self):
+    def test_gitleaks_ignore_is_exact_false_positive_fingerprints_only(self) -> None:
+        """gitleaksignore must contain only the exact expected false-positive fingerprints."""
         lines = [
             line.strip()
             for line in GITLEAKS_IGNORE.read_text(encoding="utf-8").splitlines()
@@ -114,7 +125,8 @@ class ReleasePolicyContractTests(unittest.TestCase):
                 r"^[0-9a-f]{40}:(?:docs/|crates/|\.github/)[^:]+:generic-api-key:[0-9]+$",
             )
 
-    def test_security_policy_forbids_silent_exceptions(self):
+    def test_security_policy_forbids_silent_exceptions(self) -> None:
+        """The release policy doc must explicitly forbid silent/implicit exceptions."""
         text = POLICY.read_text(encoding="utf-8")
         self.assertIn("There are no implicit or silent exceptions", text)
         self.assertIn("Any unmatched CRITICAL tuple is release-blocking", text)

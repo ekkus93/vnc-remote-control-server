@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import http.client
 import json
 import socket
 import threading
@@ -23,6 +24,7 @@ from r13_types import HttpResult
 
 
 def assert_logs_redacted(harness: Harness) -> None:
+    """Verify captured controller/desktop logs never contain secrets or payload fixtures."""
     harness.log("verifying secrets and payload fixtures are absent from captured service logs")
     logs = harness.compose("logs", "--no-color", "controller", "desktop").stdout
     for forbidden in (
@@ -38,20 +40,27 @@ def assert_logs_redacted(harness: Harness) -> None:
 
 
 def assert_idle_shutdown(harness: Harness) -> None:
+    """Verify an idle SIGTERM closes the VNC connection, joins the worker, and exits bounded."""
     harness.log("verifying idle SIGTERM closes VNC connection, joins worker, and exits bounded")
-    wait_until(lambda: harness.desktop_vnc_connections() >= 1, "established controller VNC connection")
+    wait_until(
+        lambda: harness.desktop_vnc_connections() >= 1, "established controller VNC connection"
+    )
     controller_id = harness.service_id("controller")
     require(bool(controller_id), "controller container id missing")
     harness.run(["docker", "kill", "--signal", "TERM", controller_id])
     exit_code, elapsed = harness.wait_container_exit(controller_id)
     require(exit_code == 0, f"idle SIGTERM exit code was {exit_code}")
     require(elapsed < 15, f"idle SIGTERM exceeded bound: {elapsed:.2f}s")
-    wait_until(lambda: harness.desktop_vnc_connections() == 0, "VNC connection close after controller shutdown")
+    wait_until(
+        lambda: harness.desktop_vnc_connections() == 0,
+        "VNC connection close after controller shutdown",
+    )
     harness.compose("up", "--detach", "controller")
     harness.wait_ready()
 
 
 def assert_queued_shutdown(harness: Harness) -> None:
+    """Verify SIGTERM during queued commands rejects in-flight and queued requests cleanly."""
     harness.log("verifying SIGTERM with queued commands and in-flight request rejection")
     controller_id = harness.service_id("controller")
     require(bool(controller_id), "controller container id missing before queued shutdown")
@@ -79,7 +88,7 @@ def assert_queued_shutdown(harness: Harness) -> None:
                 {"x": 720 + index, "y": 520, "button": "left", "interval_ms": 1000},
                 timeout=15,
             )
-        except Exception as error:
+        except (OSError, http.client.HTTPException) as error:
             return error
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
@@ -92,7 +101,10 @@ def assert_queued_shutdown(harness: Harness) -> None:
         results = [future.result(timeout=15) for future in futures]
     require(response.status == 503, f"new command during shutdown returned {response.status}")
     require(error_code(response) == "shutting_down", "new command during shutdown used wrong error")
-    require(any(isinstance(result, HttpResult) for result in results), "queued-command scenario created no HTTP work")
+    require(
+        any(isinstance(result, HttpResult) for result in results),
+        "queued-command scenario created no HTTP work",
+    )
     exit_code, elapsed = harness.wait_container_exit(controller_id)
     require(exit_code == 0, f"queued SIGTERM exit code was {exit_code}")
     require(elapsed < 15, f"queued SIGTERM exceeded bound: {elapsed:.2f}s")

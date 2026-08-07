@@ -14,15 +14,17 @@ Start with `README.md` for architecture and quick start, `docs/README.md` for th
 
 - `make fmt` — `cargo fmt --all --check` (check only; use `cargo fmt --all` to actually format)
 - `make lint` — `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `make lint-python` — `ruff check .` (config in `ruff.toml`, covers `python/`, `tests/`, `scripts/`, `tools/`)
 - `make test` — `cargo test --workspace --all-features`
 - `make build` — `cargo build --workspace --all-features --locked`
-- `make integration-test` / `make e2e-test` — shell-driven suites under `tests/integration/run.sh`, `tests/e2e/run.sh`
+- `make integration-test` — `tests/integration/run.sh` (`make e2e-test` is currently broken — it targets `tests/e2e/run.sh`, which does not exist in this repo; use the per-suite scripts below instead)
 - `make security-scan` — `cargo deny check`
 - Single Rust test: `cargo test -p controller-api <test_name>`
-- Python/client/documentation/workflow/policy contracts:
+- Python/client/documentation/workflow/policy contracts (the Python client package must be installed first, once per environment: `pip install -e python/`):
   `python3 -m unittest discover -s tests -p 'test_*.py' -v`
-- Other E2E suites each have their own `run.sh` under `tests/{worker-e2e,worker-text-clipboard-e2e,http-e2e,desktop,native,compose}/`
+- Other E2E suites each have their own `run.sh` under `tests/{worker-e2e,worker-text-clipboard-e2e,http-e2e,desktop,native,compose,measurement/framebuffer}/`
   — these spin up real Docker/TigerVNC containers.
+- The `/verify-full` skill runs the local equivalent of CI's `quality` gate (fmt check, clippy, cargo test, Python contract tests) in one pass; it deliberately excludes the Docker/TigerVNC e2e suites and `cargo deny check`.
 
 ## Zero-warning and fail-closed policy
 
@@ -42,6 +44,8 @@ Credentials are passed as file paths, not raw values: config env vars use a `*_F
 - **Historical engineering artifacts** such as dated SPEC/TODO/EVIDENCE/review/implementation-note files. These intentionally preserve the repository state, commit SHAs, failures, and decisions from the milestone they recorded and must not be rewritten merely to look current.
 
 When implementation behavior changes, update the relevant living documentation and contract tests in the same change. Do not use an old milestone TODO as the authority for current runtime behavior.
+
+`tests/test_documentation_freshness.py` is a contract test that enforces this living-vs-historical split — it runs as part of the Python contract suite above.
 
 ## Workflow
 

@@ -1,13 +1,26 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
-.PHONY: fmt lint test build compose-up compose-down integration-test e2e-test security-scan
+PYTHON_LINT_PATHS := python/src/vnc_remote_control tests scripts tools/ci_status desktop/test-app
+
+.PHONY: fmt lint lint-python lint-python-ruff lint-python-pylint lint-python-mypy test build compose-up compose-down integration-test e2e-test security-scan
 
 fmt:
 	cargo fmt --all --check
 
 lint:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+lint-python: lint-python-ruff lint-python-pylint lint-python-mypy
+
+lint-python-ruff:
+	ruff check .
+
+lint-python-pylint:
+	pylint --rcfile=.pylintrc $(PYTHON_LINT_PATHS)
+
+lint-python-mypy:
+	mypy --config-file mypy.ini $(PYTHON_LINT_PATHS)
 
 test:
 	cargo test --workspace --all-features

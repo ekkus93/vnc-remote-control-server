@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Deterministic Tkinter surface the R13 E2E suite drives over VNC and reads back via JSON."""
+
 from __future__ import annotations
 
 import json
@@ -6,6 +8,7 @@ import os
 import tempfile
 import tkinter as tk
 from collections import deque
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -13,20 +16,31 @@ STATE_PATH = Path(os.environ.get("TEST_APP_STATE_FILE", "/tmp/vnc-test-app-state
 MAX_EVENTS = 200
 
 
+@dataclass
+class _InputState:
+    """The deterministic input state the E2E harness observes via `current_state()`."""
+
+    events: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=MAX_EVENTS))
+    event_sequence: int = 0
+    pointer: dict[str, int] = field(default_factory=lambda: {"x": 0, "y": 0})
+    buttons: dict[str, bool] = field(
+        default_factory=lambda: {"left": False, "middle": False, "right": False}
+    )
+    scroll: dict[str, int] = field(default_factory=lambda: {"x": 0, "y": 0})
+    keys_down: list[str] = field(default_factory=list)
+    counter: int = 0
+    clipboard_revision: int = 0
+
+
 class TestApplication:
+    """The deterministic test surface: builds the UI, binds events, and persists state."""
+
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("VNC Remote Control Deterministic Test App")
         self.root.geometry("800x600+20+20")
         self.root.minsize(800, 600)
-        self.events: deque[dict[str, Any]] = deque(maxlen=MAX_EVENTS)
-        self.event_sequence = 0
-        self.pointer = {"x": 0, "y": 0}
-        self.buttons = {"left": False, "middle": False, "right": False}
-        self.scroll = {"x": 0, "y": 0}
-        self.keys_down: list[str] = []
-        self.counter = 0
-        self.clipboard_revision = 0
+        self.state = _InputState()
         self.text = tk.StringVar(value="")
         self.status = tk.StringVar(value="ready")
         self.pointer_text = tk.StringVar(value="pointer: 0,0")
@@ -34,6 +48,14 @@ class TestApplication:
         self._build_ui()
         self._bind_events()
         self._write_state()
+
+    def run(self) -> None:
+        """Start the Tkinter event loop."""
+        self.root.mainloop()
+
+    def current_state(self) -> dict[str, Any]:
+        """Return the same state payload most recently persisted to `STATE_PATH`."""
+        return self._build_state_payload()
 
     def _build_ui(self) -> None:
         heading = tk.Label(
@@ -46,7 +68,9 @@ class TestApplication:
         tk.Label(self.root, textvariable=self.counter_text, font=("DejaVu Sans Mono", 12)).pack()
         tk.Label(self.root, textvariable=self.status, font=("DejaVu Sans Mono", 11)).pack(pady=8)
 
-        self.entry = tk.Entry(self.root, textvariable=self.text, width=70, font=("DejaVu Sans Mono", 12))
+        self.entry = tk.Entry(
+            self.root, textvariable=self.text, width=70, font=("DejaVu Sans Mono", 12)
+        )
         self.entry.pack(padx=20, pady=12)
         self.entry.focus_set()
 
@@ -106,13 +130,15 @@ class TestApplication:
         self.root.bind_all("<Shift-MouseWheel>", self._shift_mouse_wheel, add=True)
 
     def _record(self, event_type: str, **data: Any) -> None:
-        self.event_sequence += 1
-        self.events.append({"sequence": self.event_sequence, "type": event_type, **data})
+        self.state.event_sequence += 1
+        self.state.events.append(
+            {"sequence": self.state.event_sequence, "type": event_type, **data}
+        )
         self.status.set(event_type)
         self._write_state()
 
     def _motion(self, event: tk.Event[Any]) -> None:
-        self.pointer = {"x": int(event.x_root), "y": int(event.y_root)}
+        self.state.pointer = {"x": int(event.x_root), "y": int(event.y_root)}
         self.pointer_text.set(f"pointer: {event.x_root},{event.y_root}")
         self._write_state()
 
@@ -126,8 +152,8 @@ class TestApplication:
             self._linux_wheel(number)
             return
         name = self._button_name(number)
-        if name in self.buttons:
-            self.buttons[name] = True
+        if name in self.state.buttons:
+            self.state.buttons[name] = True
         self._record("button_down", button=name, x=int(event.x_root), y=int(event.y_root))
 
     def _button_release(self, event: tk.Event[Any]) -> None:
@@ -135,8 +161,8 @@ class TestApplication:
         if number in (4, 5, 6, 7):
             return
         name = self._button_name(number)
-        if name in self.buttons:
-            self.buttons[name] = False
+        if name in self.state.buttons:
+            self.state.buttons[name] = False
         self._record("button_up", button=name, x=int(event.x_root), y=int(event.y_root))
 
     def _linux_wheel(self, number: int) -> None:
@@ -150,45 +176,45 @@ class TestApplication:
             delta_x = -1
         elif number == 7:
             delta_x = 1
-        self.scroll["x"] += delta_x
-        self.scroll["y"] += delta_y
+        self.state.scroll["x"] += delta_x
+        self.state.scroll["y"] += delta_y
         self._record("scroll", delta_x=delta_x, delta_y=delta_y)
 
     def _mouse_wheel(self, event: tk.Event[Any]) -> None:
         delta = 1 if int(event.delta) > 0 else -1
-        self.scroll["y"] += delta
+        self.state.scroll["y"] += delta
         self._record("scroll", delta_x=0, delta_y=delta)
 
     def _shift_mouse_wheel(self, event: tk.Event[Any]) -> None:
         delta = 1 if int(event.delta) > 0 else -1
-        self.scroll["x"] += delta
+        self.state.scroll["x"] += delta
         self._record("scroll", delta_x=delta, delta_y=0)
 
     def _key_press(self, event: tk.Event[Any]) -> None:
         key = str(event.keysym)
-        if key not in self.keys_down:
-            self.keys_down.append(key)
+        if key not in self.state.keys_down:
+            self.state.keys_down.append(key)
         self._record("key_down", key=key)
 
     def _key_release(self, event: tk.Event[Any]) -> None:
         key = str(event.keysym)
-        if key in self.keys_down:
-            self.keys_down.remove(key)
+        if key in self.state.keys_down:
+            self.state.keys_down.remove(key)
         self._record("key_up", key=key)
 
     def _increment(self) -> None:
-        self.counter += 1
-        self.counter_text.set(f"counter: {self.counter}")
-        self.click_target.configure(bg="#2e8b57" if self.counter % 2 else "#336699")
-        self._record("counter", value=self.counter)
+        self.state.counter += 1
+        self.counter_text.set(f"counter: {self.state.counter}")
+        self.click_target.configure(bg="#2e8b57" if self.state.counter % 2 else "#336699")
+        self._record("counter", value=self.state.counter)
 
     def _copy(self) -> None:
         value = self.text.get()
         self.root.clipboard_clear()
         self.root.clipboard_append(value)
         self.root.update_idletasks()
-        self.clipboard_revision += 1
-        self._record("copy", clipboard_revision=self.clipboard_revision)
+        self.state.clipboard_revision += 1
+        self._record("copy", clipboard_revision=self.state.clipboard_revision)
 
     def _paste(self) -> None:
         try:
@@ -196,18 +222,11 @@ class TestApplication:
         except tk.TclError:
             value = ""
         self.text.set(value)
-        self.clipboard_revision += 1
-        self._record("paste", clipboard_revision=self.clipboard_revision)
+        self.state.clipboard_revision += 1
+        self._record("paste", clipboard_revision=self.state.clipboard_revision)
 
     def _reset(self) -> None:
-        self.events.clear()
-        self.event_sequence = 0
-        self.pointer = {"x": 0, "y": 0}
-        self.buttons = {"left": False, "middle": False, "right": False}
-        self.scroll = {"x": 0, "y": 0}
-        self.keys_down = []
-        self.counter = 0
-        self.clipboard_revision = 0
+        self.state = _InputState()
         self.text.set("")
         self.pointer_text.set("pointer: 0,0")
         self.counter_text.set("counter: 0")
@@ -233,23 +252,28 @@ class TestApplication:
             for name, widget in self.swatch_widgets.items()
         }
 
-    def _write_state(self) -> None:
-        payload = {
+    def _build_state_payload(self) -> dict[str, Any]:
+        return {
             "schema_version": 1,
             "ready": True,
-            "pointer": self.pointer,
+            "pointer": self.state.pointer,
             "controls": self._control_centers(),
             "swatches": self._swatch_centers(),
-            "buttons": self.buttons,
-            "scroll": self.scroll,
-            "keys_down": self.keys_down,
+            "buttons": self.state.buttons,
+            "scroll": self.state.scroll,
+            "keys_down": self.state.keys_down,
             "text": self.text.get(),
-            "counter": self.counter,
-            "clipboard_revision": self.clipboard_revision,
-            "events": list(self.events),
+            "counter": self.state.counter,
+            "clipboard_revision": self.state.clipboard_revision,
+            "events": list(self.state.events),
         }
+
+    def _write_state(self) -> None:
+        payload = self._build_state_payload()
         STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_path = tempfile.mkstemp(prefix="vnc-test-state-", dir=STATE_PATH.parent)
+        descriptor, temporary_path = tempfile.mkstemp(
+            prefix="vnc-test-state-", dir=STATE_PATH.parent
+        )
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as output:
                 json.dump(payload, output, sort_keys=True)
@@ -263,9 +287,9 @@ class TestApplication:
 
 
 def main() -> None:
+    """Build and run the deterministic test surface."""
     root = tk.Tk()
-    TestApplication(root)
-    root.mainloop()
+    TestApplication(root).run()
 
 
 if __name__ == "__main__":

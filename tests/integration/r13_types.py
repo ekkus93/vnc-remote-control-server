@@ -8,14 +8,17 @@ from typing import Any
 
 
 class Failure(RuntimeError):
-    pass
+    """Raised when an R13 check's expectation about the running stack fails."""
 
 
 @dataclass(frozen=True)
 class HttpResult:
+    """One HTTP response captured by the harness."""
+
     status: int
     headers: dict[str, str]
     body: bytes
 
     def json(self) -> Any:
+        """Decode `body` as UTF-8 JSON."""
         return json.loads(self.body.decode("utf-8"))

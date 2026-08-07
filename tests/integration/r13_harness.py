@@ -10,8 +10,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from r13_config import (
     API_TOKEN,
@@ -32,6 +33,8 @@ from r13_types import Failure, HttpResult
 
 
 class Harness:
+    """Owns one real-Compose stack: secrets, override file, process/HTTP helpers."""
+
     def __init__(self) -> None:
         self.temp = Path(tempfile.mkdtemp(prefix="vrc-r13-"))
         self.api_port = free_port()
@@ -87,6 +90,7 @@ class Harness:
         self.cleaned = False
 
     def log(self, message: str) -> None:
+        """Print a timestamp-free, prefixed progress line to stderr."""
         print(f"[r13-integration] {message}", file=sys.stderr, flush=True)
 
     def run(
@@ -99,6 +103,7 @@ class Harness:
         env: dict[str, str] | None = None,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        """Run `command`, raising `Failure` on a nonzero exit unless `check=False`."""
         result = subprocess.run(
             command,
             cwd=ROOT,
@@ -124,6 +129,7 @@ class Harness:
         capture: bool = True,
         timeout: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        """Run `docker compose <arguments>` against this harness's stack."""
         return self.run(
             [*self.compose_base, *arguments],
             check=check,
@@ -132,9 +138,11 @@ class Harness:
         )
 
     def service_id(self, service: str) -> str:
+        """Return `service`'s container id, or `""` if it is not running."""
         return self.compose("ps", "-q", service).stdout.strip()
 
     def wait_service_health(self, service: str, deadline_seconds: float = 120) -> None:
+        """Poll `service` until Docker reports it healthy, or raise `Failure`."""
         deadline = time.monotonic() + deadline_seconds
         last = "missing"
         while time.monotonic() < deadline:
@@ -145,7 +153,8 @@ class Harness:
                         "docker",
                         "inspect",
                         "--format",
-                        "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+                        "{{if .State.Health}}{{.State.Health.Status}}"
+                        "{{else}}{{.State.Status}}{{end}}",
                         container_id,
                     ]
                 )
@@ -158,6 +167,7 @@ class Harness:
         raise Failure(f"timed out waiting for {service} health; last={last}")
 
     def wait_ready(self, deadline_seconds: float = 120) -> None:
+        """Poll `/health/ready` until it (and a current display) is true, or raise."""
         deadline = time.monotonic() + deadline_seconds
         last = None
         while time.monotonic() < deadline:
@@ -174,7 +184,10 @@ class Harness:
             time.sleep(0.2)
         raise Failure(f"controller readiness deadline exceeded; last={last}")
 
-    def wait_status(self, predicate: Callable[[dict[str, Any]], bool], deadline_seconds: float = 20) -> dict[str, Any]:
+    def wait_status(
+        self, predicate: Callable[[dict[str, Any]], bool], deadline_seconds: float = 20
+    ) -> dict[str, Any]:
+        """Poll `/v1/status` until `predicate` is true, returning that status."""
         deadline = time.monotonic() + deadline_seconds
         last: dict[str, Any] | None = None
         while time.monotonic() < deadline:
@@ -200,6 +213,7 @@ class Harness:
         timeout: float = 10,
         headers: dict[str, str] | None = None,
     ) -> HttpResult:
+        """Issue one raw HTTP request to the controller and return its result."""
         request_headers = {} if headers is None else dict(headers)
         payload: bytes | None
         if isinstance(body, dict):
@@ -222,6 +236,7 @@ class Harness:
             connection.close()
 
     def desktop_state(self) -> dict[str, Any]:
+        """Read and parse the desktop test-app's current state JSON file."""
         result = self.compose(
             "exec",
             "-T",
@@ -229,13 +244,17 @@ class Harness:
             "cat",
             "/tmp/vnc-test-app-state.json",
         )
-        return json.loads(result.stdout)
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict):
+            raise Failure(f"desktop test-app state was not a JSON object: {result.stdout!r}")
+        return value
 
     def wait_desktop_state(
         self,
         predicate: Callable[[dict[str, Any]], bool],
         deadline_seconds: float = 12,
     ) -> dict[str, Any]:
+        """Poll `desktop_state()` until `predicate` is true, returning that state."""
         deadline = time.monotonic() + deadline_seconds
         last: dict[str, Any] | None = None
         while time.monotonic() < deadline:
@@ -243,9 +262,12 @@ class Harness:
             if predicate(last):
                 return last
             time.sleep(0.1)
-        raise Failure(f"desktop-state predicate deadline exceeded; last={json.dumps(last, sort_keys=True)}")
+        raise Failure(
+            f"desktop-state predicate deadline exceeded; last={json.dumps(last, sort_keys=True)}"
+        )
 
     def controller_metrics(self) -> tuple[int, int]:
+        """Return the controller process's `(thread count, RSS KiB)`."""
         output = self.compose(
             "exec",
             "-T",
@@ -258,6 +280,7 @@ class Harness:
         return threads, rss_kib
 
     def desktop_vnc_connections(self) -> int:
+        """Count established VNC (port 5901) connections inside the desktop container."""
         script = r'''
 from pathlib import Path
 count = 0
@@ -284,7 +307,10 @@ print(count)
             ).stdout.strip()
         )
 
-    def wait_container_exit(self, container_id: str, deadline_seconds: float = 15) -> tuple[int, float]:
+    def wait_container_exit(
+        self, container_id: str, deadline_seconds: float = 15
+    ) -> tuple[int, float]:
+        """Poll until `container_id` exits, returning `(exit code, elapsed seconds)`."""
         started = time.monotonic()
         deadline = started + deadline_seconds
         while time.monotonic() < deadline:
@@ -304,6 +330,7 @@ print(count)
         raise Failure("controller did not exit within bounded deadline")
 
     def capture_diagnostics(self, reason: BaseException) -> None:
+        """Write sanitized compose/container/desktop-state diagnostics for `reason`."""
         if FAILURE_DIR is None:
             return
         FAILURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -329,7 +356,7 @@ print(count)
             outputs["desktop-app-state.json"] = json.dumps(
                 self.desktop_state(), indent=2, sort_keys=True
             ) + "\n"
-        except Exception as error:
+        except (subprocess.SubprocessError, OSError, Failure, json.JSONDecodeError) as error:
             outputs["desktop-app-state-error.txt"] = f"{type(error).__name__}: {error}\n"
         manifest = {
             "schema_version": 1,
@@ -360,6 +387,7 @@ print(count)
                     raise Failure(f"diagnostic redaction failed for {path.name}")
 
     def cleanup(self) -> None:
+        """Tear down the harness's stacks and temp directory, once."""
         if self.cleaned:
             return
         self.cleaned = True

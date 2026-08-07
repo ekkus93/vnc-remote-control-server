@@ -19,10 +19,12 @@ KNOWN_KINDS = {"build", "runtime"}
 
 
 def fail(message: str) -> NoReturn:
+    """Abort verification with a prefixed, non-zero-exit failure message."""
     raise SystemExit(f"auditable binary verification failed: {message}")
 
 
 def extract_section(binary: Path) -> bytes:
+    """Extract the raw compressed cargo-auditable metadata section from an ELF binary."""
     with tempfile.TemporaryDirectory(prefix="vrc-auditable-") as directory:
         section_path = Path(directory) / "dep-v0.zlib"
         result = subprocess.run(
@@ -48,6 +50,7 @@ def extract_section(binary: Path) -> bytes:
 
 
 def decompress_metadata(compressed: bytes) -> bytes:
+    """Decompress the zlib-compressed metadata section, bounding output to a safe size."""
     decoder = zlib.decompressobj()
     decoded = decoder.decompress(compressed, MAX_DECOMPRESSED_BYTES + 1)
     if len(decoded) > MAX_DECOMPRESSED_BYTES or decoder.unconsumed_tail:
@@ -63,6 +66,7 @@ def decompress_metadata(compressed: bytes) -> bytes:
 
 
 def validate_source(source: Any, index: int) -> None:
+    """Validate that a package's source is a non-empty string per the auditable-serde format."""
     # auditable-serde serializes Source as a string. The four standard values are
     # crates.io, git, local, and registry, but the upstream enum is deliberately
     # extensible, so any non-empty string is structurally valid.
@@ -70,52 +74,51 @@ def validate_source(source: Any, index: int) -> None:
         fail(f"package {index} has an invalid source")
 
 
-def validate_metadata(metadata: Any, expected_root: str) -> tuple[list[dict[str, Any]], int]:
-    if not isinstance(metadata, dict):
-        fail("top-level metadata must be a JSON object")
-
+def _validate_format_revision(metadata: dict[str, Any]) -> None:
+    """Validate that the metadata's format revision is a non-negative integer."""
     format_revision = metadata.get("format", 0)
     if isinstance(format_revision, bool) or not isinstance(format_revision, int):
         fail("format revision must be a non-negative integer")
     if format_revision < 0:
         fail("format revision must be a non-negative integer")
 
-    packages = metadata.get("packages")
-    if not isinstance(packages, list) or not packages:
-        fail("packages must be a non-empty array")
 
-    root_indices: list[int] = []
-    for index, package in enumerate(packages):
-        if not isinstance(package, dict):
-            fail(f"package {index} must be an object")
-        for field in ("name", "version", "source"):
-            if field not in package:
-                fail(f"package {index} is missing {field}")
-        if not isinstance(package["name"], str) or not package["name"]:
-            fail(f"package {index} has an invalid name")
-        if not isinstance(package["version"], str) or not package["version"]:
-            fail(f"package {index} has an invalid version")
-        validate_source(package["source"], index)
+def _validate_package(package: Any, index: int, package_count: int) -> bool:
+    """Validate one package entry's fields and return whether it is marked as the root."""
+    if not isinstance(package, dict):
+        fail(f"package {index} must be an object")
+    for field in ("name", "version", "source"):
+        if field not in package:
+            fail(f"package {index} is missing {field}")
+    if not isinstance(package["name"], str) or not package["name"]:
+        fail(f"package {index} has an invalid name")
+    if not isinstance(package["version"], str) or not package["version"]:
+        fail(f"package {index} has an invalid version")
+    validate_source(package["source"], index)
 
-        root = package.get("root", False)
-        if not isinstance(root, bool):
-            fail(f"package {index} has a non-boolean root field")
-        if root:
-            root_indices.append(index)
+    root = package.get("root", False)
+    if not isinstance(root, bool):
+        fail(f"package {index} has a non-boolean root field")
 
-        kind = package.get("kind", "runtime")
-        if not isinstance(kind, str) or kind not in KNOWN_KINDS:
-            fail(f"package {index} has an invalid dependency kind")
+    kind = package.get("kind", "runtime")
+    if not isinstance(kind, str) or kind not in KNOWN_KINDS:
+        fail(f"package {index} has an invalid dependency kind")
 
-        dependencies = package.get("dependencies", [])
-        if not isinstance(dependencies, list):
-            fail(f"package {index} dependencies must be an array")
-        for dependency in dependencies:
-            if isinstance(dependency, bool) or not isinstance(dependency, int):
-                fail(f"package {index} contains a non-integer dependency index")
-            if dependency < 0 or dependency >= len(packages):
-                fail(f"package {index} contains an out-of-range dependency index")
+    dependencies = package.get("dependencies", [])
+    if not isinstance(dependencies, list):
+        fail(f"package {index} dependencies must be an array")
+    for dependency in dependencies:
+        if isinstance(dependency, bool) or not isinstance(dependency, int):
+            fail(f"package {index} contains a non-integer dependency index")
+        if dependency < 0 or dependency >= package_count:
+            fail(f"package {index} contains an out-of-range dependency index")
+    return root
 
+
+def _validate_root_package(
+    packages: list[dict[str, Any]], root_indices: list[int], expected_root: str
+) -> int:
+    """Validate that exactly one root package exists and its name matches expectations."""
     if len(root_indices) != 1:
         fail(f"expected exactly one root package, found {len(root_indices)}")
     root_index = root_indices[0]
@@ -124,7 +127,11 @@ def validate_metadata(metadata: Any, expected_root: str) -> tuple[list[dict[str,
             "root package name mismatch: "
             f"expected {expected_root!r}, found {packages[root_index]['name']!r}"
         )
+    return root_index
 
+
+def _check_dependency_cycles(packages: list[dict[str, Any]]) -> None:
+    """Fail if the package dependency graph contains a cycle."""
     states = [0] * len(packages)
 
     def visit(index: int) -> None:
@@ -139,10 +146,32 @@ def validate_metadata(metadata: Any, expected_root: str) -> tuple[list[dict[str,
 
     for index in range(len(packages)):
         visit(index)
+
+
+def validate_metadata(metadata: Any, expected_root: str) -> tuple[list[dict[str, Any]], int]:
+    """Validate decoded auditable-metadata JSON and return its packages and root index."""
+    if not isinstance(metadata, dict):
+        fail("top-level metadata must be a JSON object")
+
+    _validate_format_revision(metadata)
+
+    packages = metadata.get("packages")
+    if not isinstance(packages, list) or not packages:
+        fail("packages must be a non-empty array")
+
+    root_indices = [
+        index
+        for index, package in enumerate(packages)
+        if _validate_package(package, index, len(packages))
+    ]
+
+    root_index = _validate_root_package(packages, root_indices, expected_root)
+    _check_dependency_cycles(packages)
     return packages, root_index
 
 
 def main() -> None:
+    """CLI entry point: verify embedded auditable metadata and write an evidence report."""
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("--output", required=True, type=Path)

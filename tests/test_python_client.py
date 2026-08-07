@@ -1,24 +1,26 @@
+"""Contract tests for the typed Python client (python/src/vnc_remote_control)."""
+
 from __future__ import annotations
 
 import io
 import json
-import sys
 import tomllib
 import unittest
 from email.message import Message
 from pathlib import Path
+from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
+from vnc_remote_control import ApiError, VncClient
+
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
-SRC = PYTHON_ROOT / "src"
-sys.path.insert(0, str(SRC))
-
-from vnc_remote_control import ApiError, VncClient  # noqa: E402
 
 
 class FakeResponse:
+    """Fake `_HttpResponse`: an in-memory status/body/headers context manager."""
+
     def __init__(
         self,
         status: int,
@@ -30,90 +32,87 @@ class FakeResponse:
         self.headers = headers or Message()
 
     def read(self) -> bytes:
+        """Return the fixed response body."""
         return self._body
 
-    def __enter__(self) -> "FakeResponse":
+    def __enter__(self) -> FakeResponse:
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         return None
 
 
-class RoutingHttpOpen:
-    def __init__(self) -> None:
-        self.requests = []
-        self.next_command_id = 1
+_FIXED_RESPONSE_BODIES: dict[str, bytes] = {
+    "/openapi.json": json.dumps({"openapi": "3.1.0", "paths": {}}).encode(),
+    "/health/live": b'{"status":"alive"}',
+    "/health/ready": b'{"status":"ready"}',
+    "/v1/status": json.dumps(
+        {
+            "state": "connected",
+            "started_at_unix_ms": 1,
+            "connected_at_unix_ms": 2,
+            "last_message_at_unix_ms": 3,
+            "reconnect_attempts": 0,
+            "last_failure": None,
+            "framebuffer_revision": 7,
+            "rejected_commands": 0,
+            "dropped_events": 0,
+            "fatal_exit": False,
+            "shutting_down": False,
+        }
+    ).encode(),
+    "/v1/display": (
+        b'{"status":"current","width":1280,"height":800,"depth":24,'
+        b'"revision":7,"updated_at_unix_ms":4,"complete":true}'
+    ),
+    "/v1/metrics": b"vrc_ready 1\n",
+}
 
-    def __call__(self, request, *, timeout: float):
-        self.requests.append((request, timeout))
+
+def _routing_http_open() -> tuple[Any, list[tuple[Any, float]]]:
+    """Build a fake `HttpOpen` callable plus the list of requests it records.
+
+    A plain closure rather than a class: its only real interface is being
+    called, and a class with just one callable method has nowhere to put a
+    second public method that isn't contrived.
+    """
+    requests: list[tuple[Any, float]] = []
+    next_command_id = 1
+
+    def opener(request: Any, *, timeout: float) -> FakeResponse:
+        nonlocal next_command_id
+        requests.append((request, timeout))
         path = urlsplit(request.full_url).path
         method = request.get_method()
         headers = Message()
         headers["X-Request-ID"] = "test-request"
 
-        if path == "/openapi.json":
-            return FakeResponse(
-                200,
-                json.dumps({"openapi": "3.1.0", "paths": {}}).encode(),
-                headers,
-            )
-        if path == "/health/live":
-            return FakeResponse(200, b'{"status":"alive"}', headers)
-        if path == "/health/ready":
-            return FakeResponse(200, b'{"status":"ready"}', headers)
-        if path == "/v1/status":
-            return FakeResponse(
-                200,
-                json.dumps(
-                    {
-                        "state": "connected",
-                        "started_at_unix_ms": 1,
-                        "connected_at_unix_ms": 2,
-                        "last_message_at_unix_ms": 3,
-                        "reconnect_attempts": 0,
-                        "last_failure": None,
-                        "framebuffer_revision": 7,
-                        "rejected_commands": 0,
-                        "dropped_events": 0,
-                        "fatal_exit": False,
-                        "shutting_down": False,
-                    }
-                ).encode(),
-                headers,
-            )
-        if path == "/v1/display":
-            return FakeResponse(
-                200,
-                b'{"status":"current","width":1280,"height":800,"depth":24,'
-                b'"revision":7,"updated_at_unix_ms":4,"complete":true}',
-                headers,
-            )
         if path == "/v1/screenshot.png":
             headers["ETag"] = '"process-7"'
             headers["Cache-Control"] = "private, no-cache, max-age=0"
             return FakeResponse(200, b"\x89PNG\r\n", headers)
-        if path == "/v1/metrics":
-            return FakeResponse(200, b"vrc_ready 1\n", headers)
         if path == "/v1/clipboard" and method == "GET":
             return FakeResponse(
-                200,
-                b'{"text":"clipboard","revision":8,"updated_at_unix_ms":5}',
-                headers,
+                200, b'{"text":"clipboard","revision":8,"updated_at_unix_ms":5}', headers
             )
+        if path in _FIXED_RESPONSE_BODIES:
+            return FakeResponse(200, _FIXED_RESPONSE_BODIES[path], headers)
 
-        self.next_command_id += 1
+        next_command_id += 1
         return FakeResponse(
             202,
-            json.dumps(
-                {"command_id": self.next_command_id, "status": "accepted"}
-            ).encode(),
+            json.dumps({"command_id": next_command_id, "status": "accepted"}).encode(),
             headers,
         )
 
+    return opener, requests
+
 
 class FakeWebSocket:
+    """Fake `_WebSocket`: replays a fixed message sequence, then closes."""
+
     def __init__(self) -> None:
-        self.messages = [
+        self.messages: list[str] = [
             json.dumps(
                 {
                     "sequence": 1,
@@ -135,16 +134,21 @@ class FakeWebSocket:
         ]
         self.closed = False
 
-    def recv(self):
+    def recv(self) -> str:
+        """Return the next queued message."""
         return self.messages.pop(0)
 
-    def close(self):
+    def close(self) -> None:
+        """Mark this fake socket closed."""
         self.closed = True
 
 
 class PythonClientTests(unittest.TestCase):
+    """Tests for `vnc_remote_control.VncRemoteControlClient`."""
+
     def test_all_documented_http_endpoints_are_callable(self) -> None:
-        opener = RoutingHttpOpen()
+        """Every client method for a documented endpoint issues the right request."""
+        opener, opener_requests = _routing_http_open()
         client = VncClient(
             "http://controller.example:8080",
             "secret-token",
@@ -174,7 +178,7 @@ class PythonClientTests(unittest.TestCase):
         client.set_clipboard("new clipboard")
         client.request_reconnect()
 
-        requests = [item[0] for item in opener.requests]
+        requests = [item[0] for item in opener_requests]
         observed = {(request.get_method(), urlsplit(request.full_url).path) for request in requests}
         expected = {
             ("GET", "/openapi.json"),
@@ -227,11 +231,12 @@ class PythonClientTests(unittest.TestCase):
         self.assertEqual(command_bodies["/v1/clipboard"], {"text": "new clipboard"})
 
     def test_screenshot_304_is_a_non_error_result(self) -> None:
+        """A 304 response surfaces as `not_modified=True`, not a raised error."""
         headers = Message()
         headers["ETag"] = '"process-7"'
         headers["X-Request-ID"] = "req-304"
 
-        def open_304(request, *, timeout):
+        def open_304(request: Any, *, timeout: float) -> FakeResponse:
             raise HTTPError(
                 request.full_url,
                 304,
@@ -248,6 +253,7 @@ class PythonClientTests(unittest.TestCase):
         self.assertEqual(result.request_id, "req-304")
 
     def test_structured_api_error_preserves_code_and_request_id(self) -> None:
+        """`ApiError` carries the error body's code/message/request_id through."""
         headers = Message()
         headers["X-Request-ID"] = "header-id"
         body = json.dumps(
@@ -260,7 +266,7 @@ class PythonClientTests(unittest.TestCase):
             }
         ).encode()
 
-        def open_422(request, *, timeout):
+        def open_422(request: Any, *, timeout: float) -> FakeResponse:
             raise HTTPError(
                 request.full_url,
                 422,
@@ -279,10 +285,11 @@ class PythonClientTests(unittest.TestCase):
         self.assertEqual(error.message, "bad coordinate")
 
     def test_token_is_never_in_repr_or_websocket_url(self) -> None:
-        calls = []
+        """The bearer token never leaks into `repr()` or the WebSocket URL."""
+        calls: list[tuple[str, list[str], float]] = []
         socket = FakeWebSocket()
 
-        def websocket_factory(url, *, header, timeout):
+        def websocket_factory(url: str, *, header: list[str], timeout: float) -> FakeWebSocket:
             calls.append((url, header, timeout))
             return socket
 
@@ -305,22 +312,27 @@ class PythonClientTests(unittest.TestCase):
         self.assertEqual(timeout, 4.0)
 
     def test_protected_endpoint_requires_explicit_token(self) -> None:
+        """A client built without a token raises on the first protected call."""
         client = VncClient("http://controller")
         self.assertEqual(client.base_url, "http://controller")
         with self.assertRaisesRegex(ValueError, "requires a bearer token"):
             client.get_status()
 
     def test_base_url_rejects_embedded_credentials(self) -> None:
+        """A `base_url` containing `user:password@` is rejected up front."""
         with self.assertRaisesRegex(ValueError, "must not contain credentials"):
             VncClient("http://user:password@controller", "token")
 
     def test_package_metadata_keeps_http_core_dependency_free(self) -> None:
+        """The published package has zero hard dependencies outside the stdlib."""
         metadata = tomllib.loads((PYTHON_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         project = metadata["project"]
         self.assertEqual(project["name"], "vnc-remote-control-client")
         self.assertEqual(project["dependencies"], [])
         self.assertIn("websocket-client>=1.8,<2", project["optional-dependencies"]["websocket"])
-        self.assertIn("py.typed", metadata["tool"]["setuptools"]["package-data"]["vnc_remote_control"])
+        self.assertIn(
+            "py.typed", metadata["tool"]["setuptools"]["package-data"]["vnc_remote_control"]
+        )
 
 
 if __name__ == "__main__":

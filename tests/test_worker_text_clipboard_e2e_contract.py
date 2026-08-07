@@ -1,3 +1,5 @@
+"""Contract tests asserting the WorkerHandle text/clipboard E2E driver and harness stay correct."""
+
 from __future__ import annotations
 
 import unittest
@@ -10,7 +12,10 @@ CI = ROOT / ".github/workflows/ci.yml"
 
 
 class WorkerTextClipboardE2EContractTests(unittest.TestCase):
-    def test_driver_uses_production_worker_text_and_clipboard_commands(self):
+    """Asserts the WorkerHandle text/clipboard E2E driver, harness, and CI wiring stay correct."""
+
+    def test_driver_uses_production_worker_text_and_clipboard_commands(self) -> None:
+        """The Rust driver exercises the production DesktopWorker's text and clipboard commands."""
         text = DRIVER.read_text(encoding="utf-8")
         self.assertIn("DesktopWorker::spawn(settings)", text)
         self.assertIn("worker.client()", text)
@@ -22,7 +27,8 @@ class WorkerTextClipboardE2EContractTests(unittest.TestCase):
         self.assertIn("worker.shutdown", text)
         self.assertNotIn("NativeClient::connect", text)
 
-    def test_harness_verifies_live_tigervnc_text_and_both_clipboard_directions(self):
+    def test_harness_verifies_live_tigervnc_text_and_both_clipboard_directions(self) -> None:
+        """The shell harness verifies text typing and clipboard sync in both directions."""
         text = HARNESS.read_text(encoding="utf-8")
         self.assertIn(
             "cargo run --locked --quiet -p controller-api --bin worker-text-clipboard-e2e",
@@ -37,14 +43,16 @@ class WorkerTextClipboardE2EContractTests(unittest.TestCase):
         self.assertIn("worker log exposed a secret or text/clipboard payload", text)
         self.assertIn("desktop log exposed a secret or text/clipboard payload", text)
 
-    def test_harness_uses_only_fixed_non_sensitive_fixtures(self):
+    def test_harness_uses_only_fixed_non_sensitive_fixtures(self) -> None:
+        """The shell harness uses only fixed, non-sensitive text and clipboard fixtures."""
         text = HARNESS.read_text(encoding="utf-8")
         self.assertIn("supported_text='worker text 123'", text)
         self.assertIn("unsupported_text='blocked☃'", text)
         self.assertIn("outbound_clipboard='worker outbound clipboard'", text)
         self.assertIn("inbound_clipboard='desktop inbound clipboard'", text)
 
-    def test_authoritative_ci_runs_text_and_clipboard_e2e(self):
+    def test_authoritative_ci_runs_text_and_clipboard_e2e(self) -> None:
+        """The authoritative CI workflow runs the WorkerHandle text/clipboard E2E harness."""
         text = CI.read_text(encoding="utf-8")
         self.assertIn("tests/worker-text-clipboard-e2e/run.sh", text)
         self.assertIn("Run WorkerHandle TigerVNC text and clipboard E2E test", text)

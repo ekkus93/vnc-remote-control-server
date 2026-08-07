@@ -13,8 +13,9 @@ import datetime as dt
 import json
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_MAX_BODY_BYTES = 60_000
@@ -70,11 +71,11 @@ def _optional_str(value: Any, label: str) -> str | None:
 def _require_int(value: Any, label: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise PayloadError(f"{label} must be an integer")
-    return value
+    return int(value)
 
 
 def _iso_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.UTC).isoformat().replace("+00:00", "Z")
 
 
 def _parse_iso(value: str | None) -> dt.datetime | None:
@@ -104,13 +105,14 @@ def _flatten_pages(raw_pages: Any, key: str) -> list[dict[str, Any]]:
 
 
 def _normalize_step(raw: dict[str, Any], job_id: int, index: int) -> dict[str, Any]:
+    label = f"job {job_id} step {index}"
     return {
-        "number": _require_int(raw.get("number"), f"job {job_id} step {index}.number"),
-        "name": _require_str(raw.get("name"), f"job {job_id} step {index}.name"),
-        "status": _require_str(raw.get("status"), f"job {job_id} step {index}.status"),
-        "conclusion": _optional_str(raw.get("conclusion"), f"job {job_id} step {index}.conclusion"),
-        "started_at": _optional_str(raw.get("started_at"), f"job {job_id} step {index}.started_at"),
-        "completed_at": _optional_str(raw.get("completed_at"), f"job {job_id} step {index}.completed_at"),
+        "number": _require_int(raw.get("number"), f"{label}.number"),
+        "name": _require_str(raw.get("name"), f"{label}.name"),
+        "status": _require_str(raw.get("status"), f"{label}.status"),
+        "conclusion": _optional_str(raw.get("conclusion"), f"{label}.conclusion"),
+        "started_at": _optional_str(raw.get("started_at"), f"{label}.started_at"),
+        "completed_at": _optional_str(raw.get("completed_at"), f"{label}.completed_at"),
     }
 
 
@@ -176,7 +178,9 @@ def _event_metadata(event: dict[str, Any], monitored_branch: str) -> dict[str, A
     }
 
 
-def _problem_data(jobs: Iterable[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _problem_data(
+    jobs: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     problem_jobs: list[dict[str, Any]] = []
     problem_steps: list[dict[str, Any]] = []
     for job in jobs:
@@ -211,6 +215,7 @@ def build_payload(
     monitored_branch: str,
     publisher_workflow_file: str,
 ) -> dict[str, Any]:
+    """Build the machine-readable status payload from the workflow_run event and pages."""
     workflow = _event_metadata(event, monitored_branch)
     jobs = [
         _normalize_job(raw, index)
@@ -270,7 +275,7 @@ def _code_span(value: Any) -> str:
 
 def _job_summary(payload: dict[str, Any]) -> str:
     if payload["jobs_data_state"] != "available":
-        return payload["jobs_data_state"].capitalize()
+        return str(payload["jobs_data_state"]).capitalize()
     jobs = payload["jobs"]
     completed = sum(1 for job in jobs if job["status"] == "completed")
     failed = sum(1 for job in jobs if job.get("conclusion") in ABNORMAL_CONCLUSIONS)
@@ -300,6 +305,7 @@ def _render_problem_lines(payload: dict[str, Any]) -> list[str]:
 
 
 def render_issue_body(marker: str, payload: dict[str, Any]) -> str:
+    """Render the full (unbounded) status issue body for `payload`."""
     workflow = payload["workflow"]
     artifacts_summary = (
         str(len(payload["artifacts"]))
@@ -315,7 +321,8 @@ def render_issue_body(marker: str, payload: dict[str, Any]) -> str:
         f"- **Run:** {_code_span(workflow['run_id'])}",
         f"- **Attempt:** {_code_span(workflow['run_attempt'])}",
         f"- **Commit:** {_code_span(workflow['head_sha'])}",
-        f"- **Branch/event:** {_code_span(workflow['head_branch'])} / {_code_span(workflow['event'])}",
+        f"- **Branch/event:** {_code_span(workflow['head_branch'])} "
+        f"/ {_code_span(workflow['event'])}",
         f"- **Jobs:** {_code_span(_job_summary(payload))}",
         "- **Problem steps:**",
         *_render_problem_lines(payload),
@@ -345,6 +352,7 @@ def render_bounded_issue_body(
     *,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> tuple[str, dict[str, Any]]:
+    """Render the status issue body, compacting successful job steps if it's too large."""
     body = render_issue_body(marker, payload)
     if len(body.encode("utf-8")) <= max_body_bytes:
         return body, payload
@@ -361,12 +369,14 @@ def render_bounded_issue_body(
     body = render_issue_body(marker, compacted)
     if len(body.encode("utf-8")) > max_body_bytes:
         raise PayloadError(
-            "issue body remains too large after compacting successful job steps; refusing invalid truncation"
+            "issue body remains too large after compacting successful job steps; "
+            "refusing invalid truncation"
         )
     return body, compacted
 
 
 def extract_existing_payload(issue_body: str) -> dict[str, Any] | None:
+    """Extract and parse the machine-readable JSON block from a prior issue body."""
     match = JSON_BLOCK_RE.search(issue_body)
     if not match:
         return None
@@ -377,10 +387,9 @@ def extract_existing_payload(issue_body: str) -> dict[str, Any] | None:
     return _require_dict(payload, "existing issue payload")
 
 
-def should_publish(existing_payload: dict[str, Any] | None, incoming_payload: dict[str, Any]) -> tuple[bool, str]:
-    if existing_payload is None:
-        return True, "initial_publish"
-
+def _validate_matching_publisher(
+    existing_payload: dict[str, Any], incoming_payload: dict[str, Any]
+) -> None:
     existing_publisher = _require_dict(existing_payload.get("publisher"), "existing publisher")
     incoming_publisher = incoming_payload["publisher"]
     if existing_publisher.get("issue_number") != incoming_publisher["issue_number"]:
@@ -388,26 +397,33 @@ def should_publish(existing_payload: dict[str, Any] | None, incoming_payload: di
     if existing_publisher.get("monitored_branch") != incoming_publisher["monitored_branch"]:
         raise PayloadError("existing issue JSON belongs to a different monitored branch")
 
+
+def should_publish(
+    existing_payload: dict[str, Any] | None, incoming_payload: dict[str, Any]
+) -> tuple[bool, str]:
+    """Decide whether `incoming_payload` supersedes `existing_payload`, and why."""
+    if existing_payload is None:
+        return True, "initial_publish"
+    _validate_matching_publisher(existing_payload, incoming_payload)
+
     existing_workflow = _require_dict(existing_payload.get("workflow"), "existing workflow")
     incoming_workflow = incoming_payload["workflow"]
     existing_run_id = _require_int(existing_workflow.get("run_id"), "existing workflow.run_id")
     incoming_run_id = incoming_workflow["run_id"]
-
-    if existing_run_id > incoming_run_id:
-        return False, "existing_issue_has_newer_run"
-    if existing_run_id < incoming_run_id:
-        return True, "newer_run"
+    if existing_run_id != incoming_run_id:
+        newer_run = existing_run_id < incoming_run_id
+        return newer_run, ("newer_run" if newer_run else "existing_issue_has_newer_run")
 
     existing_status = _require_str(existing_workflow.get("status"), "existing workflow.status")
     incoming_status = incoming_workflow["status"]
     existing_rank = STATUS_RANK.get(existing_status, -1)
     incoming_rank = STATUS_RANK.get(incoming_status, -1)
-    if existing_rank > incoming_rank:
-        return False, "same_run_state_regression"
-    if existing_rank < incoming_rank:
-        return True, "same_run_state_advance"
+    if existing_rank != incoming_rank:
+        advanced = existing_rank < incoming_rank
+        return advanced, ("same_run_state_advance" if advanced else "same_run_state_regression")
 
-    existing_updated = _parse_iso(_optional_str(existing_workflow.get("updated_at"), "existing updated_at"))
+    existing_updated_raw = _optional_str(existing_workflow.get("updated_at"), "existing updated_at")
+    existing_updated = _parse_iso(existing_updated_raw)
     incoming_updated = _parse_iso(incoming_workflow.get("updated_at"))
     if existing_updated and incoming_updated and existing_updated >= incoming_updated:
         return False, "duplicate_or_older_same_state_event"
@@ -426,6 +442,7 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse the publisher script's command-line arguments."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--event-file", type=Path, required=True)
     parser.add_argument("--jobs-pages-file", type=Path, required=True)
@@ -443,6 +460,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Build and publish (or skip) the status issue body, returning a process exit code."""
     args = parse_args(argv or sys.argv[1:])
     try:
         current_issue_body = args.current_issue_body_file.read_text(encoding="utf-8")

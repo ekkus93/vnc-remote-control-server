@@ -1,3 +1,5 @@
+"""Exception types raised by the VNC Remote Control Server Python client."""
+
 from __future__ import annotations
 
 

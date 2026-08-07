@@ -67,6 +67,21 @@ jobs:
       - name: Compile first-party Python
         run: python -m compileall -q tools/ci_status tests desktop/test-app
 
+      - name: Install Python client package
+        run: pip install -e python/
+
+      - name: Install Python lint tools
+        run: pip install ruff==0.12.0 pylint==4.0.5 mypy==1.19.1
+
+      - name: Lint first-party Python with ruff
+        run: ruff check .
+
+      - name: Lint first-party Python with pylint
+        run: pylint --rcfile=.pylintrc python/src/vnc_remote_control tests scripts tools/ci_status desktop/test-app
+
+      - name: Type-check first-party Python with mypy
+        run: mypy --config-file mypy.ini python/src/vnc_remote_control tests scripts tools/ci_status desktop/test-app
+
       - name: Run Python and workflow contract tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
 

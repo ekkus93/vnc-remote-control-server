@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import socket
 import struct
 import time
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from r13_types import Failure, HttpResult
 
@@ -17,17 +19,20 @@ if TYPE_CHECKING:
 
 
 def free_port() -> int:
+    """Return an ephemeral TCP port free at the moment of the call."""
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
 
 
 def require(condition: bool, message: str) -> None:
+    """Raise `Failure(message)` unless `condition` is true."""
     if not condition:
         raise Failure(message)
 
 
 def error_code(response: HttpResult) -> str | None:
+    """Extract `error.code` from a JSON error response, or `None`."""
     if not response.body:
         return None
     try:
@@ -36,7 +41,10 @@ def error_code(response: HttpResult) -> str | None:
         return None
 
 
-def wait_until(predicate: Callable[[], bool], description: str, deadline_seconds: float = 10) -> None:
+def wait_until(
+    predicate: Callable[[], bool], description: str, deadline_seconds: float = 10
+) -> None:
+    """Poll `predicate` until true, raising `Failure(description)` on timeout."""
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
         if predicate():
@@ -46,15 +54,15 @@ def wait_until(predicate: Callable[[], bool], description: str, deadline_seconds
 
 
 def parse_png_dimensions(data: bytes) -> tuple[int, int]:
+    """Return `(width, height)` parsed from a PNG's IHDR chunk."""
     require(data.startswith(b"\x89PNG\r\n\x1a\n"), "screenshot is not a PNG")
     require(data[12:16] == b"IHDR", "PNG does not begin with IHDR")
     return struct.unpack(">II", data[16:24])
 
 
 def websocket_status(port: int, path: str, authorization: str | None) -> int:
+    """Perform a WebSocket handshake and return its HTTP status line code."""
     key = hashlib.sha256(os.urandom(32)).digest()[:16]
-    import base64
-
     encoded_key = base64.b64encode(key).decode("ascii")
     lines = [
         f"GET {path} HTTP/1.1",
@@ -79,11 +87,15 @@ def websocket_status(port: int, path: str, authorization: str | None) -> int:
     return int(status_line.split()[1])
 
 
-def post_json(harness: "Harness", path: str, payload: dict[str, Any], timeout: float = 10) -> HttpResult:
+def post_json(
+    harness: Harness, path: str, payload: dict[str, Any], timeout: float = 10
+) -> HttpResult:
+    """POST `payload` as JSON to `path` via `harness`."""
     return harness.request("POST", path, payload, timeout=timeout)
 
 
 def read_http_response(sock: socket.socket) -> HttpResult:
+    """Read one raw HTTP/1.1 response from an already-connected socket."""
     sock.settimeout(12)
     data = bytearray()
     while b"\r\n\r\n" not in data:

@@ -1,3 +1,5 @@
+"""Contract tests tying the OpenAPI document, README, and operator guide together."""
+
 from __future__ import annotations
 
 import json
@@ -80,30 +82,122 @@ EXPECTED_ERROR_CODES = {
 
 
 def load_openapi() -> dict[str, Any]:
-    return json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    """Load and parse the repository-owned OpenAPI document."""
+    value = json.loads(OPENAPI_PATH.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise AssertionError("openapi.json did not decode to a JSON object")
+    return value
 
 
 def resolve_schema(document: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a `$ref` schema entry to its concrete definition."""
     reference = schema.get("$ref")
     if reference is None:
         return schema
     prefix = "#/components/schemas/"
     if not reference.startswith(prefix):
         raise AssertionError(f"unsupported schema reference: {reference}")
-    return document["components"]["schemas"][reference.removeprefix(prefix)]
+    resolved = document["components"]["schemas"][reference.removeprefix(prefix)]
+    if not isinstance(resolved, dict):
+        raise AssertionError(f"schema reference {reference} did not resolve to an object")
+    return resolved
 
 
-def validate_example(document: dict[str, Any], schema: dict[str, Any], value: Any, path: str) -> None:
+def _validate_one_of(
+    document: dict[str, Any], schema: dict[str, Any], value: Any, path: str
+) -> None:
+    failures = []
+    for candidate in schema["oneOf"]:
+        try:
+            validate_example(document, candidate, value, path)
+            return
+        except AssertionError as error:
+            failures.append(str(error))
+    raise AssertionError(f"{path} matched no oneOf branch: {failures}")
+
+
+def _validate_object(
+    document: dict[str, Any], schema: dict[str, Any], value: Any, path: str
+) -> None:
+    if not isinstance(value, dict):
+        raise AssertionError(f"{path} must be an object")
+    required = set(schema.get("required", []))
+    missing = required - value.keys()
+    if missing:
+        raise AssertionError(f"{path} is missing {sorted(missing)}")
+    properties = schema.get("properties", {})
+    if schema.get("additionalProperties") is False:
+        extra = value.keys() - properties.keys()
+        if extra:
+            raise AssertionError(f"{path} has extra fields {sorted(extra)}")
+    for name, child in value.items():
+        if name in properties:
+            validate_example(document, properties[name], child, f"{path}.{name}")
+
+
+def _validate_array(
+    document: dict[str, Any], schema: dict[str, Any], value: Any, path: str
+) -> None:
+    if not isinstance(value, list):
+        raise AssertionError(f"{path} must be an array")
+    minimum = schema.get("minItems")
+    maximum = schema.get("maxItems")
+    if minimum is not None and len(value) < minimum:
+        raise AssertionError(f"{path} is shorter than minItems")
+    if maximum is not None and len(value) > maximum:
+        raise AssertionError(f"{path} is longer than maxItems")
+    for index, child in enumerate(value):
+        validate_example(document, schema["items"], child, f"{path}[{index}]")
+
+
+def _validate_string(schema: dict[str, Any], value: Any, path: str) -> None:
+    if not isinstance(value, str):
+        raise AssertionError(f"{path} must be a string")
+    if "enum" in schema and value not in schema["enum"]:
+        raise AssertionError(f"{path} is outside enum")
+    if "const" in schema and value != schema["const"]:
+        raise AssertionError(f"{path} differs from const")
+    if "minLength" in schema and len(value) < schema["minLength"]:
+        raise AssertionError(f"{path} is shorter than minLength")
+    if "maxLength" in schema and len(value) > schema["maxLength"]:
+        raise AssertionError(f"{path} is longer than maxLength")
+    if "pattern" in schema and re.fullmatch(schema["pattern"], value) is None:
+        raise AssertionError(f"{path} does not match pattern")
+
+
+def _validate_integer(schema: dict[str, Any], value: Any, path: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise AssertionError(f"{path} must be an integer")
+    if "enum" in schema and value not in schema["enum"]:
+        raise AssertionError(f"{path} is outside enum")
+    if "const" in schema and value != schema["const"]:
+        raise AssertionError(f"{path} differs from const")
+    if "minimum" in schema and value < schema["minimum"]:
+        raise AssertionError(f"{path} is below minimum")
+    if "maximum" in schema and value > schema["maximum"]:
+        raise AssertionError(f"{path} is above maximum")
+
+
+def _validate_boolean(schema: dict[str, Any], value: Any, path: str) -> None:
+    if not isinstance(value, bool):
+        raise AssertionError(f"{path} must be a boolean")
+    if "const" in schema and value != schema["const"]:
+        raise AssertionError(f"{path} differs from const")
+
+
+def _validate_null(value: Any, path: str) -> None:
+    if value is not None:
+        raise AssertionError(f"{path} must be null")
+
+
+def validate_example(
+    document: dict[str, Any], schema: dict[str, Any], value: Any, path: str
+) -> None:
+    """Validate `value` against `schema` (a small JSON-Schema subset), recursively."""
     schema = resolve_schema(document, schema)
     if "oneOf" in schema:
-        failures = []
-        for candidate in schema["oneOf"]:
-            try:
-                validate_example(document, candidate, value, path)
-                return
-            except AssertionError as error:
-                failures.append(str(error))
-        raise AssertionError(f"{path} matched no oneOf branch: {failures}")
+        _validate_one_of(document, schema, value, path)
+        return
 
     expected_type = schema.get("type")
     if isinstance(expected_type, list):
@@ -112,81 +206,33 @@ def validate_example(document: dict[str, Any], schema: dict[str, Any], value: An
         expected_type = next(item for item in expected_type if item != "null")
 
     if expected_type == "object":
-        if not isinstance(value, dict):
-            raise AssertionError(f"{path} must be an object")
-        required = set(schema.get("required", []))
-        missing = required - value.keys()
-        if missing:
-            raise AssertionError(f"{path} is missing {sorted(missing)}")
-        properties = schema.get("properties", {})
-        if schema.get("additionalProperties") is False:
-            extra = value.keys() - properties.keys()
-            if extra:
-                raise AssertionError(f"{path} has extra fields {sorted(extra)}")
-        for name, child in value.items():
-            if name in properties:
-                validate_example(document, properties[name], child, f"{path}.{name}")
-        return
-    if expected_type == "array":
-        if not isinstance(value, list):
-            raise AssertionError(f"{path} must be an array")
-        minimum = schema.get("minItems")
-        maximum = schema.get("maxItems")
-        if minimum is not None and len(value) < minimum:
-            raise AssertionError(f"{path} is shorter than minItems")
-        if maximum is not None and len(value) > maximum:
-            raise AssertionError(f"{path} is longer than maxItems")
-        for index, child in enumerate(value):
-            validate_example(document, schema["items"], child, f"{path}[{index}]")
-        return
-    if expected_type == "string":
-        if not isinstance(value, str):
-            raise AssertionError(f"{path} must be a string")
-        if "enum" in schema and value not in schema["enum"]:
-            raise AssertionError(f"{path} is outside enum")
-        if "const" in schema and value != schema["const"]:
-            raise AssertionError(f"{path} differs from const")
-        if "minLength" in schema and len(value) < schema["minLength"]:
-            raise AssertionError(f"{path} is shorter than minLength")
-        if "maxLength" in schema and len(value) > schema["maxLength"]:
-            raise AssertionError(f"{path} is longer than maxLength")
-        if "pattern" in schema and re.fullmatch(schema["pattern"], value) is None:
-            raise AssertionError(f"{path} does not match pattern")
-        return
-    if expected_type == "integer":
-        if not isinstance(value, int) or isinstance(value, bool):
-            raise AssertionError(f"{path} must be an integer")
-        if "enum" in schema and value not in schema["enum"]:
-            raise AssertionError(f"{path} is outside enum")
-        if "const" in schema and value != schema["const"]:
-            raise AssertionError(f"{path} differs from const")
-        if "minimum" in schema and value < schema["minimum"]:
-            raise AssertionError(f"{path} is below minimum")
-        if "maximum" in schema and value > schema["maximum"]:
-            raise AssertionError(f"{path} is above maximum")
-        return
-    if expected_type == "boolean":
-        if not isinstance(value, bool):
-            raise AssertionError(f"{path} must be a boolean")
-        if "const" in schema and value != schema["const"]:
-            raise AssertionError(f"{path} differs from const")
-        return
-    if expected_type == "null":
-        if value is not None:
-            raise AssertionError(f"{path} must be null")
-        return
-    if expected_type is None:
-        return
-    raise AssertionError(f"{path} uses unsupported test schema type {expected_type}")
+        _validate_object(document, schema, value, path)
+    elif expected_type == "array":
+        _validate_array(document, schema, value, path)
+    elif expected_type == "string":
+        _validate_string(schema, value, path)
+    elif expected_type == "integer":
+        _validate_integer(schema, value, path)
+    elif expected_type == "boolean":
+        _validate_boolean(schema, value, path)
+    elif expected_type == "null":
+        _validate_null(value, path)
+    elif expected_type is not None:
+        raise AssertionError(f"{path} uses unsupported test schema type {expected_type}")
 
 
 class DocumentationContractTests(unittest.TestCase):
+    """Ties the OpenAPI document to the Rust router and hand-written docs."""
+
     def test_openapi_operations_match_the_router_exactly(self) -> None:
+        """Every documented operation has a matching route in `http/router.rs`."""
         document = load_openapi()
         self.assertEqual(document["openapi"], "3.1.0")
         self.assertEqual(document["info"]["version"], "0.1.0")
         documented = {
-            path: {method for method in item if method in {"get", "post", "put", "delete", "patch"}}
+            path: {
+                method for method in item if method in {"get", "post", "put", "delete", "patch"}
+            }
             for path, item in document["paths"].items()
         }
         self.assertEqual(documented, EXPECTED_OPERATIONS)
@@ -196,13 +242,18 @@ class DocumentationContractTests(unittest.TestCase):
         for path, methods in EXPECTED_OPERATIONS.items():
             source_path = path.removeprefix("/v1") if path.startswith("/v1/") else path
             self.assertIn(f'.route("{source_path}"', router)
-            route_line = next(line for line in router.splitlines() if f'.route("{source_path}"' in line)
+            route_line = next(
+                line for line in router.splitlines() if f'.route("{source_path}"' in line
+            )
             for method in methods:
                 self.assertRegex(route_line, rf"\b{method}\(")
 
     def test_openapi_auth_responses_and_examples_are_complete(self) -> None:
+        """Every operation documents auth, responses, and request examples validate."""
         document = load_openapi()
-        self.assertEqual(document["components"]["securitySchemes"]["bearerAuth"]["scheme"], "bearer")
+        self.assertEqual(
+            document["components"]["securitySchemes"]["bearerAuth"]["scheme"], "bearer"
+        )
         operation_ids: set[str] = set()
         for path, methods in document["paths"].items():
             for method, operation in methods.items():
@@ -222,7 +273,9 @@ class DocumentationContractTests(unittest.TestCase):
                 if request_body is not None:
                     media = request_body["content"]["application/json"]
                     self.assertIn("example", media, f"missing request example for {method} {path}")
-                    validate_example(document, media["schema"], media["example"], f"{method} {path}")
+                    validate_example(
+                        document, media["schema"], media["example"], f"{method} {path}"
+                    )
 
         command_schema = document["components"]["schemas"]["CommandAcceptedResponse"]
         self.assertEqual(command_schema["properties"]["status"]["const"], "accepted")
@@ -230,13 +283,17 @@ class DocumentationContractTests(unittest.TestCase):
             for method, operation in document["paths"][path].items():
                 if method in {"post", "put"} and path != "/health/ready":
                     self.assertIn("202", operation["responses"])
-                    self.assertIn("acknowledg", operation["responses"]["202"]["description"].lower())
+                    description = operation["responses"]["202"]["description"]
+                    self.assertIn("acknowledg", description.lower())
 
-        error_codes = set(document["components"]["schemas"]["ErrorBody"]["properties"]["code"]["enum"])
+        error_schema = document["components"]["schemas"]["ErrorBody"]
+        error_codes = set(error_schema["properties"]["code"]["enum"])
         self.assertEqual(error_codes, EXPECTED_ERROR_CODES)
-        self.assertEqual(document["components"]["schemas"]["PointerScrollRequest"]["properties"]["delta_x"]["enum"], [0])
+        scroll_schema = document["components"]["schemas"]["PointerScrollRequest"]
+        self.assertEqual(scroll_schema["properties"]["delta_x"]["enum"], [0])
 
     def test_readme_and_operator_guide_cover_every_r15_operator_topic(self) -> None:
+        """The README and operator guide cover every documented R15 topic."""
         readme = README_PATH.read_text(encoding="utf-8")
         guide = OPERATOR_GUIDE_PATH.read_text(encoding="utf-8")
         for required in (
@@ -287,6 +344,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertNotRegex(guide, r"Authorization: Bearer [A-Za-z0-9]{16,}")
 
     def test_custom_desktop_guide_matches_deployment_contract(self) -> None:
+        """The custom-desktop-images guide matches the actual deployment files."""
         custom = CUSTOM_DESKTOP_PATH.read_text(encoding="utf-8")
         readme = README_PATH.read_text(encoding="utf-8")
         deploy_readme = DEPLOY_README_PATH.read_text(encoding="utf-8")
@@ -331,8 +389,10 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("VRC_VNC_PORT=5901", deploy_readme)
 
     def test_websocket_document_matches_serialized_event_contract(self) -> None:
+        """WEBSOCKET_EVENTS.md matches the actual close codes and redaction rules."""
         document = WEBSOCKET_PATH.read_text(encoding="utf-8")
-        source = (ROOT / "crates" / "controller-api" / "src" / "events.rs").read_text(encoding="utf-8")
+        events_path = ROOT / "crates" / "controller-api" / "src" / "events.rs"
+        source = events_path.read_text(encoding="utf-8")
         for event_type in EXPECTED_EVENT_TYPES:
             self.assertIn(f"`{event_type}`", document)
         self.assertIn("code: 1013", source)
@@ -352,6 +412,7 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("never contain typed text", document)
 
     def test_documented_curl_examples_are_exercised_by_real_http_e2e(self) -> None:
+        """Every documented curl example path is exercised by the HTTP E2E suite."""
         script = HTTP_E2E_PATH.read_text(encoding="utf-8")
         self.assertIn("R15_DOCUMENTED_CURL_EXAMPLES", script)
         for path in (

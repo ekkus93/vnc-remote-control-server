@@ -1,5 +1,7 @@
-from pathlib import Path
+"""Contract tests for the hosted API documentation (Swagger UI, ReDoc, OpenAPI JSON)."""
+
 import unittest
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTER = ROOT / "crates" / "controller-api" / "src" / "http" / "router.rs"
@@ -9,7 +11,10 @@ README = ROOT / "README.md"
 
 
 class HostedDocsContractTests(unittest.TestCase):
+    """The controller hosts unauthenticated docs routes with pinned, privacy-hardened UI assets."""
+
     def test_router_exposes_public_documentation_routes(self) -> None:
+        """The router exposes the docs routes publicly, outside the protected router."""
         source = ROUTER.read_text(encoding="utf-8")
         for route in (
             '.route("/openapi.json", get(openapi_json))',
@@ -23,6 +28,7 @@ class HostedDocsContractTests(unittest.TestCase):
             self.assertNotIn(route, protected)
 
     def test_ui_versions_and_privacy_controls_are_pinned(self) -> None:
+        """The docs UI pins asset versions and disables auth persistence and validator lookup."""
         source = DOCS_UI.read_text(encoding="utf-8")
         self.assertIn("swagger-ui-dist@5.32.11", source)
         self.assertIn("redoc/v2.5.3/bundles/redoc.standalone.js", source)
@@ -35,13 +41,16 @@ class HostedDocsContractTests(unittest.TestCase):
         self.assertIn('include_str!("../../../../docs/openapi.json")', source)
 
     def test_controller_builder_includes_the_embedded_openapi_source(self) -> None:
+        """The Dockerfile copies the OpenAPI source before it is embedded at build time."""
         dockerfile = CONTROLLER_DOCKERFILE.read_text(encoding="utf-8")
         self.assertIn("COPY docs/openapi.json ./docs/openapi.json", dockerfile)
         copy_index = dockerfile.index("COPY docs/openapi.json ./docs/openapi.json")
-        build_index = dockerfile.index("RUN cargo build --locked --release --package controller-api")
+        build_command = "RUN cargo build --locked --release --package controller-api"
+        build_index = dockerfile.index(build_command)
         self.assertLess(copy_index, build_index)
 
     def test_readme_documents_hosted_reference_and_external_assets(self) -> None:
+        """The README documents the hosted reference endpoints and the pinned external assets."""
         readme = README.read_text(encoding="utf-8")
         for required in (
             "http://127.0.0.1:8080/docs",

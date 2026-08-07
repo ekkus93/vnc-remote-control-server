@@ -1,3 +1,11 @@
+"""Contract tests asserting the C/Rust native VNC binding's safety invariants.
+
+These tests read the build script, native shim source, Rust adapter, CI
+workflow, and smoke-test scripts as text and assert on the presence (or
+absence) of specific patterns that encode the project's native-binding
+safety rules, as recorded in docs/LIBVNCCLIENT_BINDING_DECISION.md.
+"""
+
 from __future__ import annotations
 
 import unittest
@@ -16,7 +24,10 @@ DECISION = ROOT / "docs/LIBVNCCLIENT_BINDING_DECISION.md"
 
 
 class NativeContractTests(unittest.TestCase):
-    def test_native_build_denies_c_warnings_and_uses_pkg_config(self):
+    """Assert the native VNC binding's build, shim, and CI safety rules hold."""
+
+    def test_native_build_denies_c_warnings_and_uses_pkg_config(self) -> None:
+        """build.rs must compile the shim with strict warnings and pkg-config."""
         text = BUILD.read_text(encoding="utf-8")
         self.assertIn('"-Wall"', text)
         self.assertIn('"-Wextra"', text)
@@ -25,7 +36,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn('"libvncclient"', text)
         self.assertIn("VRC_LIBVNCCLIENT_VERSION", text)
 
-    def test_ci_installs_and_exercises_native_dependencies(self):
+    def test_ci_installs_and_exercises_native_dependencies(self) -> None:
+        """CI must install libvncserver-dev/pkg-config and run the native smoke test."""
         text = CI.read_text(encoding="utf-8")
         self.assertGreaterEqual(text.count("libvncserver-dev"), 2)
         self.assertGreaterEqual(text.count("pkg-config"), 2)
@@ -36,7 +48,8 @@ class NativeContractTests(unittest.TestCase):
             text,
         )
 
-    def test_native_boundary_is_opaque_and_has_one_destroy_function(self):
+    def test_native_boundary_is_opaque_and_has_one_destroy_function(self) -> None:
+        """The FFI boundary must hide rfbClient behind an opaque handle with one destroy."""
         header = SHIM_HEADER.read_text(encoding="utf-8")
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         adapter = ADAPTER.read_text(encoding="utf-8")
@@ -46,7 +59,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("impl Drop for NativeClient", adapter)
         self.assertNotIn("pub fn raw", adapter)
 
-    def test_native_framebuffer_updates_use_library_incremental_rearm(self):
+    def test_native_framebuffer_updates_use_library_incremental_rearm(self) -> None:
+        """Framebuffer updates must rely on libvncclient's automatic rearm, not manual resends."""
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         callback_start = source.index("static void vrc_finished_framebuffer_update")
         callback_end = source.index("static void vrc_store_clipboard", callback_start)
@@ -66,9 +80,13 @@ class NativeContractTests(unittest.TestCase):
         ):
             self.assertIn(assignment, connect)
         self.assertIn("HandleRFBServerMessage automatically sends", connect)
-        self.assertLess(connect.index("updateRect.x = 0"), connect.index("SendFramebufferUpdateRequest("))
+        self.assertLess(
+            connect.index("updateRect.x = 0"),
+            connect.index("SendFramebufferUpdateRequest("),
+        )
 
-    def test_native_initialization_keeps_one_cleanup_owner(self):
+    def test_native_initialization_keeps_one_cleanup_owner(self) -> None:
+        """Client init must use the documented sequence and free the client exactly once."""
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         self.assertNotIn("rfbInitClient(", source)
         self.assertIn("ConnectToRFBServer(", source)
@@ -76,7 +94,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("SetFormatAndEncodings(", source)
         self.assertEqual(source.count("rfbClientCleanup("), 1)
 
-    def test_project_owned_sensitive_buffers_share_scrub_before_free_primitive(self):
+    def test_project_owned_sensitive_buffers_share_scrub_before_free_primitive(self) -> None:
+        """Clipboard/password buffers must be scrubbed before free via one shared primitive."""
         source = SHIM_SOURCE.read_text(encoding="utf-8")
 
         primitive_start = source.index("static void vrc_scrub_and_free")
@@ -122,7 +141,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertNotIn("free(copy);", source)
         self.assertEqual(source.count("vrc_scrub_and_free("), 4)
 
-    def test_reconnect_secret_duplication_is_named_and_local(self):
+    def test_reconnect_secret_duplication_is_named_and_local(self) -> None:
+        """Reconnect config duplication must use a named factory, not a bare settings clone."""
         source = DESKTOP_WORKER.read_text(encoding="utf-8")
         self.assertNotIn("settings.native.clone()", source)
         self.assertIn("duplicate_native_config_for_reconnect_factory", source)
@@ -132,7 +152,8 @@ class NativeContractTests(unittest.TestCase):
         )
         self.assertIn("requires one additional owned", source)
 
-    def test_native_smoke_is_bounded_and_uses_file_mounted_password(self):
+    def test_native_smoke_is_bounded_and_uses_file_mounted_password(self) -> None:
+        """The native smoke test must be time-bounded and read the VNC password from a file."""
         text = NATIVE_SMOKE.read_text(encoding="utf-8")
         self.assertIn("timeout --kill-after=2s 35s", text)
         self.assertIn("VRC_VNC_PASSWORD_FILE", text)
@@ -143,7 +164,8 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("docker exec -i", text)
         self.assertIn("native-clipboard-proof", text)
 
-    def test_native_failure_probes_are_bounded_and_fail_cleanly(self):
+    def test_native_failure_probes_are_bounded_and_fail_cleanly(self) -> None:
+        """Expected-failure probes must be time-bounded and never leak the VNC password."""
         text = NATIVE_SMOKE.read_text(encoding="utf-8")
         self.assertIn("run_expected_connection_failure", text)
         self.assertIn("timeout --kill-after=2s 10s", text)
@@ -154,11 +176,13 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("unexpectedly reached an authenticated proof state", text)
         self.assertIn("exposed its VNC password in output", text)
 
-    def test_desktop_here_doc_assertions_are_not_discarded(self):
+    def test_desktop_here_doc_assertions_are_not_discarded(self) -> None:
+        """The desktop smoke test's in-container Python assertions must run under -i."""
         text = DESKTOP_SMOKE.read_text(encoding="utf-8")
         self.assertIn('docker exec -i "$container_name" python3 -', text)
 
-    def test_binding_decision_records_required_safety_rules(self):
+    def test_binding_decision_records_required_safety_rules(self) -> None:
+        """The binding decision doc must record every required native safety rule."""
         text = DECISION.read_text(encoding="utf-8").casefold()
         for phrase in (
             "opaque native handle",

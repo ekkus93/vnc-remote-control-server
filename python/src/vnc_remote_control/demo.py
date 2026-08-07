@@ -1,19 +1,98 @@
+"""Console entry point for the `vnc-remote-control-demo` command."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
-from dataclasses import asdict, is_dataclass
+from collections.abc import Callable, Iterator, Sequence
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Any, Sequence, TextIO
+from typing import Any, Protocol, TextIO
 
-from .client import VncClient, VncRemoteControlClient
+from .client import VncClient
 from .errors import VncRemoteControlError
+from .models import (
+    ClipboardResponse,
+    CommandAcceptedResponse,
+    DisplayResponse,
+    Event,
+    HealthResponse,
+    KeyAction,
+    MouseButton,
+    ScreenshotResponse,
+    StatusResponse,
+)
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8080"
 DEFAULT_TOKEN_FILE = "deploy/secrets/api_token.txt"
 TOKEN_FILE_ENV = "VRC_API_TOKEN_FILE"
+
+
+class _DemoClient(Protocol):
+    """The subset of `VncRemoteControlClient`'s interface the demo CLI uses.
+
+    A structural Protocol rather than the concrete class so tests can inject
+    a plain duck-typed fake without inheritance or per-call type: ignores.
+    """
+
+    def get_liveness(self) -> HealthResponse:
+        """Fetch liveness."""
+
+    def get_readiness(self) -> HealthResponse:
+        """Fetch readiness."""
+
+    def get_status(self) -> StatusResponse:
+        """Fetch worker/connection status."""
+
+    def get_display(self) -> DisplayResponse:
+        """Fetch display/framebuffer metadata."""
+
+    def get_metrics(self) -> str:
+        """Fetch Prometheus metrics text."""
+
+    def get_screenshot(self, *, etag: str | None = None) -> ScreenshotResponse:
+        """Fetch the current screenshot."""
+
+    def move_pointer(self, x: int, y: int) -> CommandAcceptedResponse:
+        """Move the pointer."""
+
+    def click_pointer(
+        self, x: int, y: int, button: MouseButton = "left"
+    ) -> CommandAcceptedResponse:
+        """Click a pointer button."""
+
+    def double_click_pointer(
+        self, x: int, y: int, button: MouseButton = "left", *, interval_ms: int = 100
+    ) -> CommandAcceptedResponse:
+        """Double-click a pointer button."""
+
+    def scroll_pointer(
+        self, x: int, y: int, delta_y: int, *, delta_x: int = 0
+    ) -> CommandAcceptedResponse:
+        """Scroll at a pointer location."""
+
+    def set_keyboard_key(self, key: str, action: KeyAction) -> CommandAcceptedResponse:
+        """Send one key down/up event."""
+
+    def send_keyboard_chord(self, keys: Sequence[str]) -> CommandAcceptedResponse:
+        """Send a key chord."""
+
+    def type_keyboard_text(self, text: str) -> CommandAcceptedResponse:
+        """Type text."""
+
+    def get_clipboard(self) -> ClipboardResponse:
+        """Fetch the clipboard."""
+
+    def set_clipboard(self, text: str) -> CommandAcceptedResponse:
+        """Set the clipboard."""
+
+    def request_reconnect(self) -> CommandAcceptedResponse:
+        """Request a VNC reconnect."""
+
+    def iter_events(self) -> Iterator[Event]:
+        """Yield WebSocket events."""
 
 
 def _json_value(value: Any) -> Any:
@@ -46,9 +125,14 @@ def _read_text(stdin: TextIO, *, prompt: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the demo CLI's argument parser."""
     parser = argparse.ArgumentParser(
         prog="vnc-remote-control-demo",
         description="Small demo CLI for the VNC Remote Control Server Python client.",
+        # Unambiguous long options only: without this, argparse would silently
+        # accept "--token" as an abbreviation of "--token-file", defeating the
+        # intent of never accepting a raw bearer token as a CLI argument.
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--base-url",
@@ -138,104 +222,149 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _overview(client: VncRemoteControlClient, stdout: TextIO) -> None:
+@dataclass(frozen=True, slots=True)
+class _CommandContext:
+    """Bundles one demo CLI invocation's parsed args, client, and I/O streams."""
+
+    args: argparse.Namespace
+    client: _DemoClient
+    stdin: TextIO
+    stdout: TextIO
+
+
+def _cmd_overview(ctx: _CommandContext) -> None:
     _print_json(
         {
-            "liveness": asdict(client.get_liveness()),
-            "readiness": asdict(client.get_readiness()),
-            "status": asdict(client.get_status()),
-            "display": asdict(client.get_display()),
+            "liveness": asdict(ctx.client.get_liveness()),
+            "readiness": asdict(ctx.client.get_readiness()),
+            "status": asdict(ctx.client.get_status()),
+            "display": asdict(ctx.client.get_display()),
         },
-        stdout,
+        ctx.stdout,
     )
+
+
+def _cmd_status(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.get_status(), ctx.stdout)
+
+
+def _cmd_display(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.get_display(), ctx.stdout)
+
+
+def _cmd_metrics(ctx: _CommandContext) -> None:
+    metrics = ctx.client.get_metrics()
+    print(metrics, end="" if metrics.endswith("\n") else "\n", file=ctx.stdout)
+
+
+def _cmd_screenshot(ctx: _CommandContext) -> None:
+    response = ctx.client.get_screenshot()
+    if response.data is None:
+        raise RuntimeError("controller returned no screenshot bytes")
+    output = Path(ctx.args.output)
+    output.write_bytes(response.data)
+    print(f"saved {len(response.data)} bytes to {output}", file=ctx.stdout)
+    if response.etag is not None:
+        print(f"etag: {response.etag}", file=ctx.stdout)
+
+
+def _cmd_move(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.move_pointer(ctx.args.x, ctx.args.y), ctx.stdout)
+
+
+def _cmd_click(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.click_pointer(ctx.args.x, ctx.args.y, ctx.args.button), ctx.stdout)
+
+
+def _cmd_double_click(ctx: _CommandContext) -> None:
+    _print_json(
+        ctx.client.double_click_pointer(
+            ctx.args.x,
+            ctx.args.y,
+            ctx.args.button,
+            interval_ms=ctx.args.interval_ms,
+        ),
+        ctx.stdout,
+    )
+
+
+def _cmd_scroll(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.scroll_pointer(ctx.args.x, ctx.args.y, ctx.args.delta_y), ctx.stdout)
+
+
+def _cmd_key(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.set_keyboard_key(ctx.args.key, ctx.args.action), ctx.stdout)
+
+
+def _cmd_chord(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.send_keyboard_chord(ctx.args.keys), ctx.stdout)
+
+
+def _cmd_type_text(ctx: _CommandContext) -> None:
+    text = _read_text(ctx.stdin, prompt="Enter one line of text to type:")
+    _print_json(ctx.client.type_keyboard_text(text), ctx.stdout)
+
+
+def _cmd_clipboard_get(ctx: _CommandContext) -> None:
+    clipboard = ctx.client.get_clipboard()
+    print(clipboard.text, file=ctx.stdout)
+
+
+def _cmd_clipboard_set(ctx: _CommandContext) -> None:
+    text = _read_text(ctx.stdin, prompt="Enter one line of clipboard text:")
+    _print_json(ctx.client.set_clipboard(text), ctx.stdout)
+
+
+def _cmd_reconnect(ctx: _CommandContext) -> None:
+    _print_json(ctx.client.request_reconnect(), ctx.stdout)
+
+
+def _cmd_events(ctx: _CommandContext) -> None:
+    if ctx.args.count <= 0:
+        raise ValueError("--count must be greater than zero")
+    for index, event in enumerate(ctx.client.iter_events(), start=1):
+        _print_json(event, ctx.stdout)
+        if index >= ctx.args.count:
+            break
+
+
+_COMMAND_HANDLERS: dict[str, Callable[[_CommandContext], None]] = {
+    "overview": _cmd_overview,
+    "status": _cmd_status,
+    "display": _cmd_display,
+    "metrics": _cmd_metrics,
+    "screenshot": _cmd_screenshot,
+    "move": _cmd_move,
+    "click": _cmd_click,
+    "double-click": _cmd_double_click,
+    "scroll": _cmd_scroll,
+    "key": _cmd_key,
+    "chord": _cmd_chord,
+    "type-text": _cmd_type_text,
+    "clipboard-get": _cmd_clipboard_get,
+    "clipboard-set": _cmd_clipboard_set,
+    "reconnect": _cmd_reconnect,
+    "events": _cmd_events,
+}
 
 
 def execute(
     args: argparse.Namespace,
-    client: VncRemoteControlClient,
+    client: _DemoClient,
     *,
     stdin: TextIO,
     stdout: TextIO,
 ) -> None:
+    """Run one parsed demo CLI command against `client`."""
     command = args.command or "overview"
-
-    if command == "overview":
-        _overview(client, stdout)
-        return
-    if command == "status":
-        _print_json(client.get_status(), stdout)
-        return
-    if command == "display":
-        _print_json(client.get_display(), stdout)
-        return
-    if command == "metrics":
-        metrics = client.get_metrics()
-        print(metrics, end="" if metrics.endswith("\n") else "\n", file=stdout)
-        return
-    if command == "screenshot":
-        response = client.get_screenshot()
-        if response.data is None:
-            raise RuntimeError("controller returned no screenshot bytes")
-        output = Path(args.output)
-        output.write_bytes(response.data)
-        print(f"saved {len(response.data)} bytes to {output}", file=stdout)
-        if response.etag is not None:
-            print(f"etag: {response.etag}", file=stdout)
-        return
-    if command == "move":
-        _print_json(client.move_pointer(args.x, args.y), stdout)
-        return
-    if command == "click":
-        _print_json(client.click_pointer(args.x, args.y, args.button), stdout)
-        return
-    if command == "double-click":
-        _print_json(
-            client.double_click_pointer(
-                args.x,
-                args.y,
-                args.button,
-                interval_ms=args.interval_ms,
-            ),
-            stdout,
-        )
-        return
-    if command == "scroll":
-        _print_json(client.scroll_pointer(args.x, args.y, args.delta_y), stdout)
-        return
-    if command == "key":
-        _print_json(client.set_keyboard_key(args.key, args.action), stdout)
-        return
-    if command == "chord":
-        _print_json(client.send_keyboard_chord(args.keys), stdout)
-        return
-    if command == "type-text":
-        text = _read_text(stdin, prompt="Enter one line of text to type:")
-        _print_json(client.type_keyboard_text(text), stdout)
-        return
-    if command == "clipboard-get":
-        response = client.get_clipboard()
-        print(response.text, file=stdout)
-        return
-    if command == "clipboard-set":
-        text = _read_text(stdin, prompt="Enter one line of clipboard text:")
-        _print_json(client.set_clipboard(text), stdout)
-        return
-    if command == "reconnect":
-        _print_json(client.request_reconnect(), stdout)
-        return
-    if command == "events":
-        if args.count <= 0:
-            raise ValueError("--count must be greater than zero")
-        for index, event in enumerate(client.iter_events(), start=1):
-            _print_json(event, stdout)
-            if index >= args.count:
-                break
-        return
-
-    raise ValueError(f"unsupported demo command: {command}")
+    handler = _COMMAND_HANDLERS.get(command)
+    if handler is None:
+        raise ValueError(f"unsupported demo command: {command}")
+    handler(_CommandContext(args=args, client=client, stdin=stdin, stdout=stdout))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Parse arguments and run the demo CLI, returning a process exit code."""
     parser = build_parser()
     args = parser.parse_args(argv)
     token_file = args.token_file or os.environ.get(TOKEN_FILE_ENV) or DEFAULT_TOKEN_FILE
