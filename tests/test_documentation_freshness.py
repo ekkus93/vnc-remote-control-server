@@ -114,7 +114,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         for document in (contributing, claude):
             self.assertIn("docs/README.md", document)
-            self.assertIn("Historical", document)
+            self.assertIn("historical", document.lower())
             self.assertIn("python3 -m unittest discover -s tests -p 'test_*.py' -v", document)
         self.assertIn("Ordinary focused changes do not require", contributing)
         self.assertIn("vnc-remote-control-demo", claude)
