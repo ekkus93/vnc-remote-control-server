@@ -295,7 +295,8 @@ class DocumentationContractTests(unittest.TestCase):
         desktop_dockerfile = DESKTOP_DOCKERFILE_PATH.read_text(encoding="utf-8")
 
         for required in (
-            "Python VncClient(base_url, api_token)",
+            "Python application",
+            "VncClient(base_url, api_token)",
             "VRC_VNC_HOST",
             "VRC_VNC_PORT",
             "VRC_VNC_PASSWORD_FILE",
@@ -304,7 +305,7 @@ class DocumentationContractTests(unittest.TestCase):
             "desktop_control",
             "vnc-remote-control-desktop:base",
             "my-firefox-discord-desktop:local",
-            "build: null",
+            "build: !reset null",
             "API token",
             "VNC password",
             "arbitrary external VNC servers",
