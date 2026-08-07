@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import io
 import json
 import sys
@@ -11,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
+PYTHON_README = PYTHON_ROOT / "README.md"
 SRC = PYTHON_ROOT / "src"
 sys.path.insert(0, str(SRC))
 
@@ -131,8 +131,18 @@ class FakeDemoClient:
     def iter_events(self):
         self.calls.append(("iter_events",))
         yield Event(sequence=1, timestamp_unix_ms=10, type="snapshot", payload={})
-        yield Event(sequence=2, timestamp_unix_ms=11, type="framebuffer_revision", payload={"revision": 8})
-        yield Event(sequence=3, timestamp_unix_ms=12, type="connection_state", payload={"state": "connected"})
+        yield Event(
+            sequence=2,
+            timestamp_unix_ms=11,
+            type="framebuffer_revision",
+            payload={"revision": 8},
+        )
+        yield Event(
+            sequence=3,
+            timestamp_unix_ms=12,
+            type="connection_state",
+            payload={"state": "connected"},
+        )
 
 
 class PythonDemoTests(unittest.TestCase):
@@ -220,9 +230,7 @@ class PythonDemoTests(unittest.TestCase):
 
     def test_parser_exposes_token_file_but_no_raw_token_argument(self) -> None:
         option_strings = {
-            option
-            for action in self.parser._actions
-            for option in action.option_strings
+            option for action in self.parser._actions for option in action.option_strings
         }
         self.assertIn("--token-file", option_strings)
         self.assertNotIn("--token", option_strings)
@@ -233,6 +241,23 @@ class PythonDemoTests(unittest.TestCase):
             metadata["project"]["scripts"]["vnc-remote-control-demo"],
             "vnc_remote_control.demo:main",
         )
+
+    def test_python_readme_documents_demo_and_security_boundary(self) -> None:
+        readme = PYTHON_README.read_text(encoding="utf-8")
+        for required in (
+            "## Demo CLI",
+            "vnc-remote-control-demo --help",
+            "--base-url http://127.0.0.1:8080",
+            "--token-file deploy/secrets/api_token.txt",
+            "VRC_API_TOKEN_FILE",
+            "does **not** accept a raw bearer token",
+            "screenshot screen.png",
+            "type-text",
+            "clipboard-set",
+            "events --count 10",
+            "does not clamp coordinates",
+        ):
+            self.assertIn(required, readme)
 
 
 if __name__ == "__main__":
