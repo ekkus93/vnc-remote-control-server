@@ -8,6 +8,7 @@ BUILD = ROOT / "crates/libvnc-adapter/build.rs"
 SHIM_HEADER = ROOT / "crates/libvnc-adapter/native/vnc_shim.h"
 SHIM_SOURCE = ROOT / "crates/libvnc-adapter/native/vnc_shim.c"
 ADAPTER = ROOT / "crates/libvnc-adapter/src/lib.rs"
+DESKTOP_WORKER = ROOT / "crates/controller-api/src/worker/desktop_worker.rs"
 NATIVE_SMOKE = ROOT / "tests/native/run.sh"
 DESKTOP_SMOKE = ROOT / "tests/desktop/run.sh"
 CI = ROOT / ".github/workflows/ci.yml"
@@ -75,14 +76,20 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("SetFormatAndEncodings(", source)
         self.assertEqual(source.count("rfbClientCleanup("), 1)
 
-    def test_project_owned_native_clipboard_buffers_are_scrubbed_before_free(self):
+    def test_project_owned_sensitive_buffers_share_scrub_before_free_primitive(self):
         source = SHIM_SOURCE.read_text(encoding="utf-8")
+
+        primitive_start = source.index("static void vrc_scrub_and_free")
+        primitive_end = source.index("static void vrc_release_clipboard", primitive_start)
+        primitive = source[primitive_start:primitive_end]
+        self.assertIn("vrc_secure_scrub(buffer, length);", primitive)
+        self.assertIn("free(buffer);", primitive)
+        self.assertLess(primitive.index("vrc_secure_scrub"), primitive.index("free(buffer)"))
 
         helper_start = source.index("static void vrc_release_clipboard")
         helper_end = source.index("static char *vrc_duplicate", helper_start)
         helper = source[helper_start:helper_end]
-        self.assertIn("vrc_secure_scrub(*clipboard, *length + 1U);", helper)
-        self.assertLess(helper.index("vrc_secure_scrub"), helper.index("free(*clipboard)"))
+        self.assertIn("vrc_scrub_and_free(*clipboard, *length + 1U);", helper)
 
         store_start = source.index("static void vrc_store_clipboard")
         store_end = source.index("static void vrc_got_clipboard", store_start)
@@ -96,8 +103,8 @@ class NativeContractTests(unittest.TestCase):
         send_start = source.index("vrc_status vrc_client_send_clipboard")
         send_end = source.index("vrc_status vrc_client_dimensions", send_start)
         send = source[send_start:send_end]
-        self.assertIn("vrc_secure_scrub(copy, text_length + 1U);", send)
-        self.assertLess(send.index("vrc_secure_scrub"), send.index("free(copy)"))
+        self.assertIn("vrc_scrub_and_free(copy, text_length + 1U);", send)
+        self.assertNotIn("free(copy);", send)
 
         destroy_start = source.index("void vrc_client_destroy")
         destroy = source[destroy_start:]
@@ -105,6 +112,20 @@ class NativeContractTests(unittest.TestCase):
             "vrc_release_clipboard(&client->clipboard, &client->clipboard_length);",
             destroy,
         )
+        self.assertIn(
+            "vrc_scrub_and_free(client->password, strlen(client->password) + 1U);",
+            destroy,
+        )
+
+    def test_reconnect_secret_duplication_is_named_and_local(self):
+        source = DESKTOP_WORKER.read_text(encoding="utf-8")
+        self.assertNotIn("settings.native.clone()", source)
+        self.assertIn("duplicate_native_config_for_reconnect_factory", source)
+        self.assertIn(
+            "password: SecretString::from(config.password.expose_secret()),",
+            source,
+        )
+        self.assertIn("requires one additional owned", source)
 
     def test_native_smoke_is_bounded_and_uses_file_mounted_password(self):
         text = NATIVE_SMOKE.read_text(encoding="utf-8")
