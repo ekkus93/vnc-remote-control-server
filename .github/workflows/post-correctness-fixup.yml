@@ -1,4 +1,4 @@
-name: Post-correctness duplicate H1 cleanup
+name: Post-correctness Rust integration cleanup
 
 on:
   push:
@@ -11,13 +11,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: post-correctness-duplicate-h1-cleanup
+  group: post-correctness-rust-integration-cleanup-v2
   cancel-in-progress: true
 
 jobs:
   fix:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Check out exact master tip
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -37,7 +37,7 @@ jobs:
           toolchain: 1.97.1
           components: rustfmt
 
-      - name: Apply exact duplicate cleanup
+      - name: Apply exact integration cleanup
         shell: bash
         run: |
           set -euo pipefail
@@ -47,11 +47,11 @@ jobs:
           cargo fmt --all
           git diff --check
 
-      - name: Compile and run CR12 positive control
+      - name: Compile and run controller library tests
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked -p controller-api --lib matching_native_frame_positive_control_reaches_connected -- --exact --nocapture
+          cargo test --locked -p controller-api --lib
 
       - name: Commit validated cleanup
         shell: bash
@@ -61,5 +61,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add --all
-          git commit -m "Remove duplicate CR12 positive control"
+          git commit -m "Repair post-correctness Rust integrations"
           git push origin HEAD:master
