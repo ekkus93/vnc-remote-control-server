@@ -9,8 +9,13 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 OPENAPI_PATH = ROOT / "docs" / "openapi.json"
 OPERATOR_GUIDE_PATH = ROOT / "docs" / "OPERATOR_GUIDE.md"
+CUSTOM_DESKTOP_PATH = ROOT / "docs" / "CUSTOM_DESKTOP_IMAGES.md"
 WEBSOCKET_PATH = ROOT / "docs" / "WEBSOCKET_EVENTS.md"
 README_PATH = ROOT / "README.md"
+DEPLOY_README_PATH = ROOT / "deploy" / "README.md"
+PYTHON_README_PATH = ROOT / "python" / "README.md"
+COMPOSE_PATH = ROOT / "deploy" / "compose.yaml"
+DESKTOP_DOCKERFILE_PATH = ROOT / "desktop" / "Dockerfile"
 HTTP_SOURCE_PATH = ROOT / "crates" / "controller-api" / "src" / "http" / "router.rs"
 HTTP_E2E_PATH = ROOT / "tests" / "http-e2e" / "run.sh"
 
@@ -239,6 +244,7 @@ class DocumentationContractTests(unittest.TestCase):
             "docs/OPERATOR_GUIDE.md",
             "docs/openapi.json",
             "docs/WEBSOCKET_EVENTS.md",
+            "docs/CUSTOM_DESKTOP_IMAGES.md",
             "127.0.0.1:8080",
             "Product boundary",
             "request_id_exhausted",
@@ -279,6 +285,49 @@ class DocumentationContractTests(unittest.TestCase):
 
         self.assertNotIn("Authorization: Bearer replace", guide)
         self.assertNotRegex(guide, r"Authorization: Bearer [A-Za-z0-9]{16,}")
+
+    def test_custom_desktop_guide_matches_deployment_contract(self) -> None:
+        custom = CUSTOM_DESKTOP_PATH.read_text(encoding="utf-8")
+        readme = README_PATH.read_text(encoding="utf-8")
+        deploy_readme = DEPLOY_README_PATH.read_text(encoding="utf-8")
+        python_readme = PYTHON_README_PATH.read_text(encoding="utf-8")
+        compose = COMPOSE_PATH.read_text(encoding="utf-8")
+        desktop_dockerfile = DESKTOP_DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+        for required in (
+            "Python VncClient(base_url, api_token)",
+            "VRC_VNC_HOST",
+            "VRC_VNC_PORT",
+            "VRC_VNC_PASSWORD_FILE",
+            "VRC_VNC_HOST=desktop",
+            "VRC_VNC_PORT=5901",
+            "desktop_control",
+            "vnc-remote-control-desktop:base",
+            "my-firefox-discord-desktop:local",
+            "build: null",
+            "API token",
+            "VNC password",
+            "arbitrary external VNC servers",
+            "Do not weaken healthchecks",
+        ):
+            self.assertIn(required, custom)
+
+        self.assertIn("VRC_VNC_HOST: desktop", compose)
+        self.assertIn('VRC_VNC_PORT: "5901"', compose)
+        self.assertIn("VRC_VNC_PASSWORD_FILE: /run/secrets/vnc_password", compose)
+        self.assertIn("desktop_control:\n    internal: true", compose)
+        self.assertIn("USER desktop:desktop", desktop_dockerfile)
+        self.assertIn("EXPOSE 5901", desktop_dockerfile)
+        self.assertIn("desktop-entrypoint", desktop_dockerfile)
+        self.assertIn("desktop-healthcheck", desktop_dockerfile)
+
+        for linked_document in (readme, deploy_readme, python_readme):
+            self.assertIn("CUSTOM_DESKTOP_IMAGES.md", linked_document)
+
+        self.assertIn('VncClient("http://127.0.0.1:8080", api_token)', python_readme)
+        self.assertIn("does not need the desktop service name", python_readme)
+        self.assertIn("VRC_VNC_HOST=desktop", deploy_readme)
+        self.assertIn("VRC_VNC_PORT=5901", deploy_readme)
 
     def test_websocket_document_matches_serialized_event_contract(self) -> None:
         document = WEBSOCKET_PATH.read_text(encoding="utf-8")
