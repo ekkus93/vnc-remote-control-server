@@ -11,10 +11,15 @@ API_FIX = ROOT / ".github/post-correctness-recovery-api-fix.py"
 
 
 def replace_between(text: str, start: str, end: str, replacement: str) -> str:
-    if text.count(start) != 1 or text.count(end) != 1:
-        raise SystemExit(f"config structural anchor mismatch: {start!r} / {end!r}")
+    if text.count(start) != 1:
+        raise SystemExit(f"config structural start anchor mismatch: {start!r}")
     begin = text.index(start)
-    finish = text.index(end, begin)
+    try:
+        finish = text.index(end, begin + len(start))
+    except ValueError as error:
+        raise SystemExit(
+            f"config structural end anchor missing after start: {start!r} / {end!r}"
+        ) from error
     return text[:begin] + replacement + text[finish:]
 
 
@@ -42,8 +47,8 @@ def remove_target_calls(script: Path, target: str) -> None:
             removals.append((node.lineno - 1, node.end_lineno or node.lineno))
     if not removals:
         raise SystemExit(f"{script.name}: no calls target {target}")
-    for start, end in reversed(removals):
-        del lines[start:end]
+    for start_line, end_line in reversed(removals):
+        del lines[start_line:end_line]
     script.write_text("".join(lines), encoding="utf-8")
 
 
@@ -115,7 +120,7 @@ where
     }
 
     let mut trimmed_length = bytes.len();
-    while trimmed_length > 0 && matches!(bytes[trimmed_length - 1], b'\\n' | b'\\r') {
+    while trimmed_length > 0 && matches!(bytes[trimmed_length - 1], b'\n' | b'\r') {
         trimmed_length -= 1;
     }
     if trimmed_length == 0 || bytes[..trimmed_length].contains(&0) {
@@ -168,7 +173,7 @@ if text.count(old_import) != 1:
     raise SystemExit("config libvnc import anchor mismatch")
 text = text.replace(
     old_import,
-    "use libvnc_adapter::{NativeClientConfig, SecretString, scrub_secret_bytes};",
+    "use libvnc_adapter::{scrub_secret_bytes, NativeClientConfig, SecretString};",
     1,
 )
 atomic_import = "use std::sync::atomic::{Ordering, compiler_fence};\n"
