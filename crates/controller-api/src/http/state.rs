@@ -11,6 +11,23 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
+/// HTTP-only production settings after native worker credentials have moved
+/// into the worker runtime.
+pub struct HttpWorkerSettings {
+    /// Static bearer token shared into router state without duplicating bytes.
+    pub api_token: ApiToken,
+    /// Stable identifier used to namespace screenshot ETags and request IDs.
+    pub process_instance: Arc<str>,
+    /// Maximum accepted JSON request body size.
+    pub maximum_json_bytes: usize,
+    /// Maximum wait for worker command completion.
+    pub command_ack_timeout: Duration,
+    /// Maximum simultaneous screenshot encodes.
+    pub screenshot_concurrency: usize,
+    /// Screenshot encode deadline.
+    pub screenshot_timeout: Duration,
+}
+
 /// Shared router state.
 #[derive(Clone)]
 pub struct HttpState {
@@ -89,31 +106,25 @@ impl HttpState {
 
     /// Creates production HTTP state after worker-owned configuration has moved
     /// into the desktop worker. Only HTTP-specific values cross this boundary.
-    #[allow(clippy::too_many_arguments)]
     pub fn from_worker(
         client: WorkerClient,
         events: EventHub,
         metrics: Metrics,
-        api_token: ApiToken,
-        process_instance: Arc<str>,
-        maximum_json_bytes: usize,
-        command_ack_timeout: Duration,
-        screenshot_concurrency: usize,
-        screenshot_timeout: Duration,
+        settings: HttpWorkerSettings,
     ) -> Result<Self, HttpBuildError> {
         let backend = WorkerHttpBackend::new(
             client,
-            process_instance.as_ref(),
-            screenshot_concurrency,
-            screenshot_timeout,
+            settings.process_instance.as_ref(),
+            settings.screenshot_concurrency,
+            settings.screenshot_timeout,
         )
         .map_err(HttpBuildError::Screenshot)?;
         Self::new_with_observability(
             Arc::new(backend),
-            api_token,
-            process_instance,
-            maximum_json_bytes,
-            command_ack_timeout,
+            settings.api_token,
+            settings.process_instance,
+            settings.maximum_json_bytes,
+            settings.command_ack_timeout,
             events,
             metrics,
         )
