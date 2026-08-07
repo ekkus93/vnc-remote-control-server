@@ -35,6 +35,8 @@ The implementation on `master` includes:
 - coherent framebuffer snapshots, PNG encoding, ETags, conditional requests, and revision events;
 - complete v0.1 pointer, keyboard, text, and clipboard control;
 - authenticated HTTP and WebSocket APIs with bounded overload behavior and payload-free observability;
+- hosted Swagger UI, ReDoc, and raw OpenAPI 3.1 documentation;
+- a typed Python client with zero third-party dependencies for HTTP and optional WebSocket event support;
 - non-root desktop and controller images;
 - production Compose with file-mounted secrets, internal-only raw VNC, a read-only controller filesystem, bounded temporary storage, and optional desktop-home persistence;
 - real TigerVNC, HTTP/WebSocket, Compose, reconnect, resource-bound, and shutdown E2E validation.
@@ -97,6 +99,38 @@ Open the hosted API reference in a browser:
 
 The documentation routes are public, but every `/v1/*` operation invoked from Swagger UI still requires the normal bearer token. Swagger UI does not persist authorization across reloads and has its external validator disabled. The UI JavaScript/CSS is loaded from exact-version CDN URLs (`swagger-ui-dist` 5.32.11 and ReDoc 2.5.3); the API specification itself is served locally from the repository-owned `docs/openapi.json` contract.
 
+### Python client
+
+Install the in-repository Python client:
+
+```bash
+python -m pip install ./python
+```
+
+For WebSocket event streaming, install the optional extra:
+
+```bash
+python -m pip install './python[websocket]'
+```
+
+Example:
+
+```python
+from pathlib import Path
+
+from vnc_remote_control import VncClient
+
+api_token = Path("deploy/secrets/api_token.txt").read_text(encoding="utf-8").strip()
+client = VncClient("http://127.0.0.1:8080", api_token)
+
+print(client.get_status())
+client.move_pointer(640, 400)
+client.click_pointer(640, 400)
+client.type_keyboard_text("hello from Python")
+```
+
+The HTTP client has no third-party runtime dependencies. It exposes typed responses and structured API errors, supports conditional screenshot ETags, and does not silently clamp invalid input. See [`python/README.md`](python/README.md) for the complete usage guide.
+
 Stop the stack and remove disposable state:
 
 ```bash
@@ -108,6 +142,7 @@ docker compose -f deploy/compose.yaml down --volumes --remove-orphans
 - Hosted Swagger UI: `/docs`.
 - Hosted ReDoc: `/redoc`.
 - Hosted raw OpenAPI: `/openapi.json`.
+- [`python/README.md`](python/README.md): Python client installation, endpoint usage, screenshots, WebSocket events, and errors.
 - [`docs/OPERATOR_GUIDE.md`](docs/OPERATOR_GUIDE.md): deployment, lifecycle, recovery, tuning, examples, and troubleshooting.
 - [`docs/openapi.json`](docs/openapi.json): OpenAPI 3.1 contract for the supported controller API.
 - [`docs/WEBSOCKET_EVENTS.md`](docs/WEBSOCKET_EVENTS.md): event envelope, event types, heartbeat behavior, and close codes.
