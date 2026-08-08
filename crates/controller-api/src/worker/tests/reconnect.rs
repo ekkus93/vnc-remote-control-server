@@ -35,43 +35,26 @@ fn transport_failure_reconnects_with_bounded_backoff() {
 }
 
 #[test]
-fn authentication_failure_waits_for_manual_reconnect() {
+fn protocol_initialization_failure_reconnects_as_protocol_failure() {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_factory = Arc::clone(&calls);
-    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
-        calls_for_factory.fetch_add(1, Ordering::SeqCst);
-        Err::<MockSession, _>(NativeError::NativeFailure {
-            message: "VNC protocol initialization failed".to_owned(),
-        })
+    let mut config = settings();
+    config.reconnect_min_delay = Duration::from_millis(1);
+    config.reconnect_max_delay = Duration::from_millis(2);
+    let worker = DesktopWorker::spawn_with_factory(config, move || {
+        if calls_for_factory.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(NativeError::ProtocolInitializationFailed)
+        } else {
+            Ok(healthy_session())
+        }
     })
     .expect("worker spawns");
     let client = worker.client();
-    wait_for_state(&client, ConnectionState::AuthenticationFailed);
 
-    // A completed ordinary command proves the worker loop progressed after the
-    // authentication failure without using elapsed time as negative evidence.
-    let result = client
-        .submit(WorkerCommand::RequestFullRefresh)
-        .expect("command queues")
-        .wait(Duration::from_secs(1));
-    assert_eq!(result, Err(DesktopError::WorkerUnavailable));
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        client.framebuffer_snapshot().err(),
-        Some(FramebufferError::Unavailable)
-    );
-
-    // Positive control: an explicit reconnect must be observed by the fixture.
-    client
-        .submit(WorkerCommand::Reconnect)
-        .expect("manual reconnect queues")
-        .wait(Duration::from_secs(1))
-        .expect("manual reconnect accepted");
-    let deadline = Instant::now() + Duration::from_secs(1);
-    while Instant::now() < deadline && calls.load(Ordering::SeqCst) < 2 {
-        thread::yield_now();
-    }
+    wait_for_state(&client, ConnectionState::Connected);
     assert!(calls.load(Ordering::SeqCst) >= 2);
+    assert_ne!(client.snapshot().state, ConnectionState::AuthenticationFailed);
+    assert!(!client.snapshot().fatal_exit);
 
     worker
         .shutdown(Duration::from_secs(1))
@@ -254,6 +237,8 @@ fn illegal_transition_is_logged_and_does_not_silently_poison_health() {
             framebuffer: FramebufferStore::default(),
             clipboard: &clipboard,
             event_sequence: 0,
+            event_terminal_failure: false,
+            shutdown_cleanup: false,
             session: None,
             last_native_revision: None,
             last_native_clipboard_revision: None,
