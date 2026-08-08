@@ -176,6 +176,7 @@ impl DesktopWorker {
                     framebuffer,
                     clipboard,
                     next_command_id: Arc::new(AtomicU64::new(1)),
+                    command_id_exhausted: Arc::new(AtomicBool::new(false)),
                     command_submissions_in_flight,
                     command_queue_capacity: command_capacity,
                     pending_overload,
