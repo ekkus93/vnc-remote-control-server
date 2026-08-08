@@ -36,6 +36,27 @@ except ImportError:
     _websocket_module = None
 
 
+_CONNECTION_STATES = frozenset(
+    {
+        "starting",
+        "connecting",
+        "connected",
+        "degraded",
+        "reconnecting",
+        "disconnected",
+        "authentication_failed",
+        "stopped",
+    }
+)
+_WORKER_FAILURES = frozenset(
+    {"authentication", "configuration", "transport", "timeout", "protocol", "native"}
+)
+_HEALTH_STATUSES = frozenset({"alive", "ready"})
+_DISPLAY_STATUSES = frozenset({"current"})
+_COMMAND_STATUSES = frozenset({"accepted"})
+_EMPTY_RUNTIME_ERROR_STATUSES = frozenset({400, 408, 413})
+
+
 class _HttpResponse(Protocol):
     status: int
     headers: Any
@@ -77,6 +98,10 @@ def _require_object(payload: bytes, context: str) -> dict[str, Any]:
         value = json.loads(decoded)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProtocolError(f"{context} was not valid UTF-8 JSON") from exc
+    return _require_object_value(value, context)
+
+
+def _require_object_value(value: Any, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ProtocolError(f"{context} was not a JSON object")
     return value
@@ -88,11 +113,87 @@ def _require_fields(value: dict[str, Any], fields: Sequence[str], context: str) 
         raise ProtocolError(f"{context} omitted required field(s): {', '.join(missing)}")
 
 
+def _require_exact_fields(
+    value: dict[str, Any], fields: Sequence[str], context: str
+) -> None:
+    _require_fields(value, fields, context)
+    allowed = frozenset(fields)
+    if any(field not in allowed for field in value):
+        raise ProtocolError(f"{context} contained unexpected field(s)")
+
+
+def _require_string(value: Any, field: str, context: str) -> str:
+    if not isinstance(value, str):
+        raise ProtocolError(f"{context} field {field} was not a string")
+    return value
+
+
+def _require_bool(value: Any, field: str, context: str) -> bool:
+    if not isinstance(value, bool):
+        raise ProtocolError(f"{context} field {field} was not a boolean")
+    return value
+
+
+def _require_int(
+    value: Any,
+    field: str,
+    context: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolError(f"{context} field {field} was not an integer")
+    if minimum is not None and value < minimum:
+        raise ProtocolError(f"{context} field {field} was below its minimum")
+    if maximum is not None and value > maximum:
+        raise ProtocolError(f"{context} field {field} exceeded its maximum")
+    return value
+
+
+def _require_nullable_int(
+    value: Any,
+    field: str,
+    context: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, field, context, minimum=minimum, maximum=maximum)
+
+
+def _require_enum(
+    value: Any, field: str, context: str, allowed: frozenset[str]
+) -> str:
+    result = _require_string(value, field, context)
+    if result not in allowed:
+        raise ProtocolError(f"{context} field {field} was not an allowed string value")
+    return result
+
+
+def _require_nullable_enum(
+    value: Any, field: str, context: str, allowed: frozenset[str]
+) -> str | None:
+    if value is None:
+        return None
+    return _require_enum(value, field, context, allowed)
+
+
+def _require_http_status(value: Any, context: str) -> int:
+    return _require_int(value, "status", context, minimum=100, maximum=599)
+
+
 def _header(headers: Any, name: str) -> str | None:
     if headers is None:
         return None
     value = headers.get(name)
-    return str(value) if value is not None else None
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ProtocolError(f"HTTP response header {name} was not a string")
+    return value
 
 
 def _decode_message(message: str | bytes) -> str:
@@ -114,15 +215,11 @@ def _parse_event(text: str) -> Event:
     if not isinstance(value, dict):
         raise ProtocolError("WebSocket event was not a JSON object")
     _require_fields(value, ("sequence", "timestamp_unix_ms", "type"), "WebSocket event")
-    sequence = value["sequence"]
-    timestamp = value["timestamp_unix_ms"]
-    event_type = value["type"]
-    if not isinstance(sequence, int) or isinstance(sequence, bool):
-        raise ProtocolError("WebSocket event sequence was not an integer")
-    if not isinstance(timestamp, int) or isinstance(timestamp, bool):
-        raise ProtocolError("WebSocket event timestamp_unix_ms was not an integer")
-    if not isinstance(event_type, str):
-        raise ProtocolError("WebSocket event type was not a string")
+    sequence = _require_int(value["sequence"], "sequence", "WebSocket event", minimum=0)
+    timestamp = _require_int(
+        value["timestamp_unix_ms"], "timestamp_unix_ms", "WebSocket event", minimum=0
+    )
+    event_type = _require_string(value["type"], "type", "WebSocket event")
     payload = {
         key: item
         for key, item in value.items()
@@ -197,27 +294,27 @@ class VncRemoteControlClient:
 
     def _api_error(self, status: int, headers: Any, body: bytes) -> ApiError:
         request_id = _header(headers, "X-Request-ID")
-        code: str | None = None
-        message = f"controller returned HTTP {status}"
-        if body:
-            try:
-                document = _require_object(body, "error response")
-                error = document.get("error")
-                if isinstance(error, dict):
-                    raw_code = error.get("code")
-                    raw_message = error.get("message")
-                    raw_request_id = error.get("request_id")
-                    if isinstance(raw_code, str):
-                        code = raw_code
-                    if isinstance(raw_message, str):
-                        message = raw_message
-                    if isinstance(raw_request_id, str):
-                        request_id = raw_request_id
-            except ProtocolError:
-                # Empty/runtime-generated errors are documented for 400/408/413.
-                # A malformed nonempty error body still surfaces as an HTTP error
-                # without copying arbitrary response bytes into the exception.
-                pass
+        if not body:
+            if status not in _EMPTY_RUNTIME_ERROR_STATUSES:
+                raise ProtocolError("structured HTTP error response was unexpectedly empty")
+            return ApiError(
+                status,
+                f"controller returned HTTP {status}",
+                code=None,
+                request_id=request_id,
+            )
+
+        document = _require_object(body, "error response")
+        _require_exact_fields(document, ("error",), "error response")
+        error = _require_object_value(document["error"], "error response error field")
+        _require_exact_fields(
+            error, ("code", "message", "request_id"), "error response error field"
+        )
+        code = _require_string(error["code"], "code", "error response error field")
+        message = _require_string(error["message"], "message", "error response error field")
+        request_id = _require_string(
+            error["request_id"], "request_id", "error response error field"
+        )
         return ApiError(
             status,
             message,
@@ -252,21 +349,26 @@ class VncRemoteControlClient:
         )
         try:
             with self._http_open(request, timeout=self._timeout) as response:
-                status = int(response.status)
+                status = _require_http_status(response.status, "HTTP response")
                 response_headers = response.headers
                 response_body = response.read()
         except HTTPError as exc:
-            status = int(exc.code)
+            status = _require_http_status(exc.code, "HTTP error response")
             response_headers = exc.headers
             response_body = exc.read()
             if status in expected_statuses:
                 return status, response_headers, response_body
-            raise self._api_error(status, response_headers, response_body) from exc
+            try:
+                error = self._api_error(status, response_headers, response_body)
+            except ProtocolError as protocol_error:
+                raise protocol_error from exc
+            raise error from exc
         except (URLError, TimeoutError, OSError) as exc:
             raise TransportError(f"HTTP request failed for {method} {path}") from exc
 
         if status not in expected_statuses:
-            raise self._api_error(status, response_headers, response_body)
+            error = self._api_error(status, response_headers, response_body)
+            raise error
         return status, response_headers, response_body
 
     def _json_request(
@@ -291,16 +393,22 @@ class VncRemoteControlClient:
         value = self._json_request(
             "GET", "/health/live", 200, _RequestOptions(authenticated=False)
         )
-        _require_fields(value, ("status",), "liveness response")
-        return HealthResponse(status=str(value["status"]))
+        context = "liveness response"
+        _require_exact_fields(value, ("status",), context)
+        return HealthResponse(
+            status=_require_enum(value["status"], "status", context, _HEALTH_STATUSES)
+        )
 
     def get_readiness(self) -> HealthResponse:
         """Fetch `/health/ready`, which never requires a bearer token."""
         value = self._json_request(
             "GET", "/health/ready", 200, _RequestOptions(authenticated=False)
         )
-        _require_fields(value, ("status",), "readiness response")
-        return HealthResponse(status=str(value["status"]))
+        context = "readiness response"
+        _require_exact_fields(value, ("status",), context)
+        return HealthResponse(
+            status=_require_enum(value["status"], "status", context, _HEALTH_STATUSES)
+        )
 
     def get_status(self) -> StatusResponse:
         """Fetch the worker's current connection and lifecycle status."""
@@ -320,31 +428,47 @@ class VncRemoteControlClient:
             "fatal_exit",
             "shutting_down",
         )
-        _require_fields(value, fields, "status response")
+        context = "status response"
+        _require_exact_fields(value, fields, context)
+        state = _require_enum(value["state"], "state", context, _CONNECTION_STATES)
+        last_failure = _require_nullable_enum(
+            value["last_failure"], "last_failure", context, _WORKER_FAILURES
+        )
         return StatusResponse(
-            state=cast(ConnectionState, value["state"]),
-            started_at_unix_ms=int(value["started_at_unix_ms"]),
-            connected_at_unix_ms=(
-                None
-                if value["connected_at_unix_ms"] is None
-                else int(value["connected_at_unix_ms"])
+            state=cast(ConnectionState, state),
+            started_at_unix_ms=_require_int(
+                value["started_at_unix_ms"], "started_at_unix_ms", context, minimum=0
             ),
-            last_message_at_unix_ms=(
-                None
-                if value["last_message_at_unix_ms"] is None
-                else int(value["last_message_at_unix_ms"])
+            connected_at_unix_ms=_require_nullable_int(
+                value["connected_at_unix_ms"],
+                "connected_at_unix_ms",
+                context,
+                minimum=0,
             ),
-            reconnect_attempts=int(value["reconnect_attempts"]),
-            last_failure=cast(WorkerFailure | None, value["last_failure"]),
-            framebuffer_revision=(
-                None
-                if value["framebuffer_revision"] is None
-                else int(value["framebuffer_revision"])
+            last_message_at_unix_ms=_require_nullable_int(
+                value["last_message_at_unix_ms"],
+                "last_message_at_unix_ms",
+                context,
+                minimum=0,
             ),
-            rejected_commands=int(value["rejected_commands"]),
-            dropped_events=int(value["dropped_events"]),
-            fatal_exit=bool(value["fatal_exit"]),
-            shutting_down=bool(value["shutting_down"]),
+            reconnect_attempts=_require_int(
+                value["reconnect_attempts"], "reconnect_attempts", context, minimum=0
+            ),
+            last_failure=cast(WorkerFailure | None, last_failure),
+            framebuffer_revision=_require_nullable_int(
+                value["framebuffer_revision"],
+                "framebuffer_revision",
+                context,
+                minimum=0,
+            ),
+            rejected_commands=_require_int(
+                value["rejected_commands"], "rejected_commands", context, minimum=0
+            ),
+            dropped_events=_require_int(
+                value["dropped_events"], "dropped_events", context, minimum=0
+            ),
+            fatal_exit=_require_bool(value["fatal_exit"], "fatal_exit", context),
+            shutting_down=_require_bool(value["shutting_down"], "shutting_down", context),
         )
 
     def get_display(self) -> DisplayResponse:
@@ -361,15 +485,24 @@ class VncRemoteControlClient:
             "updated_at_unix_ms",
             "complete",
         )
-        _require_fields(value, fields, "display response")
+        context = "display response"
+        _require_exact_fields(value, fields, context)
+        depth = _require_int(value["depth"], "depth", context)
+        if depth != 24:
+            raise ProtocolError("display response field depth did not match its required value")
+        complete = _require_bool(value["complete"], "complete", context)
+        if not complete:
+            raise ProtocolError("display response field complete did not match its required value")
         return DisplayResponse(
-            status=str(value["status"]),
-            width=int(value["width"]),
-            height=int(value["height"]),
-            depth=int(value["depth"]),
-            revision=int(value["revision"]),
-            updated_at_unix_ms=int(value["updated_at_unix_ms"]),
-            complete=bool(value["complete"]),
+            status=_require_enum(value["status"], "status", context, _DISPLAY_STATUSES),
+            width=_require_int(value["width"], "width", context, minimum=1),
+            height=_require_int(value["height"], "height", context, minimum=1),
+            depth=depth,
+            revision=_require_int(value["revision"], "revision", context, minimum=1),
+            updated_at_unix_ms=_require_int(
+                value["updated_at_unix_ms"], "updated_at_unix_ms", context, minimum=0
+            ),
+            complete=complete,
         )
 
     def get_screenshot(self, *, etag: str | None = None) -> ScreenshotResponse:
@@ -416,10 +549,11 @@ class VncRemoteControlClient:
             202,
             _RequestOptions(authenticated=True, json_body=body),
         )
-        _require_fields(value, ("command_id", "status"), f"{path} response")
+        context = f"{path} response"
+        _require_exact_fields(value, ("command_id", "status"), context)
         return CommandAcceptedResponse(
-            command_id=int(value["command_id"]),
-            status=str(value["status"]),
+            command_id=_require_int(value["command_id"], "command_id", context, minimum=1),
+            status=_require_enum(value["status"], "status", context, _COMMAND_STATUSES),
         )
 
     def move_pointer(self, x: int, y: int) -> CommandAcceptedResponse:
@@ -499,13 +633,16 @@ class VncRemoteControlClient:
         value = self._json_request(
             "GET", "/v1/clipboard", 200, _RequestOptions(authenticated=True)
         )
-        _require_fields(
-            value, ("text", "revision", "updated_at_unix_ms"), "clipboard response"
+        context = "clipboard response"
+        _require_exact_fields(
+            value, ("text", "revision", "updated_at_unix_ms"), context
         )
         return ClipboardResponse(
-            text=str(value["text"]),
-            revision=int(value["revision"]),
-            updated_at_unix_ms=int(value["updated_at_unix_ms"]),
+            text=_require_string(value["text"], "text", context),
+            revision=_require_int(value["revision"], "revision", context, minimum=1),
+            updated_at_unix_ms=_require_int(
+                value["updated_at_unix_ms"], "updated_at_unix_ms", context, minimum=0
+            ),
         )
 
     def set_clipboard(self, text: str) -> CommandAcceptedResponse:
