@@ -1,4 +1,5 @@
 use super::*;
+use crate::http::ids::{REQUEST_ID_INVARIANT_SENTINEL, request_id, valid_request_id};
 
 #[test]
 fn access_log_redacts_authorization_and_query_values() {
@@ -9,7 +10,7 @@ fn access_log_redacts_authorization_and_query_values() {
     logged_request
         .extensions_mut()
         .insert(RequestId(Arc::from("caller-1")));
-    let context = AccessLogContext::from_request(&logged_request);
+    let context = AccessLogContext::from_request(&logged_request).expect("request ID extension");
     let line = format_access_log(&context, StatusCode::OK, Duration::from_millis(12));
 
     assert!(line.contains("method=GET"));
@@ -20,6 +21,17 @@ fn access_log_redacts_authorization_and_query_values() {
     assert!(!line.contains("header-secret"));
     assert!(!line.contains("query-secret"));
     assert!(!line.contains("?token="));
+}
+
+#[test]
+fn missing_request_id_is_an_explicit_invariant_not_a_fabricated_normal_id() {
+    let bare_request = request("/v1/status")
+        .body(Body::empty())
+        .expect("request");
+    assert!(request_id(&bare_request).is_none());
+    assert!(AccessLogContext::from_request(&bare_request).is_none());
+    assert!(!valid_request_id(REQUEST_ID_INVARIANT_SENTINEL));
+    assert!(!valid_request_id("request-id-exhausted"));
 }
 
 #[test]
