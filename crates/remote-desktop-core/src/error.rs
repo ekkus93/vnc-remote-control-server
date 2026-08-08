@@ -62,6 +62,9 @@ pub enum DesktopError {
     /// The bounded worker command queue is full.
     #[error("command queue is full")]
     CommandQueueFull,
+    /// The process-local command identifier sequence is permanently exhausted.
+    #[error("command identifier sequence is exhausted")]
+    CommandIdExhausted,
     /// The worker is shutting down or has stopped.
     #[error("desktop worker is unavailable")]
     WorkerUnavailable,
