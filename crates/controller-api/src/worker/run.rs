@@ -123,6 +123,8 @@ pub(super) fn run_worker<F, S>(
         framebuffer,
         clipboard: &clipboard,
         event_sequence: 0,
+        event_terminal_failure: false,
+        shutdown_cleanup: false,
         session: None,
         last_native_revision: None,
         last_native_clipboard_revision: None,
@@ -144,8 +146,10 @@ pub(super) fn run_worker<F, S>(
             break;
         }
 
-        if pending_overload.swap(0, Ordering::AcqRel) > 0 {
-            state.publish(DesktopEventKind::Overload);
+        if pending_overload.swap(0, Ordering::AcqRel) > 0
+            && state.publish(DesktopEventKind::Overload).is_err()
+        {
+            break;
         }
 
         if state.session.is_none()
@@ -169,7 +173,9 @@ pub(super) fn run_worker<F, S>(
                     }
                     Err(error) => {
                         state.record_failure(classify_native_error(&error));
-                        state.schedule_reconnect();
+                        if state.schedule_reconnect().is_err() {
+                            break;
+                        }
                     }
                 },
                 Err(error) => {
@@ -193,7 +199,11 @@ pub(super) fn run_worker<F, S>(
                             }
                             break;
                         }
-                        _ => state.schedule_reconnect(),
+                        _ => {
+                            if state.schedule_reconnect().is_err() {
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -220,6 +230,9 @@ pub(super) fn run_worker<F, S>(
                     command => state.execute(command),
                 };
                 let _ = envelope.completion.send(result);
+                if state.event_terminal_failure() {
+                    break;
+                }
                 if shutdown_now(&shutdown_requested, &commands) {
                     orderly_shutdown = true;
                     break;
@@ -248,7 +261,10 @@ pub(super) fn run_worker<F, S>(
     // submission permit releases automatically, and a racing `try_send()`
     // receives `Disconnected` and drops its returned permit as well.
     drop(commands);
-    state.invalidate();
+    if orderly_shutdown {
+        state.begin_shutdown_cleanup();
+    }
+    let cleanup_failed = state.invalidate().is_err();
     let final_transition_failed = if lock_unpoisoned(&snapshot).state == ConnectionState::Stopped {
         false
     } else if state.transition(ConnectionState::Stopped).is_err() {
@@ -257,7 +273,7 @@ pub(super) fn run_worker<F, S>(
     } else {
         false
     };
-    if !orderly_shutdown || final_transition_failed {
+    if !orderly_shutdown || cleanup_failed || final_transition_failed {
         lock_unpoisoned(&snapshot).fatal_exit = true;
     }
 }
