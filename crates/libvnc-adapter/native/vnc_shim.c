@@ -276,7 +276,7 @@ vrc_status vrc_client_connect(vrc_client *client) {
     }
     if (!InitialiseRFBConnection(client->native)) {
         vrc_set_error(client, "VNC protocol initialization failed");
-        return VRC_STATUS_NATIVE_FAILURE;
+        return VRC_STATUS_PROTOCOL_INITIALIZATION_FAILED;
     }
 
     /* Request a host-independent 32-bit true-colour format whose in-memory
