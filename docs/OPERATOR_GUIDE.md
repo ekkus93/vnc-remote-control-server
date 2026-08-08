@@ -398,7 +398,7 @@ For a transport interruption or desktop restart:
 - a full framebuffer is requested after reconnect;
 - readiness returns only after a complete new frame arrives.
 
-Authentication failure is visible as `authentication_failed` and does not retry rapidly. Correct the VNC source secret, recreate the affected services, and verify readiness.
+A mismatched VNC secret is visible as `last_failure: protocol` with bounded, backoff-safe reconnect attempts rather than a rapid retry loop, because the native library does not expose trustworthy authentication-rejection evidence. Correct the VNC source secret, recreate the affected services, and verify readiness. The reserved `authentication_failed` state is not produced by the current classification.
 
 A manual reconnect request is available, but it is rate-limited and should not be used as a polling loop.
 
@@ -464,7 +464,7 @@ The desktop entrypoint fails closed if Xtigervnc, XFCE, or the deterministic tes
 
 ### VNC authentication fails
 
-Symptoms include controller state `authentication_failed` and readiness `503`.
+The pinned native VNC library does not expose trustworthy authentication-rejection evidence, so a mismatched secret is classified as a bounded protocol/initialization failure rather than a terminal `authentication_failed` state. Symptoms include controller status `last_failure: protocol` with `state` cycling through `connecting`/`reconnecting`, and readiness staying `503`.
 
 Check that both services mount the same VNC secret source:
 
@@ -478,7 +478,7 @@ Do not print the secret value. Correct `VRC_VNC_PASSWORD_SOURCE` or the default 
 docker compose -f deploy/compose.yaml up --detach --force-recreate desktop controller
 ```
 
-Authentication failures are intentionally backoff-safe and do not become a rapid retry loop.
+Protocol/initialization failures are intentionally backoff-safe and do not become a rapid retry loop. The `authentication_failed` state remains reserved for a future native signal that can prove credential rejection specifically; it is not produced by the current classification.
 
 ### Controller cannot connect
 
@@ -510,8 +510,8 @@ curl --fail-with-body --header "$AUTH_HEADER" "$BASE_URL/v1/status"
 Interpret the state:
 
 - `starting` or `connecting`: initial connection is still active;
-- `authentication_failed`: VNC credentials do not match;
-- `degraded`, `disconnected`, or `reconnecting`: transport recovery is active;
+- `degraded`, `disconnected`, or `reconnecting` with `last_failure: protocol`: transport recovery is active, possibly because VNC credentials do not match (the native library cannot prove authentication rejection specifically, so a mismatched secret is not distinguishable from other initialization failures);
+- `authentication_failed`: reserved for a future native signal that can prove credential rejection; not produced by the current classification;
 - `connected` with no framebuffer revision: a complete frame has not arrived;
 - `fatal_exit: true`: the worker exited unexpectedly and the service must be recreated.
 

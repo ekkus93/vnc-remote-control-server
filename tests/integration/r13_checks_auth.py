@@ -84,15 +84,24 @@ def assert_wrong_password_and_missing_secret(harness: Harness) -> None:
     )
     require(result.returncode != 0, "stack unexpectedly started with missing VNC secret")
 
-    harness.log("verifying wrong VNC password reaches authentication_failed")
+    harness.log("verifying wrong VNC password reaches a fail-closed protocol failure")
     harness.compose("up", "--detach", "--no-build", "desktop")
     harness.wait_service_health("desktop")
     os.chmod(harness.vnc_secret, 0o600)
     harness.vnc_secret.write_text(WRONG_VNC_PASSWORD, encoding="utf-8")
     os.chmod(harness.vnc_secret, 0o444)
     harness.compose("up", "--detach", "controller")
-    status = harness.wait_status(lambda value: value.get("state") == "authentication_failed", 20)
-    require(status.get("last_failure") == "authentication", f"wrong failure class: {status}")
+    # LibVNCClient's generic InitialiseRFBConnection() failure carries no
+    # trustworthy authentication-rejection evidence, so a wrong password is
+    # truthfully classified as a protocol/initialization failure rather than
+    # an unproven "authentication_failed" label. It stays in the bounded
+    # reconnect loop instead of latching a terminal authentication state.
+    status = harness.wait_status(lambda value: value.get("last_failure") == "protocol", 20)
+    require(
+        status.get("state") in ("connecting", "reconnecting"),
+        f"unexpected state for a wrong-password protocol failure: {status}",
+    )
+    require(not status.get("fatal_exit"), f"wrong password unexpectedly became fatal: {status}")
     os.chmod(harness.vnc_secret, 0o600)
     harness.vnc_secret.write_text(VNC_PASSWORD, encoding="utf-8")
     os.chmod(harness.vnc_secret, 0o444)
