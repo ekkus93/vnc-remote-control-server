@@ -13,7 +13,7 @@ fn access_log_excludes_bearer_sentinel() {
     logged_request
         .extensions_mut()
         .insert(RequestId(Arc::from("privacy-request")));
-    let context = AccessLogContext::from_request(&logged_request);
+    let context = AccessLogContext::from_request(&logged_request).expect("request ID extension");
     let line = format_access_log(&context, StatusCode::UNAUTHORIZED, Duration::from_millis(3));
 
     assert!(line.contains("authorization=[REDACTED]"));
