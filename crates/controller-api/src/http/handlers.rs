@@ -13,7 +13,9 @@ use crate::api_contract::{
     ChordRequest, ClipboardRequest, KeyRequest, PointerButtonRequest, PointerClickRequest,
     PointerDoubleClickRequest, PointerMoveRequest, PointerScrollRequest, TextRequest,
 };
-use crate::events::{EventSubscription, ServerEvent, WebSocketCapacityError};
+use crate::events::{
+    EventSequenceError, EventSubscription, ServerEvent, WebSocketCapacityError,
+};
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::ScreenshotOutcome;
 use axum::Json;
@@ -48,13 +50,14 @@ pub(super) fn prepare_event_session(
     let initial = state
         .events
         .snapshot_event(&snapshot, clipboard_revision)
-        .map_err(|_| {
-            ApiError::new(
+        .map_err(|error| match error {
+            EventSequenceError::Exhausted => ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "event_sequence_exhausted",
                 "event sequence is exhausted",
-                request_id,
-            )
+                request_id.clone(),
+            ),
+            EventSequenceError::TimestampInvalid => ApiError::internal(request_id.clone()),
         })?;
     Ok((subscription, initial))
 }
