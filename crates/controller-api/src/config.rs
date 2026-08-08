@@ -150,7 +150,7 @@ impl ControllerConfig {
         E: EnvironmentSource,
         S: SecretReader,
     {
-        let listen_address = value_or(environment, "VRC_LISTEN_ADDR", DEFAULT_LISTEN_ADDRESS)
+        let listen_address = value_or(environment, "VRC_LISTEN_ADDR", DEFAULT_LISTEN_ADDRESS)?
             .parse::<SocketAddr>()
             .map_err(|_| ConfigError::InvalidValue("VRC_LISTEN_ADDR"))?;
         if listen_address.port() == 0 {
@@ -161,12 +161,12 @@ impl ControllerConfig {
             environment,
             "VRC_API_TOKEN_FILE",
             DEFAULT_API_TOKEN_FILE,
-        ));
+        )?);
         let vnc_password_path = PathBuf::from(value_or(
             environment,
             "VRC_VNC_PASSWORD_FILE",
             DEFAULT_VNC_PASSWORD_FILE,
-        ));
+        )?);
         let api_token = ApiToken::from_secret(secrets.read_secret(&api_token_path)?);
         if api_token.is_empty() {
             return Err(ConfigError::SecretFile {
@@ -176,9 +176,10 @@ impl ControllerConfig {
         }
         let vnc_password = secrets.read_secret(&vnc_password_path)?;
 
-        let process_instance = environment
-            .get("VRC_PROCESS_INSTANCE")
-            .unwrap_or_else(default_process_instance);
+        let process_instance = match environment_value(environment, "VRC_PROCESS_INSTANCE")? {
+            Some(value) => value,
+            None => default_process_instance()?,
+        };
         validate_process_instance(&process_instance)?;
 
         let maximum_json_bytes = parse_bounded_usize(
@@ -241,7 +242,7 @@ impl ControllerConfig {
             return Err(ConfigError::InvalidValue("VRC_WEBSOCKET_IDLE_TIMEOUT_MS"));
         }
 
-        let vnc_host = value_or(environment, "VRC_VNC_HOST", DEFAULT_VNC_HOST);
+        let vnc_host = value_or(environment, "VRC_VNC_HOST", DEFAULT_VNC_HOST)?;
         if vnc_host.is_empty() || vnc_host.len() > 253 {
             return Err(ConfigError::InvalidValue("VRC_VNC_HOST"));
         }
@@ -383,18 +384,29 @@ impl fmt::Display for ConfigError {
 
 impl Error for ConfigError {}
 
+/// Environment lookup failure that carries no environment value bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvironmentReadError {
+    /// The variable is present but cannot be represented as Unicode.
+    NotUnicode,
+}
+
 /// Read-only environment abstraction used by configuration loading.
 pub trait EnvironmentSource {
-    /// Returns one Unicode environment value when present.
-    fn get(&self, name: &str) -> Option<String>;
+    /// Distinguishes an absent value from a present non-Unicode value.
+    fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError>;
 }
 
 /// Current process environment source.
 pub struct ProcessEnvironment;
 
 impl EnvironmentSource for ProcessEnvironment {
-    fn get(&self, name: &str) -> Option<String> {
-        env::var(name).ok()
+    fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
+        match env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(env::VarError::NotPresent) => Ok(None),
+            Err(env::VarError::NotUnicode(_)) => Err(EnvironmentReadError::NotUnicode),
+        }
     }
 }
 
@@ -521,8 +533,21 @@ fn validate_secret_permissions(_path: &Path, _metadata: &fs::Metadata) -> Result
     Ok(())
 }
 
-fn value_or<E: EnvironmentSource>(environment: &E, name: &str, default: &str) -> String {
-    environment.get(name).unwrap_or_else(|| default.to_owned())
+fn environment_value<E: EnvironmentSource>(
+    environment: &E,
+    name: &'static str,
+) -> Result<Option<String>, ConfigError> {
+    environment
+        .get(name)
+        .map_err(|EnvironmentReadError::NotUnicode| ConfigError::InvalidValue(name))
+}
+
+fn value_or<E: EnvironmentSource>(
+    environment: &E,
+    name: &'static str,
+    default: &str,
+) -> Result<String, ConfigError> {
+    Ok(environment_value(environment, name)?.unwrap_or_else(|| default.to_owned()))
 }
 
 fn parse_u16<E: EnvironmentSource>(
@@ -530,7 +555,7 @@ fn parse_u16<E: EnvironmentSource>(
     name: &'static str,
     default: u16,
 ) -> Result<u16, ConfigError> {
-    match environment.get(name) {
+    match environment_value(environment, name)? {
         Some(value) => value
             .parse::<u16>()
             .map_err(|_| ConfigError::InvalidValue(name)),
@@ -543,7 +568,7 @@ fn parse_duration_ms<E: EnvironmentSource>(
     name: &'static str,
     default: u64,
 ) -> Result<Duration, ConfigError> {
-    let milliseconds = match environment.get(name) {
+    let milliseconds = match environment_value(environment, name)? {
         Some(value) => value
             .parse::<u64>()
             .map_err(|_| ConfigError::InvalidValue(name))?,
@@ -562,7 +587,7 @@ fn parse_bounded_usize<E: EnvironmentSource>(
     minimum: usize,
     maximum: usize,
 ) -> Result<usize, ConfigError> {
-    let value = match environment.get(name) {
+    let value = match environment_value(environment, name)? {
         Some(value) => value
             .parse::<usize>()
             .map_err(|_| ConfigError::InvalidValue(name))?,
@@ -586,12 +611,12 @@ fn validate_process_instance(value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn default_process_instance() -> String {
+fn default_process_instance() -> Result<String, ConfigError> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .map_err(|_| ConfigError::InvalidValue("VRC_PROCESS_INSTANCE"))?
         .as_nanos();
-    format!("p{}-{nanos:x}", std::process::id())
+    Ok(format!("p{}-{nanos:x}", std::process::id()))
 }
 
 #[cfg(test)]
@@ -605,8 +630,22 @@ mod tests {
     struct MapEnvironment(HashMap<String, String>);
 
     impl EnvironmentSource for MapEnvironment {
-        fn get(&self, name: &str) -> Option<String> {
-            self.0.get(name).cloned()
+        fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
+            Ok(self.0.get(name).cloned())
+        }
+    }
+
+    struct NonUnicodeEnvironment {
+        rejected_name: &'static str,
+    }
+
+    impl EnvironmentSource for NonUnicodeEnvironment {
+        fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
+            if name == self.rejected_name {
+                Err(EnvironmentReadError::NotUnicode)
+            } else {
+                Ok(None)
+            }
         }
     }
 
@@ -696,6 +735,50 @@ mod tests {
         assert_eq!(config.websocket_ping_interval, Duration::from_secs(1));
         assert_eq!(config.websocket_idle_timeout, Duration::from_secs(3));
         assert_eq!(config.process_instance.as_ref(), "test-instance");
+    }
+
+    #[test]
+    fn non_unicode_controller_environment_values_fail_closed() {
+        for name in [
+            "VRC_LISTEN_ADDR",
+            "VRC_API_TOKEN_FILE",
+            "VRC_VNC_PASSWORD_FILE",
+            "VRC_PROCESS_INSTANCE",
+            "VRC_MAX_JSON_BYTES",
+            "VRC_COMMAND_ACK_TIMEOUT_MS",
+            "VRC_SHUTDOWN_TIMEOUT_MS",
+            "VRC_SCREENSHOT_MAX_CONCURRENT",
+            "VRC_SCREENSHOT_TIMEOUT_MS",
+            "VRC_WEBSOCKET_EVENT_CAPACITY",
+            "VRC_WEBSOCKET_MAX_CLIENTS",
+            "VRC_WEBSOCKET_PING_INTERVAL_MS",
+            "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+            "VRC_VNC_HOST",
+            "VRC_VNC_PORT",
+            "VRC_VNC_CONNECT_TIMEOUT_MS",
+            "VRC_VNC_READ_TIMEOUT_MS",
+            "VRC_COMMAND_CAPACITY",
+            "VRC_EVENT_CAPACITY",
+            "VRC_MAX_FRAMEBUFFER_BYTES",
+            "VRC_POLL_INTERVAL_MS",
+            "VRC_STARTUP_TIMEOUT_MS",
+            "VRC_RECONNECT_MIN_MS",
+            "VRC_RECONNECT_MAX_MS",
+            "VRC_RECONNECT_JITTER_PER_MILLE",
+            "VRC_STABLE_CONNECTION_RESET_MS",
+            "VRC_MANUAL_RECONNECT_INTERVAL_MS",
+            "VRC_STALL_PROBE_AFTER_MS",
+            "VRC_STALL_CONFIRM_AFTER_MS",
+        ] {
+            let error = ControllerConfig::load_from(
+                &NonUnicodeEnvironment {
+                    rejected_name: name,
+                },
+                &secrets(),
+            )
+            .expect_err("present non-Unicode environment value must fail");
+            assert!(matches!(error, ConfigError::InvalidValue(value) if value == name));
+        }
     }
 
     #[test]
