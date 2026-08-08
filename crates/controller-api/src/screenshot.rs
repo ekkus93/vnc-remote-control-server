@@ -128,7 +128,7 @@ impl PermitPool {
     }
 
     fn try_acquire(self: &Arc<Self>) -> Option<EncodePermit> {
-        let mut available = lock_unpoisoned(&self.available);
+        let mut available = lock_authoritative(&self.available);
         if *available == 0 {
             return None;
         }
@@ -145,7 +145,7 @@ struct EncodePermit {
 
 impl Drop for EncodePermit {
     fn drop(&mut self) {
-        let mut available = lock_unpoisoned(&self.pool.available);
+        let mut available = lock_authoritative(&self.pool.available);
         if *available < self.pool.maximum {
             *available += 1;
         }
@@ -289,16 +289,25 @@ fn encode_png(snapshot: &FramebufferSnapshot) -> Result<Vec<u8>, ScreenshotError
     Ok(output)
 }
 
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+/// Screenshot permit accounting is an authoritative capacity invariant. If a
+/// holder panics while mutating it, continuing from the poisoned value could
+/// over-admit encoders. Emit a fixed diagnostic and unwind instead of silently
+/// recovering the potentially half-mutated counter.
+fn lock_authoritative<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            tracing::error!("screenshot_permit_mutex_poisoned");
+            panic!("screenshot permit state poisoned");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Instant;
 
@@ -399,6 +408,20 @@ mod tests {
             service.capture(None),
             Ok(ScreenshotOutcome::Png { .. })
         ));
+    }
+
+    #[test]
+    fn poisoned_permit_state_does_not_resume_capacity_accounting() {
+        let pool = PermitPool::new(1).expect("pool");
+        let poisoned = Arc::clone(&pool);
+        let join = thread::spawn(move || {
+            let _guard = poisoned.available.lock().expect("initial lock is healthy");
+            panic!("test-only permit poison");
+        });
+        assert!(join.join().is_err());
+
+        let result = catch_unwind(AssertUnwindSafe(|| pool.try_acquire()));
+        assert!(result.is_err());
     }
 
     #[test]
