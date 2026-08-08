@@ -22,6 +22,8 @@ pub(super) struct LoopState<'a, S> {
     pub(super) framebuffer: FramebufferStore,
     pub(super) clipboard: &'a Arc<Mutex<Option<ClipboardSnapshot>>>,
     pub(super) event_sequence: u64,
+    pub(super) event_terminal_failure: bool,
+    pub(super) shutdown_cleanup: bool,
     pub(super) session: Option<S>,
     pub(super) last_native_revision: Option<u64>,
     pub(super) last_native_clipboard_revision: Option<u64>,
@@ -37,6 +39,14 @@ pub(super) struct LoopState<'a, S> {
 }
 
 impl<S: WorkerSession> LoopState<'_, S> {
+    pub(super) fn event_terminal_failure(&self) -> bool {
+        self.event_terminal_failure
+    }
+
+    pub(super) fn begin_shutdown_cleanup(&mut self) {
+        self.shutdown_cleanup = true;
+    }
+
     pub(super) fn transition(&mut self, next: ConnectionState) -> Result<(), DesktopError> {
         let previous = lock_unpoisoned(self.snapshot).state;
         if !previous.can_transition_to(next) {
@@ -45,15 +55,25 @@ impl<S: WorkerSession> LoopState<'_, S> {
         }
         lock_unpoisoned(self.snapshot).state = next;
         tracing::info!(from = ?previous, to = ?next, "worker_state_transition");
-        self.publish(DesktopEventKind::ConnectionState { state: next });
-        Ok(())
+        self.publish(DesktopEventKind::ConnectionState { state: next })
     }
 
-    pub(super) fn publish(&mut self, kind: DesktopEventKind) {
+    pub(super) fn publish(&mut self, kind: DesktopEventKind) -> Result<(), DesktopError> {
+        if self.event_terminal_failure {
+            return if self.shutdown_cleanup {
+                Ok(())
+            } else {
+                Err(DesktopError::WorkerUnavailable)
+            };
+        }
         let Some(sequence) = self.event_sequence.checked_add(1) else {
-            tracing::error!("worker_event_sequence_exhausted");
+            if self.shutdown_cleanup {
+                return Ok(());
+            }
+            self.event_terminal_failure = true;
             lock_unpoisoned(self.snapshot).fatal_exit = true;
-            return;
+            tracing::error!("worker_event_sequence_exhausted");
+            return Err(DesktopError::WorkerUnavailable);
         };
         self.event_sequence = sequence;
         let event = WorkerEvent {
@@ -62,13 +82,20 @@ impl<S: WorkerSession> LoopState<'_, S> {
             kind,
         };
         match self.events.try_send(event) {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
                 let mut current = lock_unpoisoned(self.snapshot);
                 current.dropped_events = current.dropped_events.saturating_add(1);
                 tracing::warn!("worker_event_queue_saturated");
+                Ok(())
             }
-            Err(TrySendError::Disconnected(_)) => {}
+            Err(TrySendError::Disconnected(_)) if self.shutdown_cleanup => Ok(()),
+            Err(TrySendError::Disconnected(_)) => {
+                self.event_terminal_failure = true;
+                lock_unpoisoned(self.snapshot).fatal_exit = true;
+                tracing::error!("worker_event_receiver_disconnected");
+                Err(DesktopError::WorkerUnavailable)
+            }
         }
     }
 
@@ -109,7 +136,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
             let previous_revision = snapshot.framebuffer_revision.replace(revision);
             drop(snapshot);
             if previous_revision != Some(revision) {
-                self.publish(DesktopEventKind::FramebufferRevision { revision });
+                self.publish(DesktopEventKind::FramebufferRevision { revision })?;
             }
         }
 
@@ -147,7 +174,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 self.clipboard_decode_failed = false;
                 if validate_clipboard(&native.text).is_err() {
                     self.record_failure(WorkerFailureKind::Protocol);
-                    self.publish(DesktopEventKind::ProtocolError);
+                    self.publish(DesktopEventKind::ProtocolError)?;
                     return Ok(());
                 }
                 let revision = self
@@ -160,7 +187,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
                     revision,
                     updated_at: SystemTime::now(),
                 });
-                self.publish(DesktopEventKind::ClipboardRevision { revision });
+                self.publish(DesktopEventKind::ClipboardRevision { revision })?;
                 Ok(())
             }
             Err(NativeError::ClipboardUnavailable) => Ok(()),
@@ -168,7 +195,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 if !self.clipboard_decode_failed {
                     self.clipboard_decode_failed = true;
                     self.record_failure(WorkerFailureKind::Protocol);
-                    self.publish(DesktopEventKind::ProtocolError);
+                    self.publish(DesktopEventKind::ProtocolError)?;
                 }
                 Ok(())
             }
@@ -200,7 +227,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
         }
     }
 
-    pub(super) fn invalidate(&mut self) {
+    pub(super) fn invalidate(&mut self) -> Result<(), DesktopError> {
         self.release_input();
         self.session = None;
         self.abandon_input();
@@ -212,35 +239,36 @@ impl<S: WorkerSession> LoopState<'_, S> {
             .framebuffer_revision
             .take()
             .is_some();
-        if store_changed || had_frame {
-            self.publish(DesktopEventKind::FramebufferInvalidated);
-        }
+        let publication = if store_changed || had_frame {
+            self.publish(DesktopEventKind::FramebufferInvalidated)
+        } else {
+            Ok(())
+        };
         self.connected_since = None;
         self.probe_sent = None;
+        publication
     }
 
-    pub(super) fn schedule_reconnect(&mut self) {
+    pub(super) fn schedule_reconnect(&mut self) -> Result<(), DesktopError> {
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
         lock_unpoisoned(self.snapshot).reconnect_attempts = self.reconnect_attempt;
         let current = lock_unpoisoned(self.snapshot).state;
-        let transition_result = match current {
+        match current {
             ConnectionState::Connecting
             | ConnectionState::Connected
             | ConnectionState::Degraded
-            | ConnectionState::Reconnecting => self
-                .transition(ConnectionState::Disconnected)
-                .and_then(|()| self.transition(ConnectionState::Reconnecting)),
+            | ConnectionState::Reconnecting => {
+                self.transition(ConnectionState::Disconnected)?;
+                self.transition(ConnectionState::Reconnecting)?;
+            }
             ConnectionState::Disconnected | ConnectionState::AuthenticationFailed => {
-                self.transition(ConnectionState::Reconnecting)
+                self.transition(ConnectionState::Reconnecting)?;
             }
             ConnectionState::Starting | ConnectionState::Stopped => {
                 tracing::error!(state = ?current, "worker_reconnect_state_invalid");
-                Err(DesktopError::Protocol)
+                self.next_connect = None;
+                return Err(DesktopError::Protocol);
             }
-        };
-        if transition_result.is_err() {
-            self.next_connect = None;
-            return;
         }
         let delay = reconnect_delay(self.settings, self.reconnect_attempt);
         tracing::info!(
@@ -249,6 +277,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
             "worker_reconnect_scheduled"
         );
         self.next_connect = Some(Instant::now() + delay);
+        Ok(())
     }
 
     pub(super) fn manual_reconnect(&mut self) -> Result<(), DesktopError> {
@@ -266,7 +295,7 @@ impl<S: WorkerSession> LoopState<'_, S> {
             return Err(DesktopError::WorkerUnavailable);
         }
         self.last_manual_reconnect = Some(now);
-        self.invalidate();
+        self.invalidate()?;
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
         lock_unpoisoned(self.snapshot).reconnect_attempts = self.reconnect_attempt;
         self.transition(ConnectionState::Reconnecting)?;
@@ -390,12 +419,16 @@ impl<S: WorkerSession> LoopState<'_, S> {
                     .as_ref()
                     .ok_or(DesktopError::WorkerUnavailable)?
                     .display_info()?;
-                if self.connected_message(display).is_err() {
-                    self.record_failure(WorkerFailureKind::Protocol);
-                    self.invalidate();
-                    self.schedule_reconnect();
+                match self.connected_message(display) {
+                    Ok(()) => Ok(()),
+                    Err(error) if self.event_terminal_failure => Err(error),
+                    Err(_) => {
+                        self.record_failure(WorkerFailureKind::Protocol);
+                        self.invalidate()?;
+                        self.schedule_reconnect()?;
+                        Ok(())
+                    }
                 }
-                Ok(())
             }
             Ok(PollOutcome::TimedOut) => {
                 let now = Instant::now();
@@ -422,15 +455,15 @@ impl<S: WorkerSession> LoopState<'_, S> {
                             return Err(DesktopError::Protocol);
                         }
                     }
-                    self.invalidate();
-                    self.schedule_reconnect();
+                    self.invalidate()?;
+                    self.schedule_reconnect()?;
                 }
                 Ok(())
             }
             Err(error) => {
                 self.record_failure(classify_native_error(&error));
-                self.invalidate();
-                self.schedule_reconnect();
+                self.invalidate()?;
+                self.schedule_reconnect()?;
                 Ok(())
             }
         }
