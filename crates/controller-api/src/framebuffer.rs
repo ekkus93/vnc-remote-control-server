@@ -225,7 +225,7 @@ impl FramebufferStore {
 
     /// Returns a coherent metadata snapshot.
     pub fn metadata(&self) -> FramebufferMetadata {
-        let current = read_unpoisoned(&self.inner);
+        let current = read_authoritative(&self.inner);
         FramebufferMetadata {
             status: current.status,
             width: current.width,
@@ -239,7 +239,7 @@ impl FramebufferStore {
     /// availability.
     pub fn begin_incomplete(&self, width: u32, height: u32) -> Result<(), FramebufferError> {
         let length = self.validate_dimensions(width, height)?;
-        let mut current = write_unpoisoned(&self.inner);
+        let mut current = write_authoritative(&self.inner);
         current.status = FramebufferStatus::Incomplete;
         current.width = Some(width);
         current.height = Some(height);
@@ -283,7 +283,7 @@ impl FramebufferStore {
         if rgba.len() != length {
             return Err(FramebufferError::InvalidBufferLength);
         }
-        let mut current = write_unpoisoned(&self.inner);
+        let mut current = write_authoritative(&self.inner);
         if current.status == FramebufferStatus::Current
             && current.width == Some(width)
             && current.height == Some(height)
@@ -316,7 +316,7 @@ impl FramebufferStore {
         if updates.is_empty() {
             return Err(FramebufferError::EmptyUpdate);
         }
-        let mut current = write_unpoisoned(&self.inner);
+        let mut current = write_authoritative(&self.inner);
         let width = current
             .width
             .ok_or(FramebufferError::DimensionsUnavailable)?;
@@ -367,7 +367,7 @@ impl FramebufferStore {
 
     /// Returns a current complete immutable snapshot.
     pub fn current_snapshot(&self) -> Result<FramebufferSnapshot, FramebufferError> {
-        let current = read_unpoisoned(&self.inner);
+        let current = read_authoritative(&self.inner);
         match current.status {
             FramebufferStatus::Current => {
                 let width = current
@@ -397,7 +397,7 @@ impl FramebufferStore {
     /// The last revision and pixels remain available only through metadata and
     /// internal diagnostics; `current_snapshot` fails closed.
     pub fn invalidate(&self) -> bool {
-        let mut current = write_unpoisoned(&self.inner);
+        let mut current = write_authoritative(&self.inner);
         let changed = matches!(
             current.status,
             FramebufferStatus::Current | FramebufferStatus::Incomplete
@@ -411,7 +411,7 @@ impl FramebufferStore {
     /// Removes dimensions and retained pixels without resetting the monotonic
     /// revision sequence.
     pub fn clear(&self) {
-        let mut current = write_unpoisoned(&self.inner);
+        let mut current = write_authoritative(&self.inner);
         current.status = FramebufferStatus::Unavailable;
         current.width = None;
         current.height = None;
@@ -529,18 +529,33 @@ fn next_revision(current: u64) -> Result<u64, FramebufferError> {
         .ok_or(FramebufferError::RevisionOverflow)
 }
 
-fn read_unpoisoned<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+/// The lock protects the authoritative status/dimensions/revision/pixel tuple.
+/// Poison means a writer may have panicked between those coordinated updates;
+/// do not expose that state as a coherent frame.
+fn read_authoritative<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    match lock.read() {
+        Ok(guard) => guard,
+        Err(_) => {
+            tracing::error!("framebuffer_authoritative_rwlock_poisoned");
+            panic!("framebuffer authoritative state poisoned");
+        }
+    }
 }
 
-fn write_unpoisoned<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+fn write_authoritative<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    match lock.write() {
+        Ok(guard) => guard,
+        Err(_) => {
+            tracing::error!("framebuffer_authoritative_rwlock_poisoned");
+            panic!("framebuffer authoritative state poisoned");
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Barrier;
     use std::thread;
 
@@ -777,6 +792,20 @@ mod tests {
         assert_eq!(store.replace_rgba(1, 1, vec![1, 1, 1, 255]), Ok(1));
         assert!(store.invalidate());
         assert_eq!(store.replace_rgba(1, 1, vec![2, 2, 2, 255]), Ok(2));
+    }
+
+    #[test]
+    fn poisoned_framebuffer_state_does_not_resume_normal_service() {
+        let store = FramebufferStore::default();
+        let poisoned = store.clone();
+        let join = thread::spawn(move || {
+            let _guard = poisoned.inner.write().expect("initial write lock is healthy");
+            panic!("test-only framebuffer poison");
+        });
+        assert!(join.join().is_err());
+
+        let result = catch_unwind(AssertUnwindSafe(|| store.metadata()));
+        assert!(result.is_err());
     }
 
     #[test]
