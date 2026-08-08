@@ -32,7 +32,13 @@ pub(super) fn reconnect_delay(settings: &WorkerSettings, attempt: u32) -> Durati
         u128::from(attempt.wrapping_mul(1_103_515_245).wrapping_add(12_345)) % (jitter_bound + 1)
     };
     let delay_ms = base_ms.saturating_add(jitter).min(maximum_ms);
-    Duration::from_millis(u64::try_from(delay_ms).unwrap_or(u64::MAX))
+    match u64::try_from(delay_ms) {
+        Ok(milliseconds) => Duration::from_millis(milliseconds),
+        Err(_) => {
+            tracing::error!("worker_reconnect_delay_millisecond_conversion_overflow");
+            settings.reconnect_max_delay
+        }
+    }
 }
 
 pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
