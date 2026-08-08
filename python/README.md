@@ -197,6 +197,6 @@ except ApiError as error:
     print(error.status_code, error.code, error.request_id)
 ```
 
-Transport failures raise `TransportError`. Malformed success responses raise `ProtocolError`. Calling WebSocket events without the optional dependency raises `OptionalDependencyError`.
+Transport failures raise `TransportError`. Every typed response is strictly validated: a malformed success response (wrong field type, unknown enum value, missing/unexpected field) raises `ProtocolError` instead of being coerced into an apparently valid value, and a non-empty structured error body that fails to parse as the documented error envelope also raises `ProtocolError` rather than being silently reported as a generic `ApiError`. Calling WebSocket events without the optional dependency raises `OptionalDependencyError`.
 
 The server remains authoritative for operation limits and validation. The client does not silently clamp coordinates, scroll deltas, text, clipboard content, or other values.

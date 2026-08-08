@@ -528,6 +528,7 @@ Do not serve a cached pre-disconnect screenshot as current.
 ### Commands return `503` or `504`
 
 - `command_queue_full`: clients are producing commands faster than the single worker can execute them;
+- `command_id_exhausted`: the process-local command identifier sequence is permanently exhausted; the controller can no longer safely acknowledge new commands and must be recreated (this is distinct from, and does not recover like, `command_queue_full` or `worker_unavailable`);
 - `worker_unavailable`: shutdown or worker failure is active;
 - `command_timeout`: the bounded acknowledgement deadline elapsed;
 - `desktop_operation_failed`: the native VNC operation failed.

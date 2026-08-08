@@ -72,6 +72,7 @@ EXPECTED_ERROR_CODES = {
     "invalid_clipboard",
     "scroll_too_large",
     "command_queue_full",
+    "command_id_exhausted",
     "worker_unavailable",
     "clipboard_unavailable",
     "command_timeout",
