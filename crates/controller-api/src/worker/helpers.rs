@@ -53,8 +53,40 @@ pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
     }
 }
 
+/// Locks authoritative worker state. Poison means another thread panicked while
+/// mutating the protected value, so normal service cannot safely resume from it.
+/// Emit a fixed payload-free invariant diagnostic and unwind this service path;
+/// the poisoned mutex remains poisoned, making later normal accesses fail closed.
 pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            tracing::error!("worker_authoritative_mutex_poisoned");
+            panic!("worker authoritative mutex poisoned");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::thread;
+
+    #[test]
+    fn poisoned_worker_mutex_does_not_resume_normal_service() {
+        let value = Arc::new(Mutex::new(0_u8));
+        let poisoned = Arc::clone(&value);
+        let join = thread::spawn(move || {
+            let _guard = poisoned.lock().expect("initial lock is healthy");
+            panic!("test-only poison");
+        });
+        assert!(join.join().is_err());
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = lock_unpoisoned(&value);
+        }));
+        assert!(result.is_err());
+    }
 }
