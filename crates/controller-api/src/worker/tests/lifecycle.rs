@@ -4,7 +4,7 @@ use crate::input::InputController;
 use crate::worker::loop_state::LoopState;
 use crate::worker::snapshot::{WorkerEvent, WorkerSnapshot};
 use remote_desktop_core::{
-    ClipboardSnapshot, DesktopEventKind, KeyboardKey, MouseButton, WorkerCommand,
+    ClipboardSnapshot, DesktopError, DesktopEventKind, KeyboardKey, MouseButton, WorkerCommand,
 };
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::time::{Duration, Instant, SystemTime};
@@ -348,7 +348,10 @@ fn command_id_exhaustion_is_shared_terminal_and_never_enqueues() {
     assert!(client.command_id_exhausted());
     assert!(clone.command_id_exhausted());
     assert!(client.snapshot().fatal_exit);
-    assert_eq!(logs.matches("worker_command_id_sequence_exhausted").count(), 1);
+    assert_eq!(
+        logs.matches("worker_command_id_sequence_exhausted").count(),
+        1
+    );
     assert_eq!(client.command_submissions_in_flight(), 0);
 
     worker

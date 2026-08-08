@@ -979,7 +979,10 @@ mod tests {
             .await
             .expect("established client closes promptly without waiting for heartbeat");
             assert_eq!(close.code, 1011);
-            assert_eq!(close.reason.to_string(), EVENT_TIMESTAMP_INVALID_CLOSE_REASON);
+            assert_eq!(
+                close.reason.to_string(),
+                EVENT_TIMESTAMP_INVALID_CLOSE_REASON
+            );
         };
 
         tokio::join!(server, client);

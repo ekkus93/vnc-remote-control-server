@@ -1,9 +1,7 @@
 use super::*;
 use crate::framebuffer::{FramebufferError, FramebufferStore};
 use crate::input::InputController;
-use remote_desktop_core::{
-    ClipboardSnapshot, Coordinate, DesktopError, KeyboardKey, WorkerCommand,
-};
+use remote_desktop_core::{ClipboardSnapshot, Coordinate, DesktopError, KeyboardKey};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{SyncSender, sync_channel};
@@ -53,7 +51,10 @@ fn protocol_initialization_failure_reconnects_as_protocol_failure() {
 
     wait_for_state(&client, ConnectionState::Connected);
     assert!(calls.load(Ordering::SeqCst) >= 2);
-    assert_ne!(client.snapshot().state, ConnectionState::AuthenticationFailed);
+    assert_ne!(
+        client.snapshot().state,
+        ConnectionState::AuthenticationFailed
+    );
     assert!(!client.snapshot().fatal_exit);
 
     worker

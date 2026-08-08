@@ -799,7 +799,10 @@ mod tests {
         let store = FramebufferStore::default();
         let poisoned = store.clone();
         let join = thread::spawn(move || {
-            let _guard = poisoned.inner.write().expect("initial write lock is healthy");
+            let _guard = poisoned
+                .inner
+                .write()
+                .expect("initial write lock is healthy");
             panic!("test-only framebuffer poison");
         });
         assert!(join.join().is_err());

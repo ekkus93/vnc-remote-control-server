@@ -30,6 +30,7 @@ fn in_flight_depth_can_exceed_capacity_and_still_converges_to_zero() {
         framebuffer: FramebufferStore::default(),
         clipboard: Arc::new(Mutex::new(None)),
         next_command_id: Arc::new(AtomicU64::new(1)),
+        command_id_exhausted: Arc::new(AtomicBool::new(false)),
         command_submissions_in_flight: Arc::clone(&submissions),
         command_queue_capacity: 1,
         pending_overload: Arc::new(AtomicU64::new(0)),

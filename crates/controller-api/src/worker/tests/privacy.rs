@@ -169,7 +169,10 @@ fn protocol_initialization_failure_logs_exclude_vnc_password_sentinel() {
             if snapshot.last_failure == Some(WorkerFailureKind::Protocol) {
                 break;
             }
-            assert!(Instant::now() < deadline, "protocol failure was not recorded");
+            assert!(
+                Instant::now() < deadline,
+                "protocol failure was not recorded"
+            );
             thread::yield_now();
         }
         let failure_snapshot = client.snapshot();

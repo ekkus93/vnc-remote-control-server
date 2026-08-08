@@ -13,9 +13,7 @@ use crate::api_contract::{
     ChordRequest, ClipboardRequest, KeyRequest, PointerButtonRequest, PointerClickRequest,
     PointerDoubleClickRequest, PointerMoveRequest, PointerScrollRequest, TextRequest,
 };
-use crate::events::{
-    EventSequenceError, EventSubscription, ServerEvent, WebSocketCapacityError,
-};
+use crate::events::{EventSequenceError, EventSubscription, ServerEvent, WebSocketCapacityError};
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::ScreenshotOutcome;
 use axum::Json;
@@ -111,8 +109,8 @@ pub(super) async fn status(
     Extension(request_id): Extension<RequestId>,
 ) -> Result<Json<StatusResponse>, ApiError> {
     let snapshot = state.backend.snapshot();
-    let started_at_unix_ms =
-        unix_milliseconds(snapshot.started_at).map_err(|_| ApiError::internal(request_id.clone()))?;
+    let started_at_unix_ms = unix_milliseconds(snapshot.started_at)
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
     let connected_at_unix_ms = snapshot
         .connected_at
         .map(unix_milliseconds)

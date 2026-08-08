@@ -25,9 +25,7 @@ fn access_log_redacts_authorization_and_query_values() {
 
 #[test]
 fn missing_request_id_is_an_explicit_invariant_not_a_fabricated_normal_id() {
-    let bare_request = request("/v1/status")
-        .body(Body::empty())
-        .expect("request");
+    let bare_request = request("/v1/status").body(Body::empty()).expect("request");
     assert!(request_id(&bare_request).is_none());
     assert!(AccessLogContext::from_request(&bare_request).is_none());
     assert!(!valid_request_id(REQUEST_ID_INVARIANT_SENTINEL));

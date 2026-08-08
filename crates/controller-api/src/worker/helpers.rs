@@ -50,7 +50,9 @@ pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
         | NativeError::BufferTooSmall
         | NativeError::ClipboardUnavailable
         | NativeError::ClipboardNotUtf8 => WorkerFailureKind::Protocol,
-        NativeError::AllocationFailed | NativeError::NativeFailure { .. } => WorkerFailureKind::Native,
+        NativeError::AllocationFailed | NativeError::NativeFailure { .. } => {
+            WorkerFailureKind::Native
+        }
     }
 }
 

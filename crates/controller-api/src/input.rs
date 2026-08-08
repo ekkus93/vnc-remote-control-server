@@ -815,7 +815,10 @@ mod tests {
 
         sink.fail_on_calls.clear();
         assert!(controller.release_all(&mut sink).is_complete());
-        assert_eq!(sink.events, vec![Event::Key(key, true), Event::Key(key, false)]);
+        assert_eq!(
+            sink.events,
+            vec![Event::Key(key, true), Event::Key(key, false)]
+        );
         assert!(controller.pressed_keys.is_empty());
     }
 

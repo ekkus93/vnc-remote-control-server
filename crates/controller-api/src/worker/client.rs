@@ -112,17 +112,18 @@ impl WorkerClient {
         if self.command_id_exhausted() {
             return Err(DesktopError::CommandIdExhausted);
         }
-        let id = match self
-            .next_command_id
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                value.checked_add(1)
-            }) {
-            Ok(id) => id,
-            Err(_) => {
-                self.mark_command_id_exhausted();
-                return Err(DesktopError::CommandIdExhausted);
-            }
-        };
+        let id =
+            match self
+                .next_command_id
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                    value.checked_add(1)
+                }) {
+                Ok(id) => id,
+                Err(_) => {
+                    self.mark_command_id_exhausted();
+                    return Err(DesktopError::CommandIdExhausted);
+                }
+            };
         let (completion_tx, completion_rx) = sync_channel(1);
         let envelope = CommandEnvelope::new(
             command,
