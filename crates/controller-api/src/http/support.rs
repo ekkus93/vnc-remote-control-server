@@ -144,6 +144,12 @@ pub(super) fn domain_error(error: DesktopError, request_id: RequestId) -> ApiErr
             "command capacity is exhausted",
             request_id,
         ),
+        DesktopError::CommandIdExhausted => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "command_id_exhausted",
+            "command identifier sequence is exhausted",
+            request_id,
+        ),
         DesktopError::WorkerUnavailable => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "worker_unavailable",
