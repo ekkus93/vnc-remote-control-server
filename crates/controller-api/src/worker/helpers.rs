@@ -39,17 +39,12 @@ pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
     match error {
         NativeError::InvalidArgument | NativeError::EmbeddedNul => WorkerFailureKind::Configuration,
         NativeError::Disconnected => WorkerFailureKind::Transport,
-        NativeError::FramebufferUnavailable
+        NativeError::ProtocolInitializationFailed
+        | NativeError::FramebufferUnavailable
         | NativeError::BufferTooSmall
         | NativeError::ClipboardUnavailable
         | NativeError::ClipboardNotUtf8 => WorkerFailureKind::Protocol,
-        NativeError::AllocationFailed => WorkerFailureKind::Native,
-        NativeError::NativeFailure { message }
-            if message.contains("protocol initialization failed") =>
-        {
-            WorkerFailureKind::Authentication
-        }
-        NativeError::NativeFailure { .. } => WorkerFailureKind::Native,
+        NativeError::AllocationFailed | NativeError::NativeFailure { .. } => WorkerFailureKind::Native,
     }
 }
 
@@ -73,6 +68,20 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::thread;
+
+    #[test]
+    fn protocol_initialization_failure_is_protocol_regardless_of_message_text() {
+        assert_eq!(
+            classify_native_error(&NativeError::ProtocolInitializationFailed),
+            WorkerFailureKind::Protocol
+        );
+        assert_eq!(
+            classify_native_error(&NativeError::NativeFailure {
+                message: "VNC protocol initialization failed".to_owned(),
+            }),
+            WorkerFailureKind::Native
+        );
+    }
 
     #[test]
     fn poisoned_worker_mutex_does_not_resume_normal_service() {
