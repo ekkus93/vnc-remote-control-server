@@ -23,6 +23,8 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 const EVENT_BRIDGE_POLL_INTERVAL_MS: u64 = 50;
 const BASE_PROCESS_SHUTDOWN_MINIMUM_MS: u64 = 500;
 const PROCESS_SHUTDOWN_POLL_MULTIPLIER: u64 = 8;
+const EVENT_SEQUENCE_EXHAUSTED_CLOSE_REASON: &str = "event sequence exhausted";
+const EVENT_TIMESTAMP_INVALID_CLOSE_REASON: &str = "event timestamp invalid";
 
 /// Poll interval used by the dependency-free bridge stop loop.
 pub(crate) const EVENT_BRIDGE_POLL_INTERVAL: Duration =
@@ -54,6 +56,8 @@ pub struct EventHub {
     sequence: Arc<AtomicU64>,
     sequence_exhausted: Arc<AtomicBool>,
     sequence_exhausted_notify: Arc<Notify>,
+    timestamp_invalid: Arc<AtomicBool>,
+    timestamp_invalid_notify: Arc<Notify>,
     clients: Arc<Semaphore>,
     metrics: Metrics,
     ping_interval: Duration,
@@ -162,6 +166,8 @@ impl EventHub {
             sequence: Arc::new(AtomicU64::new(1)),
             sequence_exhausted: Arc::new(AtomicBool::new(false)),
             sequence_exhausted_notify: Arc::new(Notify::new()),
+            timestamp_invalid: Arc::new(AtomicBool::new(false)),
+            timestamp_invalid_notify: Arc::new(Notify::new()),
             clients: Arc::new(Semaphore::new(maximum_clients)),
             metrics,
             ping_interval,
@@ -246,10 +252,28 @@ impl EventHub {
                 send_sequence_exhausted_close(&mut socket).await;
                 break;
             }
+            if self.timestamp_invalid.load(Ordering::Acquire) {
+                send_timestamp_invalid_close(&mut socket).await;
+                break;
+            }
             tokio::select! {
                 _ = self.sequence_exhausted_notify.notified() => {
                     if self.sequence_exhausted.load(Ordering::Acquire) {
                         send_sequence_exhausted_close(&mut socket).await;
+                        break;
+                    }
+                    if self.timestamp_invalid.load(Ordering::Acquire) {
+                        send_timestamp_invalid_close(&mut socket).await;
+                        break;
+                    }
+                }
+                _ = self.timestamp_invalid_notify.notified() => {
+                    if self.sequence_exhausted.load(Ordering::Acquire) {
+                        send_sequence_exhausted_close(&mut socket).await;
+                        break;
+                    }
+                    if self.timestamp_invalid.load(Ordering::Acquire) {
+                        send_timestamp_invalid_close(&mut socket).await;
                         break;
                     }
                 }
@@ -332,7 +356,7 @@ impl EventHub {
             Ok(event) => {
                 let _ = self.sender.send(event);
             }
-            Err(EventSequenceError::Exhausted) => {}
+            Err(EventSequenceError::Exhausted | EventSequenceError::TimestampInvalid) => {}
         }
     }
 
@@ -344,6 +368,16 @@ impl EventHub {
         if self.sequence_exhausted.load(Ordering::Acquire) {
             return Err(EventSequenceError::Exhausted);
         }
+        if self.timestamp_invalid.load(Ordering::Acquire) {
+            return Err(EventSequenceError::TimestampInvalid);
+        }
+        let timestamp_unix_ms = match unix_milliseconds(observed_at) {
+            Ok(timestamp) => timestamp,
+            Err(error) => {
+                self.mark_timestamp_invalid();
+                return Err(error);
+            }
+        };
         let sequence = self
             .sequence
             .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
@@ -361,9 +395,16 @@ impl EventHub {
         };
         Ok(ServerEvent {
             sequence,
-            timestamp_unix_ms: unix_milliseconds(observed_at),
+            timestamp_unix_ms,
             payload,
         })
+    }
+
+    fn mark_timestamp_invalid(&self) {
+        if !self.timestamp_invalid.swap(true, Ordering::AcqRel) {
+            tracing::error!("event_hub_timestamp_invalid");
+            self.timestamp_invalid_notify.notify_waiters();
+        }
     }
 
     #[cfg(test)]
@@ -409,7 +450,16 @@ async fn send_sequence_exhausted_close(socket: &mut EventSocket) {
     let _ = socket
         .send(Message::Close(Some(CloseFrame {
             code: 1011,
-            reason: "event sequence exhausted".into(),
+            reason: EVENT_SEQUENCE_EXHAUSTED_CLOSE_REASON.into(),
+        })))
+        .await;
+}
+
+async fn send_timestamp_invalid_close(socket: &mut EventSocket) {
+    let _ = socket
+        .send(Message::Close(Some(CloseFrame {
+            code: 1011,
+            reason: EVENT_TIMESTAMP_INVALID_CLOSE_REASON.into(),
         })))
         .await;
 }
@@ -474,10 +524,15 @@ impl EventBridge {
         match self.wait_for_exit(timeout) {
             ExitWait::Exited => self.join_bridge(),
             ExitWait::TimedOut => {
-                tracing::warn!(
-                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
-                    "event_bridge_shutdown_timeout"
-                );
+                match u64::try_from(timeout.as_millis()) {
+                    Ok(timeout_ms) => {
+                        tracing::warn!(timeout_ms, "event_bridge_shutdown_timeout");
+                    }
+                    Err(_) => {
+                        tracing::warn!("event_bridge_shutdown_timeout");
+                        tracing::error!("event_bridge_shutdown_timeout_value_overflow");
+                    }
+                }
                 self.detach();
                 Err(EventBridgeError::Timeout)
             }
@@ -530,10 +585,15 @@ impl Drop for EventBridge {
                 }
             }
             ExitWait::TimedOut => {
-                tracing::warn!(
-                    timeout_ms = u64::try_from(self.drop_timeout.as_millis()).unwrap_or(u64::MAX),
-                    "event_bridge_drop_shutdown_timeout"
-                );
+                match u64::try_from(self.drop_timeout.as_millis()) {
+                    Ok(timeout_ms) => {
+                        tracing::warn!(timeout_ms, "event_bridge_drop_shutdown_timeout");
+                    }
+                    Err(_) => {
+                        tracing::warn!("event_bridge_drop_shutdown_timeout");
+                        tracing::error!("event_bridge_drop_timeout_value_overflow");
+                    }
+                }
                 self.detach();
             }
         }
@@ -574,17 +634,20 @@ impl fmt::Display for WebSocketCapacityError {
 
 impl Error for WebSocketCapacityError {}
 
-/// Event sequence allocation failed without wrapping or reusing a sequence.
+/// Event creation failed without fabricating a normal sequence or timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventSequenceError {
     /// The process-local event sequence reached its maximum value.
     Exhausted,
+    /// The event observation time is not representable as Unix milliseconds.
+    TimestampInvalid,
 }
 
 impl fmt::Display for EventSequenceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Exhausted => formatter.write_str("worker event sequence is exhausted"),
+            Self::TimestampInvalid => formatter.write_str("worker event timestamp is invalid"),
         }
     }
 }
@@ -652,12 +715,11 @@ async fn send_event(socket: &mut EventSocket, event: &ServerEvent) -> Result<(),
     socket.send(Message::Text(serialized.into())).await
 }
 
-fn unix_milliseconds(value: SystemTime) -> u64 {
-    let milliseconds = value
+fn unix_milliseconds(value: SystemTime) -> Result<u64, EventSequenceError> {
+    let elapsed = value
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    u64::try_from(milliseconds).unwrap_or(u64::MAX)
+        .map_err(|_| EventSequenceError::TimestampInvalid)?;
+    u64::try_from(elapsed.as_millis()).map_err(|_| EventSequenceError::TimestampInvalid)
 }
 
 const fn connection_state_name(state: ConnectionState) -> &'static str {
@@ -731,6 +793,30 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden));
         }
+    }
+
+    #[test]
+    fn invalid_event_timestamp_is_terminal_and_logged_once() {
+        let hub = EventHub::detached(
+            4,
+            2,
+            Duration::from_secs(1),
+            Duration::from_secs(3),
+            Metrics::default(),
+        );
+        let invalid = UNIX_EPOCH - Duration::from_millis(1);
+        let sequence_before = hub.sequence.load(Ordering::Acquire);
+        let ((first, second), logs) = crate::test_support::capture_logs(|| {
+            (
+                hub.event(invalid, EventPayload::ProtocolError),
+                hub.event(SystemTime::now(), EventPayload::ProtocolError),
+            )
+        });
+        assert!(matches!(first, Err(EventSequenceError::TimestampInvalid)));
+        assert!(matches!(second, Err(EventSequenceError::TimestampInvalid)));
+        assert_eq!(hub.sequence.load(Ordering::Acquire), sequence_before);
+        assert!(hub.timestamp_invalid.load(Ordering::Acquire));
+        assert_eq!(logs.matches("event_hub_timestamp_invalid").count(), 1);
     }
 
     #[test]
@@ -826,7 +912,7 @@ mod tests {
             .expect("established client closes promptly without waiting for heartbeat");
             assert_eq!(close.code, 1011);
             let reason = close.reason.to_string();
-            assert_eq!(reason, "event sequence exhausted");
+            assert_eq!(reason, EVENT_SEQUENCE_EXHAUSTED_CLOSE_REASON);
             for forbidden in [
                 "clipboard",
                 "typed",
@@ -838,6 +924,62 @@ mod tests {
             ] {
                 assert!(!reason.contains(forbidden));
             }
+        };
+
+        tokio::join!(server, client);
+    }
+
+    #[tokio::test]
+    async fn established_client_closes_promptly_when_event_clock_is_invalid() {
+        let hub = EventHub::detached(
+            4,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            Metrics::default(),
+        );
+        let subscription = hub.subscribe().expect("client subscribes");
+        let initial = hub
+            .snapshot_event(&snapshot(), None)
+            .expect("initial snapshot sequence allocates");
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let socket = EventSocket::Test(TestSocket {
+            outbound: outbound_tx,
+            inbound: inbound_rx,
+        });
+        let serving_hub = hub.clone();
+
+        let server = async move {
+            serving_hub
+                .serve_socket(socket, subscription, initial)
+                .await;
+        };
+        let client = async move {
+            let _keep_inbound_open = inbound_tx;
+            let initial_message = time::timeout(Duration::from_millis(100), outbound_rx.recv())
+                .await
+                .expect("initial snapshot is delivered within the bound")
+                .expect("event socket remains open");
+            assert!(matches!(initial_message, Message::Text(_)));
+
+            hub.mark_timestamp_invalid();
+            let close = time::timeout(Duration::from_millis(200), async {
+                loop {
+                    match outbound_rx.recv().await {
+                        Some(Message::Close(frame)) => {
+                            break frame.expect("close frame has detail");
+                        }
+                        Some(Message::Ping(_)) => {}
+                        Some(other) => panic!("unexpected message after clock failure: {other:?}"),
+                        None => panic!("event socket closed without timestamp-invalid close frame"),
+                    }
+                }
+            })
+            .await
+            .expect("established client closes promptly without waiting for heartbeat");
+            assert_eq!(close.code, 1011);
+            assert_eq!(close.reason.to_string(), EVENT_TIMESTAMP_INVALID_CLOSE_REASON);
         };
 
         tokio::join!(server, client);
