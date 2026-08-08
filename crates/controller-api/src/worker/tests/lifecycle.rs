@@ -326,3 +326,32 @@ fn dropped_worker_event_receiver_stops_command_service() {
         .shutdown(Duration::from_secs(1))
         .expect("already-exited worker joins cleanly");
 }
+
+#[test]
+fn command_id_exhaustion_is_shared_terminal_and_never_enqueues() {
+    let worker = DesktopWorker::spawn_with_factory(settings(), || Ok(healthy_session()))
+        .expect("worker spawns");
+    let client = worker.client();
+    let clone = client.clone();
+    wait_for_state(&client, ConnectionState::Connected);
+    client.force_command_sequence_for_test(u64::MAX);
+
+    let ((first, second), logs) = crate::test_support::capture_logs(|| {
+        (
+            client.submit(WorkerCommand::RequestFullRefresh),
+            clone.submit(WorkerCommand::RequestFullRefresh),
+        )
+    });
+
+    assert_eq!(first.err(), Some(DesktopError::CommandIdExhausted));
+    assert_eq!(second.err(), Some(DesktopError::CommandIdExhausted));
+    assert!(client.command_id_exhausted());
+    assert!(clone.command_id_exhausted());
+    assert!(client.snapshot().fatal_exit);
+    assert_eq!(logs.matches("worker_command_id_sequence_exhausted").count(), 1);
+    assert_eq!(client.command_submissions_in_flight(), 0);
+
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("out-of-band shutdown remains available after ID exhaustion");
+}
