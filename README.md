@@ -113,7 +113,7 @@ Open the hosted API reference in a browser:
 - ReDoc: `http://127.0.0.1:8080/redoc`
 - Raw OpenAPI 3.1 JSON: `http://127.0.0.1:8080/openapi.json`
 
-The documentation routes are public, but every `/v1/*` operation invoked from Swagger UI still requires the normal bearer token. Swagger UI does not persist authorization across reloads and has its external validator disabled. The UI JavaScript/CSS is loaded from exact-version CDN URLs (`swagger-ui-dist` 5.32.11 and ReDoc 2.5.3); the API specification itself is served locally from the repository-owned `docs/openapi.json` contract.
+The documentation routes are public, but every `/v1/*` operation invoked from Swagger UI still requires the normal bearer token. Swagger UI does not persist authorization across reloads and has its external validator disabled. The UI JavaScript/CSS (exact-version `swagger-ui-dist` 5.32.11 and ReDoc 2.5.3) is vendored into the repository and served locally by the controller — no CDN or other third-party runtime script/style dependency exists for `/docs` or `/redoc`. The API specification itself is also served locally from the repository-owned `docs/openapi.json` contract. See [`crates/controller-api/third_party/MANIFEST.md`](crates/controller-api/third_party/MANIFEST.md) for exact upstream sources, licenses, and pinned digests.
 
 ### Python client and demo
 

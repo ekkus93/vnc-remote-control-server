@@ -1,4 +1,7 @@
-use super::docs_ui::{openapi_json, redoc, swagger_initializer, swagger_ui};
+use super::docs_ui::{
+    openapi_json, redoc, redoc_standalone_js_asset, swagger_initializer, swagger_ui,
+    swagger_ui_bundle_js_asset, swagger_ui_css_asset, swagger_ui_standalone_preset_js_asset,
+};
 use super::handlers::{
     clipboard, display, events, keyboard_chord, keyboard_key, keyboard_text, liveness,
     metrics_endpoint, pointer_button, pointer_click, pointer_double_click, pointer_move,
@@ -40,7 +43,20 @@ pub fn router(state: HttpState) -> Router {
         .route("/openapi.json", get(openapi_json))
         .route("/docs", get(swagger_ui))
         .route("/docs/swagger-initializer.js", get(swagger_initializer))
+        .route("/docs/assets/swagger-ui.css", get(swagger_ui_css_asset))
+        .route(
+            "/docs/assets/swagger-ui-bundle.js",
+            get(swagger_ui_bundle_js_asset),
+        )
+        .route(
+            "/docs/assets/swagger-ui-standalone-preset.js",
+            get(swagger_ui_standalone_preset_js_asset),
+        )
         .route("/redoc", get(redoc))
+        .route(
+            "/redoc/assets/redoc.standalone.js",
+            get(redoc_standalone_js_asset),
+        )
         .nest("/v1", protected)
         .layer(DefaultBodyLimit::max(state.maximum_json_bytes))
         .layer(middleware::from_fn_with_state(state.clone(), access_log))

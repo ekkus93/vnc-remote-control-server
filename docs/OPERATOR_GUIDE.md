@@ -182,7 +182,7 @@ A running controller serves the repository-owned API reference at:
 - `http://127.0.0.1:8080/redoc` — ReDoc;
 - `http://127.0.0.1:8080/openapi.json` — raw OpenAPI 3.1 JSON.
 
-These documentation routes are public. Every `/v1/*` operation still requires the normal bearer token. Swagger UI does not persist authorization across reloads and its external validator is disabled. The UI assets are loaded from exact-version external CDN URLs; the OpenAPI document itself is served by the controller from the repository-owned `docs/openapi.json` source.
+These documentation routes are public. Every `/v1/*` operation still requires the normal bearer token. Swagger UI does not persist authorization across reloads and its external validator is disabled. The exact-version UI assets (`swagger-ui-dist` 5.32.11, ReDoc 2.5.3) are vendored into the repository and served locally by the controller with no CDN or other third-party runtime script/style dependency; the OpenAPI document itself is likewise served by the controller from the repository-owned `docs/openapi.json` source.
 
 The installable Python client points at the Rust controller, not at the VNC desktop. Installing the package also installs the small `vnc-remote-control-demo` CLI. See [`../python/README.md`](../python/README.md) for direct GitHub installation, token-file handling, screenshots, pointer/keyboard input, clipboard, reconnect, metrics, and WebSocket event examples.
 
