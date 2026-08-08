@@ -22,7 +22,7 @@ use std::io;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 use tokio::time::timeout;
 use tower::util::ServiceExt;
 
@@ -100,6 +100,68 @@ impl fmt::Display for RuntimeConfigError {
 
 impl Error for RuntimeConfigError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionOutcome {
+    Clean,
+    PeerDisconnected,
+    RuntimeFailure,
+    ShutdownComplete,
+    ShutdownChannelClosed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionTaskObservation {
+    Clean,
+    PeerDisconnected,
+    RuntimeFailure,
+    ShutdownComplete,
+    ShutdownChannelClosed,
+    Panicked,
+    CancelledForShutdown,
+    CancelledUnexpectedly,
+}
+
+fn classify_join_result(
+    result: Result<ConnectionOutcome, JoinError>,
+    shutting_down: bool,
+) -> ConnectionTaskObservation {
+    match result {
+        Ok(ConnectionOutcome::Clean) => ConnectionTaskObservation::Clean,
+        Ok(ConnectionOutcome::PeerDisconnected) => ConnectionTaskObservation::PeerDisconnected,
+        Ok(ConnectionOutcome::RuntimeFailure) => ConnectionTaskObservation::RuntimeFailure,
+        Ok(ConnectionOutcome::ShutdownComplete) => ConnectionTaskObservation::ShutdownComplete,
+        Ok(ConnectionOutcome::ShutdownChannelClosed) => {
+            ConnectionTaskObservation::ShutdownChannelClosed
+        }
+        Err(error) if error.is_panic() => ConnectionTaskObservation::Panicked,
+        Err(error) if error.is_cancelled() && shutting_down => {
+            ConnectionTaskObservation::CancelledForShutdown
+        }
+        Err(_) => ConnectionTaskObservation::CancelledUnexpectedly,
+    }
+}
+
+fn observe_connection_result(result: Result<ConnectionOutcome, JoinError>, shutting_down: bool) {
+    match classify_join_result(result, shutting_down) {
+        ConnectionTaskObservation::Clean
+        | ConnectionTaskObservation::PeerDisconnected
+        | ConnectionTaskObservation::ShutdownComplete
+        | ConnectionTaskObservation::CancelledForShutdown => {}
+        ConnectionTaskObservation::RuntimeFailure => {
+            tracing::warn!("http_connection_runtime_failure");
+        }
+        ConnectionTaskObservation::ShutdownChannelClosed => {
+            tracing::error!("http_connection_shutdown_channel_closed");
+        }
+        ConnectionTaskObservation::Panicked => {
+            tracing::error!("http_connection_task_panicked");
+        }
+        ConnectionTaskObservation::CancelledUnexpectedly => {
+            tracing::error!("http_connection_task_cancelled_unexpectedly");
+        }
+    }
+}
+
 /// Serves one already-bound listener until the supplied shutdown future resolves.
 ///
 /// The caller must mark application state as shutting down before its future
@@ -135,7 +197,7 @@ where
                                 settings,
                                 connection_shutdown,
                             )
-                            .await;
+                            .await
                         });
                     }
                     Err(error) => {
@@ -145,7 +207,7 @@ where
                 }
             }
             Some(result) = connections.join_next(), if !connections.is_empty() => {
-                let _ = result;
+                observe_connection_result(result, false);
             }
         }
     }
@@ -154,7 +216,7 @@ where
     let _ = shutdown_sender.send(true);
     let drained = timeout(settings.shutdown_grace, async {
         while let Some(result) = connections.join_next().await {
-            let _ = result;
+            observe_connection_result(result, true);
         }
     })
     .await
@@ -162,7 +224,9 @@ where
 
     if !drained {
         connections.abort_all();
-        while connections.join_next().await.is_some() {}
+        while let Some(result) = connections.join_next().await {
+            observe_connection_result(result, true);
+        }
     }
 
     match accept_failure {
@@ -171,12 +235,26 @@ where
     }
 }
 
+fn classify_connection_result(
+    result: Result<(), hyper::Error>,
+    shutting_down: bool,
+) -> ConnectionOutcome {
+    match result {
+        Ok(()) if shutting_down => ConnectionOutcome::ShutdownComplete,
+        Ok(()) => ConnectionOutcome::Clean,
+        Err(error) if error.is_incomplete_message() || error.is_closed() => {
+            ConnectionOutcome::PeerDisconnected
+        }
+        Err(_) => ConnectionOutcome::RuntimeFailure,
+    }
+}
+
 async fn serve_connection(
     stream: TcpStream,
     app: Router,
     settings: RuntimeSettings,
     mut shutdown: watch::Receiver<bool>,
-) {
+) -> ConnectionOutcome {
     let service = service_fn(move |request| dispatch_request(app.clone(), request, settings));
     let io = TokioIo::new(stream);
     let mut builder = http1::Builder::new();
@@ -186,13 +264,13 @@ async fn serve_connection(
     tokio::pin!(connection);
 
     tokio::select! {
-        result = &mut connection => {
-            let _ = result;
-        }
+        result = &mut connection => classify_connection_result(result, false),
         changed = shutdown.changed() => {
             if changed.is_ok() {
                 connection.as_mut().graceful_shutdown();
-                let _ = connection.await;
+                classify_connection_result(connection.await, true)
+            } else {
+                ConnectionOutcome::ShutdownChannelClosed
             }
         }
     }
@@ -206,11 +284,18 @@ async fn dispatch_request(
     let (parts, body) = request.into_parts();
     let limited = Limited::new(body, settings.maximum_body_bytes);
     let collected = match timeout(settings.body_read_timeout, limited.collect()).await {
-        Err(_) => return Ok(terminal_response(StatusCode::REQUEST_TIMEOUT)),
+        Err(_) => {
+            tracing::warn!("http_request_body_timeout");
+            return Ok(terminal_response(StatusCode::REQUEST_TIMEOUT));
+        }
         Ok(Err(error)) if error.downcast_ref::<LengthLimitError>().is_some() => {
+            tracing::warn!("http_request_body_too_large");
             return Ok(terminal_response(StatusCode::PAYLOAD_TOO_LARGE));
         }
-        Ok(Err(_)) => return Ok(terminal_response(StatusCode::BAD_REQUEST)),
+        Ok(Err(_)) => {
+            tracing::warn!("http_request_body_read_failure");
+            return Ok(terminal_response(StatusCode::BAD_REQUEST));
+        }
         Ok(Ok(collected)) => collected,
     };
     let request = Request::from_parts(parts, Body::from(collected.to_bytes()));
@@ -319,6 +404,34 @@ mod tests {
                 1,
             ),
             Err(RuntimeConfigError::InvalidValue("VRC_HTTP_BODY_TIMEOUT_MS"))
+        );
+    }
+
+    #[tokio::test]
+    async fn connection_join_panics_and_cancellation_are_classified() {
+        let panic_handle = tokio::spawn(async {
+            panic!("test-only connection panic");
+        });
+        let panic_result = panic_handle.await.map(|()| ConnectionOutcome::Clean);
+        assert_eq!(
+            classify_join_result(panic_result, false),
+            ConnectionTaskObservation::Panicked
+        );
+
+        let cancel_handle = tokio::spawn(std::future::pending::<()>());
+        cancel_handle.abort();
+        let cancelled = cancel_handle.await.map(|()| ConnectionOutcome::Clean);
+        assert_eq!(
+            classify_join_result(cancelled, true),
+            ConnectionTaskObservation::CancelledForShutdown
+        );
+
+        let unexpected_handle = tokio::spawn(std::future::pending::<()>());
+        unexpected_handle.abort();
+        let unexpected = unexpected_handle.await.map(|()| ConnectionOutcome::Clean);
+        assert_eq!(
+            classify_join_result(unexpected, false),
+            ConnectionTaskObservation::CancelledUnexpectedly
         );
     }
 
