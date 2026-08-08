@@ -266,14 +266,18 @@ impl InputController {
         text: &str,
     ) -> Result<usize, DesktopError> {
         let character_count = validate_text(text)?;
-        for character in text.chars() {
-            let key = match character {
-                '\n' | '\r' => KeyboardKey::Enter,
-                '\t' => KeyboardKey::Tab,
-                value => KeyboardKey::Printable(value),
-            };
+        let keys = text.chars().map(text_key).collect::<Vec<_>>();
+        if keys.iter().any(|key| self.pressed_keys.contains(key)) {
+            return Err(DesktopError::Configuration(
+                "cannot type text containing a key that is already pressed".to_owned(),
+            ));
+        }
+
+        for key in keys {
             self.set_key(sink, key, true)?;
             if let Err(error) = self.set_key(sink, key, false) {
+                // Best-effort retry: if this also fails, the generated key remains
+                // tracked so release_all() can retry during later cleanup.
                 let _ = self.set_key(sink, key, false);
                 return Err(error);
             }
@@ -347,6 +351,14 @@ impl InputController {
     }
 }
 
+fn text_key(character: char) -> KeyboardKey {
+    match character {
+        '\n' | '\r' => KeyboardKey::Enter,
+        '\t' => KeyboardKey::Tab,
+        value => KeyboardKey::Printable(value),
+    }
+}
+
 fn validate_coordinate(
     requested: Coordinate,
     display: DisplayInfo,
@@ -382,6 +394,7 @@ mod tests {
         events: Vec<Event>,
         call_count: usize,
         fail_on_call: Option<usize>,
+        fail_on_calls: Vec<usize>,
     }
 
     impl RecordingSink {
@@ -392,9 +405,18 @@ mod tests {
             }
         }
 
+        fn fail_on_calls(calls: &[usize]) -> Self {
+            Self {
+                fail_on_calls: calls.to_vec(),
+                ..Self::default()
+            }
+        }
+
         fn record(&mut self, event: Event) -> Result<(), NativeError> {
             self.call_count += 1;
-            if self.fail_on_call == Some(self.call_count) {
+            if self.fail_on_call == Some(self.call_count)
+                || self.fail_on_calls.contains(&self.call_count)
+            {
                 return Err(NativeError::NativeFailure {
                     message: "test-only input failure".to_owned(),
                 });
@@ -705,6 +727,69 @@ mod tests {
     }
 
     #[test]
+    fn type_text_rejects_preheld_printable_key_without_side_effects() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+        let held = KeyboardKey::Printable('A');
+        controller.set_key(&mut sink, held, true).expect("key down");
+        sink.events.clear();
+
+        assert!(controller.type_text(&mut sink, "xAy").is_err());
+        assert!(sink.events.is_empty());
+        assert_eq!(controller.pressed_keys, vec![held]);
+
+        controller.set_key(&mut sink, held, false).expect("key up");
+        assert_eq!(sink.events, vec![Event::Key(held, false)]);
+    }
+
+    #[test]
+    fn type_text_rejects_preheld_enter_without_side_effects() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+        controller
+            .set_key(&mut sink, KeyboardKey::Enter, true)
+            .expect("enter down");
+        sink.events.clear();
+
+        assert!(controller.type_text(&mut sink, "before\nafter").is_err());
+        assert!(sink.events.is_empty());
+        assert_eq!(controller.pressed_keys, vec![KeyboardKey::Enter]);
+    }
+
+    #[test]
+    fn type_text_rejects_preheld_tab_without_side_effects() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+        controller
+            .set_key(&mut sink, KeyboardKey::Tab, true)
+            .expect("tab down");
+        sink.events.clear();
+
+        assert!(controller.type_text(&mut sink, "before\tafter").is_err());
+        assert!(sink.events.is_empty());
+        assert_eq!(controller.pressed_keys, vec![KeyboardKey::Tab]);
+    }
+
+    #[test]
+    fn type_text_allows_repeated_characters_when_not_preheld() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::default();
+
+        assert_eq!(controller.type_text(&mut sink, "AAA").expect("text"), 3);
+        assert_eq!(
+            sink.events,
+            vec![
+                Event::Key(KeyboardKey::Printable('A'), true),
+                Event::Key(KeyboardKey::Printable('A'), false),
+                Event::Key(KeyboardKey::Printable('A'), true),
+                Event::Key(KeyboardKey::Printable('A'), false),
+                Event::Key(KeyboardKey::Printable('A'), true),
+                Event::Key(KeyboardKey::Printable('A'), false),
+            ]
+        );
+    }
+
+    #[test]
     fn text_release_failure_is_retried_and_reported() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on(2);
@@ -716,6 +801,22 @@ mod tests {
                 Event::Key(KeyboardKey::Printable('A'), false),
             ]
         );
+    }
+
+    #[test]
+    fn text_release_double_failure_remains_tracked_for_cleanup() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on_calls(&[2, 3]);
+        let key = KeyboardKey::Printable('A');
+
+        assert!(controller.type_text(&mut sink, "A").is_err());
+        assert_eq!(sink.events, vec![Event::Key(key, true)]);
+        assert_eq!(controller.pressed_keys, vec![key]);
+
+        sink.fail_on_calls.clear();
+        assert!(controller.release_all(&mut sink).is_complete());
+        assert_eq!(sink.events, vec![Event::Key(key, true), Event::Key(key, false)]);
+        assert!(controller.pressed_keys.is_empty());
     }
 
     #[test]
