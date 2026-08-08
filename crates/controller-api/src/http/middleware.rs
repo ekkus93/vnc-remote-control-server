@@ -1,4 +1,7 @@
-use super::ids::{REQUEST_ID_EXHAUSTED_SENTINEL, RequestId, request_id, valid_request_id};
+use super::ids::{
+    REQUEST_ID_EXHAUSTED_SENTINEL, REQUEST_ID_INVARIANT_SENTINEL, RequestId, request_id,
+    valid_request_id,
+};
 use super::responses::ApiError;
 use super::state::HttpState;
 use super::support::bearer_matches;
@@ -61,6 +64,17 @@ fn request_id_exhausted_response() -> Response {
     response
 }
 
+fn request_id_invariant_response() -> Response {
+    tracing::error!("request_id_extension_missing");
+    let request_id = RequestId::invariant_failure();
+    let mut response = ApiError::internal(request_id).into_response();
+    response.headers_mut().insert(
+        REQUEST_ID_HEADER,
+        HeaderValue::from_static(REQUEST_ID_INVARIANT_SENTINEL),
+    );
+    response
+}
+
 pub(super) struct AccessLogContext {
     pub(super) method: Method,
     pub(super) path: String,
@@ -69,17 +83,17 @@ pub(super) struct AccessLogContext {
 }
 
 impl AccessLogContext {
-    pub(super) fn from_request(request: &Request) -> Self {
-        Self {
+    pub(super) fn from_request(request: &Request) -> Option<Self> {
+        Some(Self {
             method: request.method().clone(),
             path: request.uri().path().to_owned(),
-            request_id: request_id(request),
+            request_id: request_id(request)?,
             authorization: if request.headers().contains_key(AUTHORIZATION) {
                 "[REDACTED]"
             } else {
                 "absent"
             },
-        }
+        })
     }
 }
 
@@ -88,7 +102,9 @@ pub(super) async fn access_log(
     request: Request,
     next: Next,
 ) -> Response {
-    let context = AccessLogContext::from_request(&request);
+    let Some(context) = AccessLogContext::from_request(&request) else {
+        return request_id_invariant_response();
+    };
     let started = Instant::now();
     let span = tracing::info_span!(
         "http_request",
@@ -135,7 +151,9 @@ pub(super) async fn require_bearer(
     request: Request,
     next: Next,
 ) -> Response {
-    let request_id = request_id(&request);
+    let Some(request_id) = request_id(&request) else {
+        return request_id_invariant_response();
+    };
     let authorized = request
         .headers()
         .get(AUTHORIZATION)
