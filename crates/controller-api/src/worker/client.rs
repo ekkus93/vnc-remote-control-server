@@ -41,6 +41,7 @@ pub struct WorkerClient {
     pub(super) framebuffer: FramebufferStore,
     pub(super) clipboard: Arc<Mutex<Option<ClipboardSnapshot>>>,
     pub(super) next_command_id: Arc<AtomicU64>,
+    pub(super) command_id_exhausted: Arc<AtomicBool>,
     pub(super) command_submissions_in_flight: Arc<AtomicUsize>,
     pub(super) command_queue_capacity: usize,
     pub(super) pending_overload: Arc<AtomicU64>,
@@ -62,6 +63,11 @@ impl WorkerClient {
         self.shutdown_requested.load(Ordering::Acquire)
     }
 
+    /// Returns whether the process-local command identifier sequence is terminal.
+    pub fn command_id_exhausted(&self) -> bool {
+        self.command_id_exhausted.load(Ordering::Acquire)
+    }
+
     /// Submits one command without touching native adapter state.
     pub fn submit(&self, command: WorkerCommand) -> Result<CommandTicket, DesktopError> {
         self.submit_inner(command, || {})
@@ -79,6 +85,19 @@ impl WorkerClient {
         self.submit_inner(command, before_send)
     }
 
+    #[cfg(test)]
+    pub(super) fn force_command_sequence_for_test(&self, next: u64) {
+        self.next_command_id.store(next, Ordering::Release);
+        self.command_id_exhausted.store(false, Ordering::Release);
+    }
+
+    fn mark_command_id_exhausted(&self) {
+        if !self.command_id_exhausted.swap(true, Ordering::AcqRel) {
+            lock_unpoisoned(&self.snapshot).fatal_exit = true;
+            tracing::error!("worker_command_id_sequence_exhausted");
+        }
+    }
+
     fn submit_inner<F>(
         &self,
         command: WorkerCommand,
@@ -90,12 +109,20 @@ impl WorkerClient {
         if self.shutdown_requested() {
             return Err(DesktopError::WorkerUnavailable);
         }
-        let id = self
+        if self.command_id_exhausted() {
+            return Err(DesktopError::CommandIdExhausted);
+        }
+        let id = match self
             .next_command_id
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
                 value.checked_add(1)
-            })
-            .map_err(|_| DesktopError::WorkerUnavailable)?;
+            }) {
+            Ok(id) => id,
+            Err(_) => {
+                self.mark_command_id_exhausted();
+                return Err(DesktopError::CommandIdExhausted);
+            }
+        };
         let (completion_tx, completion_rx) = sync_channel(1);
         let envelope = CommandEnvelope::new(
             command,
@@ -106,6 +133,9 @@ impl WorkerClient {
         // a concurrent shutdown request and this submission.
         if self.shutdown_requested() {
             return Err(DesktopError::WorkerUnavailable);
+        }
+        if self.command_id_exhausted() {
+            return Err(DesktopError::CommandIdExhausted);
         }
         before_send();
         match self.commands.try_send(envelope) {
