@@ -111,6 +111,8 @@ fn input_release_json_logs_exclude_key_and_coordinate_sentinels() {
         framebuffer: FramebufferStore::default(),
         clipboard: &clipboard,
         event_sequence: 0,
+        event_terminal_failure: false,
+        shutdown_cleanup: false,
         session: Some(session),
         last_native_revision: None,
         last_native_clipboard_revision: None,
@@ -125,7 +127,8 @@ fn input_release_json_logs_exclude_key_and_coordinate_sentinels() {
         last_manual_reconnect: None,
     };
 
-    let ((), records) = crate::test_support::capture_json_logs(|| state.invalidate());
+    let (result, records) = crate::test_support::capture_json_logs(|| state.invalidate());
+    result.expect("cleanup publishes without event-channel failure");
 
     assert!(crate::test_support::json_logs_contain(
         &records,
@@ -148,41 +151,41 @@ fn input_release_json_logs_exclude_key_and_coordinate_sentinels() {
 }
 
 #[test]
-fn native_failure_json_logs_exclude_vnc_password_sentinel() {
+fn protocol_initialization_failure_logs_exclude_vnc_password_sentinel() {
     let mut config = settings();
     config.native.password = SecretString::from(PASSWORD_SENTINEL);
+    config.reconnect_min_delay = Duration::from_secs(1);
+    config.reconnect_max_delay = Duration::from_secs(1);
 
     let (failure_snapshot, records) = crate::test_support::capture_json_logs(|| {
         let worker = DesktopWorker::spawn_with_factory(config, || {
-            Err::<MockSession, _>(NativeError::NativeFailure {
-                message: format!("VNC protocol initialization failed: {PASSWORD_SENTINEL}"),
-            })
+            Err::<MockSession, _>(NativeError::ProtocolInitializationFailed)
         })
         .expect("worker spawns");
         let client = worker.client();
-        wait_for_state(&client, ConnectionState::AuthenticationFailed);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let snapshot = client.snapshot();
+            if snapshot.last_failure == Some(WorkerFailureKind::Protocol) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "protocol failure was not recorded");
+            thread::yield_now();
+        }
         let failure_snapshot = client.snapshot();
         worker
             .shutdown(Duration::from_secs(1))
-            .expect("worker joins after authentication failure");
+            .expect("worker joins after protocol failure");
         failure_snapshot
     });
 
     assert_eq!(
-        failure_snapshot.state,
-        ConnectionState::AuthenticationFailed
-    );
-    assert_eq!(
         failure_snapshot.last_failure,
-        Some(WorkerFailureKind::Authentication)
+        Some(WorkerFailureKind::Protocol)
     );
     assert!(crate::test_support::json_logs_contain(
         &records,
-        "worker_state_transition"
-    ));
-    assert!(crate::test_support::json_logs_contain(
-        &records,
-        "AuthenticationFailed"
+        "worker_failure_recorded"
     ));
     assert!(
         !crate::test_support::json_logs_contain(&records, PASSWORD_SENTINEL),
