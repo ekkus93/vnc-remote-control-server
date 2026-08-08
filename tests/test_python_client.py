@@ -12,7 +12,7 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
-from vnc_remote_control import ApiError, VncClient
+from vnc_remote_control import ApiError, ProtocolError, VncClient
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
@@ -106,6 +106,21 @@ def _routing_http_open() -> tuple[Any, list[tuple[Any, float]]]:
         )
 
     return opener, requests
+
+
+def _single_json_client(
+    expected_path: str, payload: dict[str, Any], *, status: int = 200
+) -> VncClient:
+    """Return a client whose only HTTP request receives `payload`."""
+
+    def opener(request: Any, *, timeout: float) -> FakeResponse:
+        del timeout
+        path = urlsplit(request.full_url).path
+        if path != expected_path:
+            raise AssertionError(f"unexpected test path: {path}")
+        return FakeResponse(status, json.dumps(payload).encode())
+
+    return VncClient("http://controller", "token", _http_open=opener)
 
 
 class FakeWebSocket:
@@ -229,6 +244,111 @@ class PythonClientTests(unittest.TestCase):
             command_bodies["/v1/keyboard/chord"]["keys"], ["CTRL_LEFT", "a"]
         )
         self.assertEqual(command_bodies["/v1/clipboard"], {"text": "new clipboard"})
+
+    def test_typed_http_responses_reject_malformed_primitives_and_enums(self) -> None:
+        """Typed models never normalize malformed server JSON into valid values."""
+        valid_status = json.loads(_FIXED_RESPONSE_BODIES["/v1/status"])
+        cases: list[tuple[str, dict[str, Any]]] = []
+
+        for field, invalid in (
+            ("fatal_exit", "false"),
+            ("shutting_down", 0),
+            ("started_at_unix_ms", "1"),
+            ("reconnect_attempts", True),
+            ("connected_at_unix_ms", "2"),
+            ("state", "unknown-state"),
+            ("last_failure", "unknown-failure"),
+        ):
+            payload = dict(valid_status)
+            payload[field] = invalid
+            cases.append((field, payload))
+
+        missing = dict(valid_status)
+        del missing["fatal_exit"]
+        cases.append(("missing required", missing))
+        extra = dict(valid_status)
+        extra["unexpected"] = 1
+        cases.append(("unexpected field", extra))
+
+        for label, payload in cases:
+            with self.subTest(label=label):
+                client = _single_json_client("/v1/status", payload)
+                with self.assertRaises(ProtocolError):
+                    client.get_status()
+
+        display_cases = (
+            {"status": "current", "width": "1280", "height": 800, "depth": 24, "revision": 7, "updated_at_unix_ms": 4, "complete": True},
+            {"status": "current", "width": 1280, "height": 800, "depth": True, "revision": 7, "updated_at_unix_ms": 4, "complete": True},
+            {"status": "current", "width": 1280, "height": 800, "depth": 24, "revision": 7, "updated_at_unix_ms": 4, "complete": 1},
+        )
+        for payload in display_cases:
+            client = _single_json_client("/v1/display", payload)
+            with self.assertRaises(ProtocolError):
+                client.get_display()
+
+        client = _single_json_client("/health/live", {"status": 1})
+        with self.assertRaises(ProtocolError):
+            client.get_liveness()
+        client = _single_json_client("/health/live", {"status": "alive", "extra": True})
+        with self.assertRaises(ProtocolError):
+            client.get_liveness()
+
+        client = _single_json_client(
+            "/v1/clipboard",
+            {"text": {"not": "text"}, "revision": 1, "updated_at_unix_ms": 2},
+        )
+        with self.assertRaises(ProtocolError):
+            client.get_clipboard()
+
+        client = _single_json_client(
+            "/v1/pointer/move", {"command_id": True, "status": "accepted"}, status=202
+        )
+        with self.assertRaises(ProtocolError):
+            client.move_pointer(1, 1)
+        client = _single_json_client(
+            "/v1/pointer/move", {"command_id": 1, "status": "queued"}, status=202
+        )
+        with self.assertRaises(ProtocolError):
+            client.move_pointer(1, 1)
+
+    def test_nonempty_malformed_api_error_is_protocol_error(self) -> None:
+        """Malformed structured error bodies are not silently downgraded."""
+        sentinel = "RESPONSE_PAYLOAD_SENTINEL"
+        body = json.dumps({"error": {"code": 7, "message": sentinel, "request_id": "id"}}).encode()
+
+        def open_422(request: Any, *, timeout: float) -> FakeResponse:
+            del timeout
+            raise HTTPError(
+                request.full_url,
+                422,
+                "Unprocessable Entity",
+                Message(),
+                io.BytesIO(body),
+            )
+
+        client = VncClient("http://controller", "token", _http_open=open_422)
+        with self.assertRaises(ProtocolError) as captured:
+            client.move_pointer(-1, 0)
+        self.assertNotIn(sentinel, str(captured.exception))
+
+    def test_empty_documented_runtime_error_remains_api_error(self) -> None:
+        """Pre-router empty 400/408/413 responses keep their documented fallback."""
+
+        def open_413(request: Any, *, timeout: float) -> FakeResponse:
+            del timeout
+            raise HTTPError(
+                request.full_url,
+                413,
+                "Payload Too Large",
+                Message(),
+                io.BytesIO(b""),
+            )
+
+        client = VncClient("http://controller", "token", _http_open=open_413)
+        with self.assertRaises(ApiError) as captured:
+            client.set_clipboard("value")
+        self.assertEqual(captured.exception.status_code, 413)
+        self.assertIsNone(captured.exception.code)
 
     def test_screenshot_304_is_a_non_error_result(self) -> None:
         """A 304 response surfaces as `not_modified=True`, not a raised error."""
