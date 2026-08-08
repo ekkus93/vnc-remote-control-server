@@ -7,21 +7,56 @@
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome};
 use crate::worker::{WorkerFailureKind, WorkerSnapshot};
 use remote_desktop_core::{ConnectionState, DesktopError, DesktopEventKind, WorkerCommand};
-use std::fmt::Write as _;
+use std::env;
+use std::error::Error;
+use std::fmt::{self, Write as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
+/// Process tracing initialization failure. Messages are fixed and never echo
+/// the configured filter or any request/secret data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TracingInitError {
+    /// `RUST_LOG` is present but not valid Unicode or not a valid filter.
+    InvalidFilter,
+    /// Another global tracing subscriber is already installed or installation failed.
+    SubscriberInstall,
+}
+
+impl fmt::Display for TracingInitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidFilter => formatter.write_str("invalid tracing filter configuration"),
+            Self::SubscriberInstall => formatter.write_str("failed to install tracing subscriber"),
+        }
+    }
+}
+
+impl Error for TracingInitError {}
+
+fn filter_from_value(value: Option<&str>) -> Result<EnvFilter, TracingInitError> {
+    match value {
+        Some(value) => EnvFilter::try_new(value).map_err(|_| TracingInitError::InvalidFilter),
+        None => Ok(EnvFilter::new("info")),
+    }
+}
+
 /// Installs the process-wide JSON tracing subscriber.
-pub fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = tracing_subscriber::fmt()
+pub fn init_tracing() -> Result<(), TracingInitError> {
+    let filter = match env::var("RUST_LOG") {
+        Ok(value) => filter_from_value(Some(&value))?,
+        Err(env::VarError::NotPresent) => filter_from_value(None)?,
+        Err(env::VarError::NotUnicode(_)) => return Err(TracingInitError::InvalidFilter),
+    };
+    tracing_subscriber::fmt()
         .with_env_filter(filter)
         .json()
         .with_current_span(true)
         .with_span_list(true)
-        .try_init();
+        .try_init()
+        .map_err(|_| TracingInitError::SubscriberInstall)
 }
 
 /// Cloneable process metrics using only bounded, predefined dimensions.
@@ -155,10 +190,20 @@ impl Metrics {
     }
 
     fn add_screenshot_duration(&self, elapsed: Duration) {
-        let milliseconds = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
-        self.inner
+        let Ok(milliseconds) = u64::try_from(elapsed.as_millis()) else {
+            tracing::error!("screenshot_duration_metric_conversion_overflow");
+            return;
+        };
+        if self
+            .inner
             .screenshot_duration_ms
-            .fetch_add(milliseconds, Ordering::Relaxed);
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_add(milliseconds)
+            })
+            .is_err()
+        {
+            tracing::error!("screenshot_duration_metric_counter_exhausted");
+        }
     }
 
     /// Records one accepted WebSocket client.
@@ -168,11 +213,16 @@ impl Metrics {
 
     /// Records cleanup of one WebSocket client.
     pub fn websocket_closed(&self) {
-        let _ = self.inner.websocket_clients.try_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |value| value.checked_sub(1),
-        );
+        if self
+            .inner
+            .websocket_clients
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                value.checked_sub(1)
+            })
+            .is_err()
+        {
+            tracing::error!("websocket_client_metric_underflow");
+        }
     }
 
     /// Records predictable rejection at the configured client limit.
@@ -339,12 +389,14 @@ impl Metrics {
         metric(
             &mut output,
             "vrc_worker_command_submissions_in_flight",
-            u64::try_from(command_submissions_in_flight).unwrap_or(u64::MAX),
+            u64::try_from(command_submissions_in_flight)
+                .expect("supported targets have at most 64-bit usize"),
         );
         metric(
             &mut output,
             "vrc_worker_command_queue_capacity",
-            u64::try_from(command_queue_capacity).unwrap_or(u64::MAX),
+            u64::try_from(command_queue_capacity)
+                .expect("supported targets have at most 64-bit usize"),
         );
         metric(
             &mut output,
@@ -680,6 +732,24 @@ mod tests {
             dropped_events: 4,
             fatal_exit: false,
         }
+    }
+
+    #[test]
+    fn tracing_filter_is_strict_when_configured() {
+        assert!(filter_from_value(None).is_ok());
+        assert!(filter_from_value(Some("info,controller_api=debug")).is_ok());
+        assert_eq!(
+            filter_from_value(Some("controller_api=definitely-not-a-level")).err(),
+            Some(TracingInitError::InvalidFilter)
+        );
+    }
+
+    #[test]
+    fn websocket_client_metric_underflow_is_observable_and_does_not_wrap() {
+        let metrics = Metrics::default();
+        let (_, logs) = crate::test_support::capture_logs(|| metrics.websocket_closed());
+        assert_eq!(metrics.inner.websocket_clients.load(Ordering::Relaxed), 0);
+        assert!(logs.contains("websocket_client_metric_underflow"));
     }
 
     #[test]
