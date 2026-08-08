@@ -14,7 +14,10 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
-    init_tracing();
+    if let Err(error) = init_tracing() {
+        eprintln!("controller tracing initialization failed: {error}");
+        std::process::exit(1);
+    }
     if let Err(error) = run().await {
         tracing::error!(error = %error, "controller_api_failed");
         std::process::exit(1);
