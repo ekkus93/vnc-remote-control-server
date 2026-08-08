@@ -21,6 +21,7 @@ const STATUS_DISCONNECTED: c_int = 5;
 const STATUS_FRAMEBUFFER_UNAVAILABLE: c_int = 6;
 const STATUS_BUFFER_TOO_SMALL: c_int = 7;
 const STATUS_CLIPBOARD_UNAVAILABLE: c_int = 8;
+const STATUS_PROTOCOL_INITIALIZATION_FAILED: c_int = 9;
 
 #[repr(C)]
 struct VrcClient {
@@ -162,6 +163,8 @@ pub enum NativeError {
     InvalidArgument,
     /// Native allocation failed.
     AllocationFailed,
+    /// The native transport connected, but RFB protocol initialization failed.
+    ProtocolInitializationFailed,
     /// LibVNCClient reported a bounded native failure.
     NativeFailure {
         /// Bounded message produced only by the project-owned shim.
@@ -186,6 +189,9 @@ impl fmt::Display for NativeError {
         match self {
             Self::InvalidArgument => formatter.write_str("native argument rejected"),
             Self::AllocationFailed => formatter.write_str("native allocation failed"),
+            Self::ProtocolInitializationFailed => {
+                formatter.write_str("native VNC protocol initialization failed")
+            }
             Self::NativeFailure { message } => {
                 write!(formatter, "native VNC operation failed: {message}")
             }
@@ -211,6 +217,7 @@ impl From<NativeError> for DesktopError {
             NativeError::InvalidArgument | NativeError::EmbeddedNul => {
                 Self::Configuration("native adapter rejected configuration".to_owned())
             }
+            NativeError::ProtocolInitializationFailed => Self::Protocol,
             NativeError::AllocationFailed
             | NativeError::NativeFailure { .. }
             | NativeError::BufferTooSmall
@@ -473,6 +480,7 @@ impl NativeClient {
         match status {
             STATUS_INVALID_ARGUMENT => NativeError::InvalidArgument,
             STATUS_ALLOCATION_FAILED => NativeError::AllocationFailed,
+            STATUS_PROTOCOL_INITIALIZATION_FAILED => NativeError::ProtocolInitializationFailed,
             STATUS_NATIVE_FAILURE => NativeError::NativeFailure {
                 message: self.last_error(),
             },
@@ -558,5 +566,11 @@ mod tests {
             NativeClient::connect(&config),
             Err(NativeError::EmbeddedNul)
         ));
+    }
+
+    #[test]
+    fn protocol_initialization_failure_maps_without_error_message_matching() {
+        let error = NativeError::ProtocolInitializationFailed;
+        assert_eq!(DesktopError::from(error), DesktopError::Protocol);
     }
 }
