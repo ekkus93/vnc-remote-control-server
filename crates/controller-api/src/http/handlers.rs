@@ -103,13 +103,28 @@ pub(super) async fn readiness(
     }
 }
 
-pub(super) async fn status(State(state): State<HttpState>) -> Json<StatusResponse> {
+pub(super) async fn status(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+) -> Result<Json<StatusResponse>, ApiError> {
     let snapshot = state.backend.snapshot();
-    Json(StatusResponse {
+    let started_at_unix_ms =
+        unix_milliseconds(snapshot.started_at).map_err(|_| ApiError::internal(request_id.clone()))?;
+    let connected_at_unix_ms = snapshot
+        .connected_at
+        .map(unix_milliseconds)
+        .transpose()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    let last_message_at_unix_ms = snapshot
+        .last_message_at
+        .map(unix_milliseconds)
+        .transpose()
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
+    Ok(Json(StatusResponse {
         state: connection_state_name(snapshot.state),
-        started_at_unix_ms: unix_milliseconds(snapshot.started_at),
-        connected_at_unix_ms: snapshot.connected_at.map(unix_milliseconds),
-        last_message_at_unix_ms: snapshot.last_message_at.map(unix_milliseconds),
+        started_at_unix_ms,
+        connected_at_unix_ms,
+        last_message_at_unix_ms,
         reconnect_attempts: snapshot.reconnect_attempts,
         last_failure: snapshot.last_failure.map(worker_failure_name),
         framebuffer_revision: snapshot.framebuffer_revision,
@@ -117,7 +132,7 @@ pub(super) async fn status(State(state): State<HttpState>) -> Json<StatusRespons
         dropped_events: snapshot.dropped_events,
         fatal_exit: snapshot.fatal_exit,
         shutting_down: state.is_shutting_down(),
-    })
+    }))
 }
 
 pub(super) async fn display(
@@ -133,13 +148,15 @@ pub(super) async fn display(
     else {
         return Err(ApiError::framebuffer_unavailable(request_id));
     };
+    let updated_at_unix_ms =
+        unix_milliseconds(updated_at).map_err(|_| ApiError::internal(request_id.clone()))?;
     Ok(Json(DisplayResponse {
         status: framebuffer_status_name(metadata.status),
         width,
         height,
         depth: 24,
         revision: metadata.revision,
-        updated_at_unix_ms: unix_milliseconds(updated_at),
+        updated_at_unix_ms,
         complete: true,
     }))
 }
@@ -304,11 +321,13 @@ pub(super) async fn clipboard(
     let snapshot = state
         .backend
         .clipboard_snapshot()
-        .map_err(|error| domain_error(error, request_id))?;
+        .map_err(|error| domain_error(error, request_id.clone()))?;
+    let updated_at_unix_ms = unix_milliseconds(snapshot.updated_at)
+        .map_err(|_| ApiError::internal(request_id.clone()))?;
     Ok(Json(ClipboardResponse {
         text: snapshot.text.to_string(),
         revision: snapshot.revision,
-        updated_at_unix_ms: unix_milliseconds(snapshot.updated_at),
+        updated_at_unix_ms,
     }))
 }
 
