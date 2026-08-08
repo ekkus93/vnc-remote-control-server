@@ -10,7 +10,7 @@ use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
 use remote_desktop_core::{ConnectionState, DesktopError, DisplayInfo};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use subtle::ConstantTimeEq;
 
 pub(super) fn json_payload<T>(
@@ -215,12 +215,21 @@ pub(super) fn bearer_matches(header: &[u8], expected: &[u8]) -> bool {
         && bool::from(candidate.ct_eq(expected))
 }
 
-pub(super) fn unix_milliseconds(value: SystemTime) -> u64 {
-    let milliseconds = value
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TimestampError {
+    BeforeUnixEpoch,
+    MillisecondsOverflow,
+}
+
+fn duration_milliseconds(value: Duration) -> Result<u64, TimestampError> {
+    u64::try_from(value.as_millis()).map_err(|_| TimestampError::MillisecondsOverflow)
+}
+
+pub(super) fn unix_milliseconds(value: SystemTime) -> Result<u64, TimestampError> {
+    let elapsed = value
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    u64::try_from(milliseconds).unwrap_or(u64::MAX)
+        .map_err(|_| TimestampError::BeforeUnixEpoch)?;
+    duration_milliseconds(elapsed)
 }
 
 pub(super) const fn connection_state_name(state: ConnectionState) -> &'static str {
@@ -253,5 +262,23 @@ pub(super) const fn framebuffer_status_name(status: FramebufferStatus) -> &'stat
         FramebufferStatus::Incomplete => "incomplete",
         FramebufferStatus::Current => "current",
         FramebufferStatus::Stale => "stale",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_timestamp_rejects_pre_epoch_and_millisecond_overflow() {
+        assert_eq!(
+            unix_milliseconds(UNIX_EPOCH - Duration::from_millis(1)),
+            Err(TimestampError::BeforeUnixEpoch)
+        );
+        assert_eq!(
+            duration_milliseconds(Duration::from_secs(u64::MAX)),
+            Err(TimestampError::MillisecondsOverflow)
+        );
+        assert_eq!(unix_milliseconds(UNIX_EPOCH), Ok(0));
     }
 }
