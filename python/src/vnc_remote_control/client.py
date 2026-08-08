@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, get_args
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
@@ -36,21 +36,10 @@ except ImportError:
     _websocket_module = None
 
 
-_CONNECTION_STATES = frozenset(
-    {
-        "starting",
-        "connecting",
-        "connected",
-        "degraded",
-        "reconnecting",
-        "disconnected",
-        "authentication_failed",
-        "stopped",
-    }
-)
-_WORKER_FAILURES = frozenset(
-    {"authentication", "configuration", "transport", "timeout", "protocol", "native"}
-)
+# Derived from the `models` Literal types (single source of truth) rather than
+# repeating the closed vocabularies here, so the two can never drift apart.
+_CONNECTION_STATES = frozenset(get_args(ConnectionState))
+_WORKER_FAILURES = frozenset(get_args(WorkerFailure))
 _HEALTH_STATUSES = frozenset({"alive", "ready"})
 _DISPLAY_STATUSES = frozenset({"current"})
 _COMMAND_STATUSES = frozenset({"accepted"})

@@ -276,10 +276,19 @@ class PythonClientTests(unittest.TestCase):
                 with self.assertRaises(ProtocolError):
                     client.get_status()
 
+        base_display = {
+            "status": "current",
+            "width": 1280,
+            "height": 800,
+            "depth": 24,
+            "revision": 7,
+            "updated_at_unix_ms": 4,
+            "complete": True,
+        }
         display_cases = (
-            {"status": "current", "width": "1280", "height": 800, "depth": 24, "revision": 7, "updated_at_unix_ms": 4, "complete": True},
-            {"status": "current", "width": 1280, "height": 800, "depth": True, "revision": 7, "updated_at_unix_ms": 4, "complete": True},
-            {"status": "current", "width": 1280, "height": 800, "depth": 24, "revision": 7, "updated_at_unix_ms": 4, "complete": 1},
+            {**base_display, "width": "1280"},
+            {**base_display, "depth": True},
+            {**base_display, "complete": 1},
         )
         for payload in display_cases:
             client = _single_json_client("/v1/display", payload)
