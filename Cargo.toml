@@ -15,7 +15,7 @@ repository = "https://github.com/ekkus93/vnc-remote-control-server"
 
 [workspace.dependencies]
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio", "ws"] }
-http-body-util = "=0.1.3"
+http-body-util = "=0.1.4"
 hyper = { version = "=1.8.1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
 png = "0.18.1"
