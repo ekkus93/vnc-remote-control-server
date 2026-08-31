@@ -404,7 +404,9 @@ async fn execute_command(
                 request_id = %request_id.0,
                 "desktop_command_failed"
             );
-            return Err(domain_error(error, request_id));
+            return Err(
+                domain_error(error, request_id).with_command_context(command_id, "failed", false)
+            );
         }
         Err(CommandExecutionError::OutcomeUnknown { command_id }) => {
             state.metrics.record_command_failure(&DesktopError::Timeout);
