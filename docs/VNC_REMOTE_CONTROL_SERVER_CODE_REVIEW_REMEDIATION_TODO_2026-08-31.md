@@ -137,7 +137,7 @@ R0/R1 evidence and the exact test/CI references supporting these checks are reco
 - [x] Existing ordinary button tracking/release tests still pass.
 - [x] Existing key tracking/release tests still pass.
 
-R2 evidence, recovery policy, regression test names, and exact implementation-head validation are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R3-R15 remain intentionally open; this is not overall remediation sign-off.
+R2 evidence, recovery policy, regression test names, and exact implementation-head validation are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R4-R15 remain intentionally open; this is not overall remediation sign-off.
 
 ## R3 — Propagate native clipboard callback failures
 
