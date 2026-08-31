@@ -180,7 +180,10 @@ async fn command_status_is_authenticated_and_reports_sanitized_lifecycle() {
         .command_outcomes
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(9, (CommandOutcomeState::Aborted, Some("worker_unavailable")));
+        .insert(
+            9,
+            (CommandOutcomeState::Aborted, Some("worker_unavailable")),
+        );
     let response = app
         .clone()
         .oneshot(
@@ -198,7 +201,11 @@ async fn command_status_is_authenticated_and_reports_sanitized_lifecycle() {
 
     let unauthenticated = app
         .clone()
-        .oneshot(request("/v1/commands/1").body(Body::empty()).expect("request"))
+        .oneshot(
+            request("/v1/commands/1")
+                .body(Body::empty())
+                .expect("request"),
+        )
         .await
         .expect("response");
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
@@ -214,7 +221,10 @@ async fn command_status_is_authenticated_and_reports_sanitized_lifecycle() {
         .await
         .expect("response");
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-    assert_eq!(json_body(unknown).await["error"]["code"], "command_status_unknown");
+    assert_eq!(
+        json_body(unknown).await["error"]["code"],
+        "command_status_unknown"
+    );
 
     *backend
         .expired_command_id
@@ -230,7 +240,10 @@ async fn command_status_is_authenticated_and_reports_sanitized_lifecycle() {
         .await
         .expect("response");
     assert_eq!(expired.status(), StatusCode::GONE);
-    assert_eq!(json_body(expired).await["error"]["code"], "command_status_expired");
+    assert_eq!(
+        json_body(expired).await["error"]["code"],
+        "command_status_expired"
+    );
 }
 
 #[tokio::test]
@@ -305,7 +318,12 @@ async fn pre_admission_rejection_and_post_admission_outcomes_are_distinct() {
     assert_eq!(body["error"]["command_id"], 77);
     assert_eq!(body["error"]["outcome"], "unknown");
     assert_eq!(body["error"]["retry_safe"], false);
-    assert!(body["error"]["message"].as_str().unwrap().contains("unknown"));
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown")
+    );
 }
 
 #[tokio::test]
