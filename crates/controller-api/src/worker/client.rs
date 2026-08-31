@@ -1,5 +1,6 @@
 use super::command::CommandEnvelope;
 use super::helpers::lock_unpoisoned;
+use super::outcome::{CommandOutcomeLookup, CommandOutcomeRegistry};
 use super::snapshot::WorkerSnapshot;
 use crate::framebuffer::{
     FramebufferError, FramebufferMetadata, FramebufferSnapshot, FramebufferStore,
@@ -24,6 +25,10 @@ impl CommandTicket {
     }
 
     /// Waits for command execution completion within a caller-supplied deadline.
+    ///
+    /// A timeout only means this waiter did not observe a terminal result in
+    /// time. The command remains represented in the shared outcome registry and
+    /// may still complete afterward.
     pub fn wait(self, timeout: Duration) -> Result<(), DesktopError> {
         match self.completion.recv_timeout(timeout) {
             Ok(result) => result,
@@ -45,6 +50,7 @@ pub struct WorkerClient {
     pub(super) command_submissions_in_flight: Arc<AtomicUsize>,
     pub(super) command_queue_capacity: usize,
     pub(super) pending_overload: Arc<AtomicU64>,
+    pub(super) command_outcomes: CommandOutcomeRegistry,
     /// Out-of-band shutdown signal. Authoritative for shutdown correctness:
     /// unlike enqueueing `WorkerCommand::Shutdown`, storing into this flag
     /// can never fail because the normal bounded command queue is full.
@@ -124,8 +130,14 @@ impl WorkerClient {
                     return Err(DesktopError::CommandIdExhausted);
                 }
             };
+
+        // Outcome retention is reserved before queue admission. If every slot
+        // is occupied by unresolved work, fail before the command can execute.
+        self.command_outcomes.reserve(id)?;
+
         let (completion_tx, completion_rx) = sync_channel(1);
         let envelope = CommandEnvelope::new(
+            id,
             command,
             completion_tx,
             Arc::clone(&self.command_submissions_in_flight),
@@ -133,18 +145,27 @@ impl WorkerClient {
         // Re-check immediately before enqueueing to narrow the race between
         // a concurrent shutdown request and this submission.
         if self.shutdown_requested() {
-            return Err(DesktopError::WorkerUnavailable);
+            let error = DesktopError::WorkerUnavailable;
+            self.command_outcomes.mark_rejected(id, &error);
+            return Err(error);
         }
         if self.command_id_exhausted() {
-            return Err(DesktopError::CommandIdExhausted);
+            let error = DesktopError::CommandIdExhausted;
+            self.command_outcomes.mark_rejected(id, &error);
+            return Err(error);
         }
         before_send();
         match self.commands.try_send(envelope) {
-            Ok(()) => Ok(CommandTicket {
-                id,
-                completion: completion_rx,
-            }),
+            Ok(()) => {
+                self.command_outcomes.mark_queued(id);
+                Ok(CommandTicket {
+                    id,
+                    completion: completion_rx,
+                })
+            }
             Err(TrySendError::Full(_)) => {
+                let error = DesktopError::CommandQueueFull;
+                self.command_outcomes.mark_rejected(id, &error);
                 self.pending_overload.fetch_add(1, Ordering::Relaxed);
                 let mut current = lock_unpoisoned(&self.snapshot);
                 current.rejected_commands = current.rejected_commands.saturating_add(1);
@@ -152,9 +173,13 @@ impl WorkerClient {
                     queue_capacity = self.command_queue_capacity,
                     "worker_command_queue_saturated"
                 );
-                Err(DesktopError::CommandQueueFull)
+                Err(error)
             }
-            Err(TrySendError::Disconnected(_)) => Err(DesktopError::WorkerUnavailable),
+            Err(TrySendError::Disconnected(_)) => {
+                let error = DesktopError::WorkerUnavailable;
+                self.command_outcomes.mark_rejected(id, &error);
+                Err(error)
+            }
         }
     }
 
@@ -173,6 +198,16 @@ impl WorkerClient {
     /// Returns the configured bounded command queue capacity.
     pub const fn command_queue_capacity(&self) -> usize {
         self.command_queue_capacity
+    }
+
+    /// Returns one sanitized retained command outcome.
+    pub fn command_outcome(&self, command_id: u64) -> CommandOutcomeLookup {
+        self.command_outcomes.lookup(command_id)
+    }
+
+    /// Returns the fixed retained command-outcome capacity.
+    pub fn command_outcome_capacity(&self) -> usize {
+        self.command_outcomes.capacity()
     }
 
     /// Returns coherent framebuffer metadata without copying pixels.
