@@ -14,97 +14,99 @@ MCP implementation is **out of scope** for this TODO. The MCP phase begins only 
 
 ## R0 — Freeze the reviewed baseline and preserve safety constraints
 
-- [ ] Record starting `master` SHA `62fd4cd6c15ea705227fe943eddbaaca26fe4345` in the final evidence document.
-- [ ] Record baseline regular CI run `31265957251` as passing.
-- [ ] Record baseline Release Gates run `31265957258` as passing.
-- [ ] Re-read the companion spec before implementation and keep R1-R8 scope separate from MCP work.
-- [ ] Preserve raw VNC isolation on the internal Compose network.
-- [ ] Preserve bearer authentication on `/v1/*`.
-- [ ] Preserve secret-file based credentials and secret/payload redaction.
-- [ ] Preserve bounded worker/event channels and bounded screenshot concurrency.
-- [ ] Preserve existing fail-closed sequence-exhaustion/native-size policies.
-- [ ] Do not add automatic retries for side-effecting commands with uncertain outcomes.
-- [ ] Do not add `continue-on-error`, broad scanner allowlists, or other release-gate bypasses.
+- [x] Record starting `master` SHA `62fd4cd6c15ea705227fe943eddbaaca26fe4345` in the final evidence document.
+- [x] Record baseline regular CI run `31265957251` as passing.
+- [x] Record baseline Release Gates run `31265957258` as passing.
+- [x] Re-read the companion spec before implementation and keep R1-R8 scope separate from MCP work.
+- [x] Preserve raw VNC isolation on the internal Compose network.
+- [x] Preserve bearer authentication on `/v1/*`.
+- [x] Preserve secret-file based credentials and secret/payload redaction.
+- [x] Preserve bounded worker/event channels and bounded screenshot concurrency.
+- [x] Preserve existing fail-closed sequence-exhaustion/native-size policies.
+- [x] Do not add automatic retries for side-effecting commands with uncertain outcomes.
+- [x] Do not add `continue-on-error`, broad scanner allowlists, or other release-gate bypasses.
 
 ## R1 — Fix indeterminate command timeout semantics
 
 ### R1.1 — Map the current command lifecycle
 
-- [ ] Trace command ID allocation, `WorkerClient::submit`, `CommandTicket`, worker dequeue/execution, completion send, `WorkerHttpBackend::execute_command`, HTTP handlers, and Python client behavior.
-- [ ] Document which failures happen before command admission and which can happen after admission.
-- [ ] Confirm the exact current response status/body for successful mutations, queue-full, worker-disconnected, command failure, and command timeout.
-- [ ] Identify every caller that could currently retry a timeout as though execution were known not to have happened.
+- [x] Trace command ID allocation, `WorkerClient::submit`, `CommandTicket`, worker dequeue/execution, completion send, `WorkerHttpBackend::execute_command`, HTTP handlers, and Python client behavior.
+- [x] Document which failures happen before command admission and which can happen after admission.
+- [x] Confirm the exact current response status/body for successful mutations, queue-full, worker-disconnected, command failure, and command timeout.
+- [x] Identify every caller that could currently retry a timeout as though execution were known not to have happened.
 
 ### R1.2 — Allocate stable identity before admission
 
-- [ ] Ensure a command ID is allocated before the command can be accepted by the worker queue.
-- [ ] Preserve the same command ID through queueing, execution, completion, timeout, status lookup, diagnostics, and abnormal worker termination.
-- [ ] Keep command ID exhaustion fail-closed.
-- [ ] Add tests for ID continuity and exhaustion behavior.
+- [x] Ensure a command ID is allocated before the command can be accepted by the worker queue.
+- [x] Preserve the same command ID through queueing, execution, completion, timeout, status lookup, diagnostics, and abnormal worker termination.
+- [x] Keep command ID exhaustion fail-closed.
+- [x] Add tests for ID continuity and exhaustion behavior.
 
 ### R1.3 — Add bounded command outcome tracking
 
-- [ ] Design a process-local command outcome/status registry keyed by command ID.
-- [ ] Define explicit lifecycle states covering pending/queued, optional running, succeeded, failed, and abnormal termination/aborted.
-- [ ] Define a strict maximum capacity and/or TTL.
-- [ ] Ensure retention is long enough for a timed-out caller to inspect a realistic eventual outcome.
-- [ ] Define deterministic eviction/expiry behavior.
-- [ ] Ensure outcome entries never retain typed text, clipboard values, bearer tokens, VNC credentials, screenshots, or other sensitive command payloads.
-- [ ] Mark accepted nonterminal commands abnormal/aborted if the worker terminates before normal completion.
-- [ ] Add unit tests for every lifecycle transition.
-- [ ] Add bounded-capacity/TTL tests.
+- [x] Design a process-local command outcome/status registry keyed by command ID.
+- [x] Define explicit lifecycle states covering pending/queued, optional running, succeeded, failed, and abnormal termination/aborted.
+- [x] Define a strict maximum capacity and/or TTL.
+- [x] Ensure retention is long enough for a timed-out caller to inspect a realistic eventual outcome.
+- [x] Define deterministic eviction/expiry behavior.
+- [x] Ensure outcome entries never retain typed text, clipboard values, bearer tokens, VNC credentials, screenshots, or other sensitive command payloads.
+- [x] Mark accepted nonterminal commands abnormal/aborted if the worker terminates before normal completion.
+- [x] Add unit tests for every lifecycle transition.
+- [x] Add bounded-capacity/TTL tests.
 
 ### R1.4 — Add authenticated command-status inspection
 
-- [ ] Add a strict route such as `GET /v1/commands/{command_id}`.
-- [ ] Require the same bearer authentication policy as other `/v1/*` routes.
-- [ ] Return command ID plus lifecycle state and only sanitized diagnostic metadata.
-- [ ] Define unknown/expired command behavior explicitly.
-- [ ] Add route/schema tests for valid, unknown, expired, pending, succeeded, failed, and aborted records.
-- [ ] Add tests proving no command payload/secret is exposed.
+- [x] Add a strict route such as `GET /v1/commands/{command_id}`.
+- [x] Require the same bearer authentication policy as other `/v1/*` routes.
+- [x] Return command ID plus lifecycle state and only sanitized diagnostic metadata.
+- [x] Define unknown/expired command behavior explicitly.
+- [x] Add route/schema tests for valid, unknown, expired, pending, succeeded, failed, and aborted records.
+- [x] Add tests proving no command payload/secret is exposed.
 
 ### R1.5 — Return unknown outcome on post-admission timeout
 
-- [ ] Change timeout handling so a wait timeout after command acceptance returns the command ID.
-- [ ] Return explicit `outcome: unknown` semantics.
-- [ ] Return explicit `retry_safe: false` semantics.
-- [ ] Do not describe this condition as known command failure/non-execution.
-- [ ] Preserve known pre-admission queue-full/disconnected failures as distinct from unknown execution outcome.
-- [ ] Add a deterministic test where the HTTP/backend wait times out and the command subsequently succeeds.
-- [ ] Verify the status endpoint later reports that same command as succeeded.
-- [ ] Add a deterministic test where the timeout occurs and the worker later terminates abnormally.
+- [x] Change timeout handling so a wait timeout after command acceptance returns the command ID.
+- [x] Return explicit `outcome: unknown` semantics.
+- [x] Return explicit `retry_safe: false` semantics.
+- [x] Do not describe this condition as known command failure/non-execution.
+- [x] Preserve known pre-admission queue-full/disconnected failures as distinct from unknown execution outcome.
+- [x] Add a deterministic test where the HTTP/backend wait times out and the command subsequently succeeds.
+- [x] Verify the status endpoint later reports that same command as succeeded.
+- [x] Add a deterministic test where the timeout occurs and the worker later terminates abnormally.
 
 ### R1.6 — Correct successful mutation response semantics
 
-- [ ] Decide whether mutation endpoints are synchronous-to-terminal-result or genuinely asynchronous.
-- [ ] Preferred: keep current wait-for-result behavior and return a completion-oriented success status/body such as HTTP 200 rather than "accepted" wording.
-- [ ] If 202 is retained instead, make the endpoint genuinely asynchronous and document status polling; do not retain semantic mismatch.
-- [ ] Update every mutation handler consistently.
-- [ ] Update HTTP integration/E2E tests.
+- [x] Decide whether mutation endpoints are synchronous-to-terminal-result or genuinely asynchronous.
+- [x] Preferred: keep current wait-for-result behavior and return a completion-oriented success status/body such as HTTP 200 rather than "accepted" wording.
+- [x] If 202 is retained instead, make the endpoint genuinely asynchronous and document status polling; do not retain semantic mismatch.
+- [x] Update every mutation handler consistently.
+- [x] Update HTTP integration/E2E tests.
 
 ### R1.7 — Update Python client
 
-- [ ] Add strict parsing for command IDs and command status responses.
-- [ ] Add a command-status lookup method.
-- [ ] Represent timeout-after-acceptance with a distinct exception/result carrying command ID and `retry_safe=False` semantics.
-- [ ] Ensure the Python client never automatically retries such a mutation.
-- [ ] Add client tests for known failure vs unknown timeout vs eventual success/failure.
-- [ ] Ensure exception `repr`/messages contain no command payload or credential material.
+- [x] Add strict parsing for command IDs and command status responses.
+- [x] Add a command-status lookup method.
+- [x] Represent timeout-after-acceptance with a distinct exception/result carrying command ID and `retry_safe=False` semantics.
+- [x] Ensure the Python client never automatically retries such a mutation.
+- [x] Add client tests for known failure vs unknown timeout vs eventual success/failure.
+- [x] Ensure exception `repr`/messages contain no command payload or credential material.
 
 ### R1.8 — R1 acceptance tests
 
-- [ ] Known success before timeout.
-- [ ] Known command failure before timeout.
-- [ ] Validation failure before admission.
-- [ ] Queue full before admission.
-- [ ] Worker disconnected before admission.
-- [ ] Accepted command times out, then succeeds.
-- [ ] Accepted command times out, then fails.
-- [ ] Accepted command is aborted by worker termination.
-- [ ] Timed-out response and status record use identical command ID.
-- [ ] Timed-out mutation is explicitly non-retry-safe.
-- [ ] Registry remains bounded under sustained command volume.
-- [ ] No sensitive command data appears in status, events, metrics, or logs.
+- [x] Known success before timeout.
+- [x] Known command failure before timeout.
+- [x] Validation failure before admission.
+- [x] Queue full before admission.
+- [x] Worker disconnected before admission.
+- [x] Accepted command times out, then succeeds.
+- [x] Accepted command times out, then fails.
+- [x] Accepted command is aborted by worker termination.
+- [x] Timed-out response and status record use identical command ID.
+- [x] Timed-out mutation is explicitly non-retry-safe.
+- [x] Registry remains bounded under sustained command volume.
+- [x] No sensitive command data appears in status, events, metrics, or logs.
+
+R0/R1 evidence and the exact test/CI references supporting these checks are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R2-R15 remain intentionally open; this is not overall remediation sign-off.
 
 ## R2 — Fix scroll-wheel release state uncertainty
 
