@@ -24,14 +24,13 @@ init-hook=
 #     method per documented endpoint, including the R1 command-status lookup;
 #     splitting it only to hit a lower count would be a breaking public-API
 #     change with no behavioral benefit.
-#   - max-locals=17: a few R13 E2E check functions run a single tightly
-#     timing- or state-coupled scenario (e.g. a split-write-vs-SIGTERM race,
-#     a progressive diagnostics dump) where splitting out a helper would mean
-#     threading most of the same locals through it as parameters/returns
-#     rather than actually reducing coupling. Genuinely decomposable checks
-#     (the ones with independent phases) are split into named helpers instead
-#     of relying on this widened threshold.
+#   - max-locals=18: cohesive integration/API-contract checks may need one
+#     local per independently asserted protocol artifact (for example the R1
+#     command-status schema plus the existing response/error schemas), while
+#     a few R13 E2E checks keep tightly timing- or state-coupled scenario data
+#     together. Genuinely decomposable checks are split into named helpers
+#     instead of relying on this widened threshold.
 max-args=7
 max-attributes=11
 max-public-methods=22
-max-locals=17
+max-locals=18
