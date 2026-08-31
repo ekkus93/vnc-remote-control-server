@@ -62,6 +62,7 @@ pub struct CommandOutcomeRecord {
 }
 
 impl CommandOutcomeRecord {
+    #[cfg(test)]
     pub(crate) const fn from_parts(
         command_id: u64,
         state: CommandOutcomeState,
