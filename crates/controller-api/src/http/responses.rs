@@ -104,16 +104,29 @@ impl ApiError {
         }
     }
 
+    /// Attaches stable identity and retry semantics to an error for a command
+    /// that was already admitted to the worker. This must never be used for a
+    /// pre-admission rejection.
+    pub(super) fn with_command_context(
+        mut self,
+        command_id: u64,
+        outcome: &'static str,
+        retry_safe: bool,
+    ) -> Self {
+        self.command_id = Some(command_id);
+        self.outcome = Some(outcome);
+        self.retry_safe = Some(retry_safe);
+        self
+    }
+
     pub(super) fn command_timeout(command_id: u64, request_id: RequestId) -> Self {
-        Self {
-            status: StatusCode::GATEWAY_TIMEOUT,
-            code: "command_timeout",
-            message: "desktop command result wait timed out; execution outcome is unknown",
+        Self::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "command_timeout",
+            "desktop command result wait timed out; execution outcome is unknown",
             request_id,
-            command_id: Some(command_id),
-            outcome: Some("unknown"),
-            retry_safe: Some(false),
-        }
+        )
+        .with_command_context(command_id, "unknown", false)
     }
 
     pub(super) fn command_status_unknown(request_id: RequestId) -> Self {
