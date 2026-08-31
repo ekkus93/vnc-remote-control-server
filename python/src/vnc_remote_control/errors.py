@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TypedDict, Unpack
+
 
 class VncRemoteControlError(Exception):
     """Base exception for the Python client."""
@@ -19,6 +21,16 @@ class OptionalDependencyError(VncRemoteControlError):
     """An optional feature was requested without its required dependency."""
 
 
+class _ApiErrorContext(TypedDict, total=False):
+    """Typed optional metadata carried by structured command errors."""
+
+    code: str | None
+    request_id: str | None
+    command_id: int | None
+    outcome: str | None
+    retry_safe: bool | None
+
+
 class ApiError(VncRemoteControlError):
     """A non-success HTTP response returned by the controller."""
 
@@ -26,19 +38,14 @@ class ApiError(VncRemoteControlError):
         self,
         status_code: int,
         message: str,
-        *,
-        code: str | None = None,
-        request_id: str | None = None,
-        command_id: int | None = None,
-        outcome: str | None = None,
-        retry_safe: bool | None = None,
+        **context: Unpack[_ApiErrorContext],
     ) -> None:
         self.status_code = status_code
-        self.code = code
-        self.request_id = request_id
-        self.command_id = command_id
-        self.outcome = outcome
-        self.retry_safe = retry_safe
+        self.code = context.get("code")
+        self.request_id = context.get("request_id")
+        self.command_id = context.get("command_id")
+        self.outcome = context.get("outcome")
+        self.retry_safe = context.get("retry_safe")
         self.message = message
         super().__init__(self._format_message())
 
