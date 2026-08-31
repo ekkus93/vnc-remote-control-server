@@ -106,36 +106,38 @@ MCP implementation is **out of scope** for this TODO. The MCP phase begins only 
 - [x] Registry remains bounded under sustained command volume.
 - [x] No sensitive command data appears in status, events, metrics, or logs.
 
-R0/R1 evidence and the exact test/CI references supporting these checks are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R2-R15 remain intentionally open; this is not overall remediation sign-off.
+R0/R1 evidence and the exact test/CI references supporting these checks are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`.
 
 ## R2 — Fix scroll-wheel release state uncertainty
 
 ### R2.1 — Remove the silent second-release fallback
 
-- [ ] Locate the scroll release/retry path in `crates/controller-api/src/input.rs`.
-- [ ] Remove the ignored `Result` from the second pointer-release attempt.
-- [ ] Introduce a typed error/state for unresolved remote pointer state or equivalent fail-closed representation.
+- [x] Locate the scroll release/retry path in `crates/controller-api/src/input.rs`.
+- [x] Remove the ignored `Result` from the second pointer-release attempt.
+- [x] Introduce a typed error/state for unresolved remote pointer state or equivalent fail-closed representation.
 
 ### R2.2 — Define recovery after double release failure
 
-- [ ] Preserve the normal tracked button mask across the scroll operation.
-- [ ] If first release fails and retry succeeds, keep pointer state known and report the correct operation result.
-- [ ] If both release attempts fail, mark the current session/input state uncertain/tainted.
-- [ ] Do not execute subsequent input commands on that session as though pointer state were known.
-- [ ] Invalidate/reconnect the VNC session, or implement an equivalently safe fully tracked transient-mask policy.
-- [ ] Ensure recovery starts with clean tracked pointer/key state.
-- [ ] Emit sanitized diagnostics for the state-uncertainty transition.
+- [x] Preserve the normal tracked button mask across the scroll operation.
+- [x] If first release fails and retry succeeds, keep pointer state known and report the correct operation result.
+- [x] If both release attempts fail, mark the current session/input state uncertain/tainted.
+- [x] Do not execute subsequent input commands on that session as though pointer state were known.
+- [x] Invalidate/reconnect the VNC session, or implement an equivalently safe fully tracked transient-mask policy.
+- [x] Ensure recovery starts with clean tracked pointer/key state.
+- [x] Emit sanitized diagnostics for the state-uncertainty transition.
 
 ### R2.3 — R2 regression tests
 
-- [ ] Wheel press + release success.
-- [ ] First release fails, retry succeeds.
-- [ ] First and second releases both fail.
-- [ ] Second failure is surfaced rather than ignored.
-- [ ] Double failure prevents further input on the tainted session.
-- [ ] Recovery/reconnect restores known clean state.
-- [ ] Existing ordinary button tracking/release tests still pass.
-- [ ] Existing key tracking/release tests still pass.
+- [x] Wheel press + release success.
+- [x] First release fails, retry succeeds.
+- [x] First and second releases both fail.
+- [x] Second failure is surfaced rather than ignored.
+- [x] Double failure prevents further input on the tainted session.
+- [x] Recovery/reconnect restores known clean state.
+- [x] Existing ordinary button tracking/release tests still pass.
+- [x] Existing key tracking/release tests still pass.
+
+R2 evidence, recovery policy, regression test names, and exact implementation-head validation are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R3-R15 remain intentionally open; this is not overall remediation sign-off.
 
 ## R3 — Propagate native clipboard callback failures
 

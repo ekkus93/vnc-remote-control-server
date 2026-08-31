@@ -54,12 +54,21 @@ impl InputReleaseReport {
     }
 }
 
+/// Whether the remote pointer state is still authoritative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum PointerState {
+    #[default]
+    Known,
+    Uncertain,
+}
+
 /// Worker-owned input state.
 #[derive(Default)]
 pub(crate) struct InputController {
     button_mask: u8,
     last_coordinate: Option<Coordinate>,
     pressed_keys: Vec<KeyboardKey>,
+    pointer_state: PointerState,
 }
 
 impl InputController {
@@ -181,7 +190,9 @@ impl InputController {
         for _ in 0..delta_y.unsigned_abs() {
             sink.send_pointer(coordinate, self.button_mask | wheel_mask)?;
             if let Err(error) = sink.send_pointer(coordinate, self.button_mask) {
-                let _ = sink.send_pointer(coordinate, self.button_mask);
+                if sink.send_pointer(coordinate, self.button_mask).is_err() {
+                    self.pointer_state = PointerState::Uncertain;
+                }
                 return Err(error.into());
             }
         }
@@ -285,16 +296,22 @@ impl InputController {
         Ok(character_count)
     }
 
+    /// Returns whether a transient pointer transition left the remote state uncertain.
+    pub(crate) const fn pointer_state_uncertain(&self) -> bool {
+        matches!(self.pointer_state, PointerState::Uncertain)
+    }
+
     /// Best-effort releases every locally tracked input.
     ///
     /// Successfully released state is removed immediately. Failed state remains
     /// tracked until the caller explicitly abandons the irrecoverable session.
     pub(crate) fn release_all<S: InputSink>(&mut self, sink: &mut S) -> InputReleaseReport {
         let mut report = InputReleaseReport::default();
-        if self.button_mask != 0 {
+        if self.button_mask != 0 || self.pointer_state_uncertain() {
             match self.last_coordinate {
                 Some(coordinate) if sink.send_pointer(coordinate, 0).is_ok() => {
                     self.button_mask = 0;
+                    self.pointer_state = PointerState::Known;
                 }
                 Some(_) | None => report.pointer_release_failed = true,
             }
@@ -317,7 +334,7 @@ impl InputController {
     /// Explicitly abandons unresolved input state after a session is dropped.
     pub(crate) fn abandon(&mut self) -> InputReleaseReport {
         let report = InputReleaseReport {
-            pointer_release_failed: self.button_mask != 0,
+            pointer_release_failed: self.button_mask != 0 || self.pointer_state_uncertain(),
             key_release_failures: self.pressed_keys.len(),
         };
         self.clear();
@@ -329,6 +346,7 @@ impl InputController {
         self.button_mask = 0;
         self.last_coordinate = None;
         self.pressed_keys.clear();
+        self.pointer_state = PointerState::Known;
     }
 
     fn release_new_keys<S: InputSink>(&mut self, sink: &mut S, keys: &[KeyboardKey]) {
@@ -637,6 +655,59 @@ mod tests {
                 .is_err()
         );
         assert!(sink.events.is_empty());
+    }
+
+    #[test]
+    fn scroll_release_failure_retry_success_keeps_pointer_state_known() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on(3);
+        let point = coordinate(1, 1);
+
+        assert!(
+            controller
+                .scroll(&mut sink, point, display(), 0, 1)
+                .is_err()
+        );
+        assert!(!controller.pointer_state_uncertain());
+        assert_eq!(
+            sink.events,
+            vec![
+                Event::Pointer(point, 0),
+                Event::Pointer(point, WHEEL_UP_MASK),
+                Event::Pointer(point, 0),
+            ]
+        );
+
+        controller
+            .move_pointer(&mut sink, coordinate(2, 1), display())
+            .expect("recovered release keeps the session usable");
+    }
+
+    #[test]
+    fn scroll_double_release_failure_marks_pointer_state_uncertain_and_cleanup_recovers() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on_calls(&[3, 4]);
+        let point = coordinate(1, 1);
+
+        assert!(
+            controller
+                .scroll(&mut sink, point, display(), 0, 1)
+                .is_err()
+        );
+        assert!(controller.pointer_state_uncertain());
+        assert_eq!(
+            sink.events,
+            vec![
+                Event::Pointer(point, 0),
+                Event::Pointer(point, WHEEL_UP_MASK),
+            ]
+        );
+
+        sink.fail_on_calls.clear();
+        let report = controller.release_all(&mut sink);
+        assert!(report.is_complete());
+        assert!(!controller.pointer_state_uncertain());
+        assert_eq!(sink.events.last(), Some(&Event::Pointer(point, 0)));
     }
 
     #[test]
