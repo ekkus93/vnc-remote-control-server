@@ -185,7 +185,9 @@ fn timed_out_ticket_remains_inspectable_and_later_fails() {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
         match client.command_outcome(command_id) {
-            CommandOutcomeLookup::Found(record) if record.state() == CommandOutcomeState::Failed => {
+            CommandOutcomeLookup::Found(record)
+                if record.state() == CommandOutcomeState::Failed =>
+            {
                 assert_eq!(record.command_id(), command_id);
                 assert_eq!(record.failure(), Some("invalid_coordinate"));
                 assert!(!record.retry_safe());
