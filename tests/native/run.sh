@@ -91,6 +91,16 @@ temporary_directory="$(mktemp -d)"
 printf '%s\n' "$password" > "$temporary_directory/vnc_password"
 chmod 0444 "$temporary_directory/vnc_password"
 
+log "running native clipboard callback failure unit test"
+read -r -a vnc_cflags <<< "$(pkg-config --cflags libvncclient)"
+read -r -a vnc_libs <<< "$(pkg-config --libs libvncclient)"
+"${CC:-cc}" -std=c11 -Wall -Wextra -Werror -pedantic \
+    "${vnc_cflags[@]}" \
+    tests/native/vnc_shim_clipboard_callback_test.c \
+    -o "$temporary_directory/vnc-shim-clipboard-callback-test" \
+    "${vnc_libs[@]}"
+"$temporary_directory/vnc-shim-clipboard-callback-test"
+
 log "building native adapter proof binary"
 cargo build --locked --quiet -p libvnc-adapter --bin native-spike
 native_spike="${CARGO_TARGET_DIR:-target}/debug/native-spike"
