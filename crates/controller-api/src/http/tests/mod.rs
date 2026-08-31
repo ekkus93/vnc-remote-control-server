@@ -25,6 +25,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tower::ServiceExt;
 
 mod access_log_and_validation;
+mod command_status_matrix;
 mod commands;
 mod display_and_screenshot;
 mod docs_ui;
