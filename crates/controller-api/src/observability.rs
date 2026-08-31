@@ -306,6 +306,10 @@ impl Metrics {
         let failures = [
             WorkerFailureKind::Authentication,
             WorkerFailureKind::Configuration,
+            WorkerFailureKind::Request,
+            WorkerFailureKind::Capacity,
+            WorkerFailureKind::Unavailable,
+            WorkerFailureKind::RateLimited,
             WorkerFailureKind::Transport,
             WorkerFailureKind::Timeout,
             WorkerFailureKind::Protocol,
@@ -707,6 +711,10 @@ const fn worker_failure_name(failure: WorkerFailureKind) -> &'static str {
     match failure {
         WorkerFailureKind::Authentication => "authentication",
         WorkerFailureKind::Configuration => "configuration",
+        WorkerFailureKind::Request => "request",
+        WorkerFailureKind::Capacity => "capacity",
+        WorkerFailureKind::Unavailable => "unavailable",
+        WorkerFailureKind::RateLimited => "rate_limited",
         WorkerFailureKind::Transport => "transport",
         WorkerFailureKind::Timeout => "timeout",
         WorkerFailureKind::Protocol => "protocol",
