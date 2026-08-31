@@ -1,9 +1,9 @@
 import os
+from pathlib import Path
 import subprocess
 import tempfile
 import textwrap
 import unittest
-from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,7 +11,9 @@ SCRIPT = ROOT / "desktop" / "configure-xfce-session.sh"
 
 
 class XfceStartupPolicyTests(unittest.TestCase):
-    def run_scenario(self, scenario: str, *, live_process: bool = True) -> subprocess.CompletedProcess[str]:
+    def run_scenario(
+        self, scenario: str, *, live_process: bool = True
+    ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
             state = directory / "state"
