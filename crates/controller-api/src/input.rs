@@ -663,7 +663,11 @@ mod tests {
         let mut sink = RecordingSink::fail_on(3);
         let point = coordinate(1, 1);
 
-        assert!(controller.scroll(&mut sink, point, display(), 0, 1).is_err());
+        assert!(
+            controller
+                .scroll(&mut sink, point, display(), 0, 1)
+                .is_err()
+        );
         assert!(!controller.pointer_state_uncertain());
         assert_eq!(
             sink.events,
@@ -685,7 +689,11 @@ mod tests {
         let mut sink = RecordingSink::fail_on_calls(&[3, 4]);
         let point = coordinate(1, 1);
 
-        assert!(controller.scroll(&mut sink, point, display(), 0, 1).is_err());
+        assert!(
+            controller
+                .scroll(&mut sink, point, display(), 0, 1)
+                .is_err()
+        );
         assert!(controller.pointer_state_uncertain());
         assert_eq!(
             sink.events,
