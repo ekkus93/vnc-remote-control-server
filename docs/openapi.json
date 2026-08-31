@@ -3,7 +3,7 @@
   "info": {
     "title": "VNC Remote Control Server API",
     "version": "0.1.0",
-    "description": "Authenticated HTTP API for observing and controlling one project-owned Debian desktop. All /v1 routes require one process-wide bearer token loaded from a secret file. Command endpoints use bounded asynchronous HTTP 202 semantics: validation, worker execution, and worker acknowledgement complete before the response, but target application semantics are not guaranteed. The HTTP/1 runtime may close incomplete headers at the transport level and may return empty 400, 408, or 413 responses before Axum routing.",
+    "description": "Authenticated HTTP API for observing and controlling one project-owned Debian desktop. All /v1 routes require one process-wide bearer token loaded from a secret file. Side-effecting command endpoints synchronously wait for the bounded worker to reach a terminal result: successful commands return HTTP 200 with status succeeded. If a command was admitted but the HTTP wait times out, the response preserves its command_id, reports outcome unknown and retry_safe false, and the caller must inspect GET /v1/commands/{command_id} rather than blindly retrying the mutation. The HTTP/1 runtime may close incomplete headers at the transport level and may return empty 400, 408, or 413 responses before Axum routing.",
     "license": {
       "name": "MIT"
     }
@@ -21,7 +21,7 @@
     },
     {
       "name": "Observation",
-      "description": "Status, display, screenshots, clipboard snapshots, metrics, and events."
+      "description": "Status, command outcomes, display, screenshots, clipboard snapshots, metrics, and events."
     },
     {
       "name": "Pointer",
@@ -256,7 +256,7 @@
             "$ref": "#/components/responses/WorkerUnavailable"
           },
           "504": {
-            "$ref": "#/components/responses/CommandTimeout"
+            "$ref": "#/components/responses/ScreenshotTimeout"
           }
         },
         "tags": [
@@ -338,6 +338,59 @@
         ]
       }
     },
+    "/v1/commands/{command_id}": {
+      "get": {
+        "summary": "Inspect a retained command outcome",
+        "operationId": "getCommandStatus",
+        "description": "Returns only sanitized process-local command lifecycle metadata. Use this endpoint after a post-admission command timeout instead of blindly retrying the original mutation. Terminal records are retained in a bounded registry and may later expire.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "command_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained sanitized command lifecycle state.",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/XRequestId"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/CommandStatusUnknown"
+          },
+          "410": {
+            "$ref": "#/components/responses/CommandStatusExpired"
+          }
+        },
+        "tags": [
+          "Observation"
+        ]
+      }
+    },
     "/v1/pointer/move": {
       "post": {
         "summary": "Move pointer",
@@ -348,8 +401,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -358,11 +411,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -424,8 +477,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -434,11 +487,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -502,8 +555,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -512,11 +565,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -579,8 +632,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -589,11 +642,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -657,8 +710,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -667,11 +720,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -734,8 +787,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -744,11 +797,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -810,8 +863,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -820,11 +873,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -888,8 +941,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -898,11 +951,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -1009,8 +1062,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -1019,11 +1072,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -1084,8 +1137,8 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "The command was fully validated, executed by the bounded worker, and acknowledged within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
+          "200": {
+            "description": "The command was fully validated, executed by the bounded worker, and reached a known successful terminal result within the configured deadline. This does not guarantee application-level semantic handling inside the desktop.",
             "headers": {
               "X-Request-ID": {
                 "$ref": "#/components/headers/XRequestId"
@@ -1094,11 +1147,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CommandAcceptedResponse"
+                  "$ref": "#/components/schemas/CommandResponse"
                 },
                 "example": {
                   "command_id": 17,
-                  "status": "accepted"
+                  "status": "succeeded"
                 }
               }
             }
@@ -1308,7 +1361,7 @@
           }
         }
       },
-      "CommandAcceptedResponse": {
+      "CommandResponse": {
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -1318,11 +1371,52 @@
         "properties": {
           "command_id": {
             "type": "integer",
+            "format": "uint64",
             "minimum": 1
           },
           "status": {
             "type": "string",
-            "const": "accepted"
+            "const": "succeeded"
+          }
+        }
+      },
+      "CommandStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "command_id",
+          "status",
+          "failure",
+          "retry_safe"
+        ],
+        "properties": {
+          "command_id": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "aborted",
+              "rejected"
+            ]
+          },
+          "failure": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized bounded failure classification. Command payloads and credentials are never retained in status records."
+          },
+          "retry_safe": {
+            "type": "boolean",
+            "description": "False for every command that has been admitted to the worker; a timed-out accepted mutation must not be blindly retried."
           }
         }
       },
@@ -1393,10 +1487,13 @@
               "invalid_clipboard",
               "scroll_too_large",
               "command_queue_full",
+              "command_outcome_capacity_full",
               "command_id_exhausted",
               "worker_unavailable",
               "clipboard_unavailable",
               "command_timeout",
+              "command_status_unknown",
+              "command_status_expired",
               "reconnect_rate_limited",
               "invalid_request",
               "desktop_operation_failed"
@@ -1407,6 +1504,24 @@
           },
           "request_id": {
             "type": "string"
+          },
+          "command_id": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1,
+            "description": "Present when the command was already admitted and its stable process-local identity must be preserved."
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "unknown"
+            ],
+            "description": "Known terminal failure or indeterminate post-admission timeout outcome."
+          },
+          "retry_safe": {
+            "type": "boolean",
+            "description": "False for errors involving an already-admitted command."
           }
         }
       },
@@ -1765,7 +1880,7 @@
         }
       },
       "DesktopOperationFailed": {
-        "description": "The VNC transport, authentication, protocol, or native operation failed.",
+        "description": "An admitted command reached a known failed terminal result. The error includes the stable command_id, outcome failed, and retry_safe false; payloads and credentials are never exposed.",
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/XRequestId"
@@ -1780,7 +1895,7 @@
         }
       },
       "WorkerUnavailable": {
-        "description": "Worker, framebuffer, clipboard, queue, screenshot capacity, readiness, or shutdown state prevents the operation.",
+        "description": "Worker, framebuffer, clipboard, queue, command-outcome capacity, screenshot capacity, readiness, or shutdown state prevents the operation before a successful terminal result can be returned.",
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/XRequestId"
@@ -1795,7 +1910,52 @@
         }
       },
       "CommandTimeout": {
-        "description": "Worker acknowledgement or screenshot encoding exceeded its configured deadline.",
+        "description": "The command was already admitted but its terminal result was not observed before the configured wait deadline. Execution outcome is unknown. The error preserves command_id, reports outcome unknown and retry_safe false, and callers must inspect GET /v1/commands/{command_id} rather than blindly retrying the mutation.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ScreenshotTimeout": {
+        "description": "Screenshot encoding exceeded its configured deadline. This is not a side-effecting command outcome and does not carry command retry semantics.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "CommandStatusUnknown": {
+        "description": "The command identifier is not known to this process instance.",
+        "headers": {
+          "X-Request-ID": {
+            "$ref": "#/components/headers/XRequestId"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "CommandStatusExpired": {
+        "description": "The bounded registry once retained this command identifier but its terminal status record has been evicted.",
         "headers": {
           "X-Request-ID": {
             "$ref": "#/components/headers/XRequestId"
