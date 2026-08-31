@@ -15,7 +15,7 @@ from .client import VncClient
 from .errors import VncRemoteControlError
 from .models import (
     ClipboardResponse,
-    CommandAcceptedResponse,
+    CommandResponse,
     DisplayResponse,
     Event,
     HealthResponse,
@@ -55,40 +55,40 @@ class _DemoClient(Protocol):
     def get_screenshot(self, *, etag: str | None = None) -> ScreenshotResponse:
         """Fetch the current screenshot."""
 
-    def move_pointer(self, x: int, y: int) -> CommandAcceptedResponse:
+    def move_pointer(self, x: int, y: int) -> CommandResponse:
         """Move the pointer."""
 
     def click_pointer(
         self, x: int, y: int, button: MouseButton = "left"
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Click a pointer button."""
 
     def double_click_pointer(
         self, x: int, y: int, button: MouseButton = "left", *, interval_ms: int = 100
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Double-click a pointer button."""
 
     def scroll_pointer(
         self, x: int, y: int, delta_y: int, *, delta_x: int = 0
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Scroll at a pointer location."""
 
-    def set_keyboard_key(self, key: str, action: KeyAction) -> CommandAcceptedResponse:
+    def set_keyboard_key(self, key: str, action: KeyAction) -> CommandResponse:
         """Send one key down/up event."""
 
-    def send_keyboard_chord(self, keys: Sequence[str]) -> CommandAcceptedResponse:
+    def send_keyboard_chord(self, keys: Sequence[str]) -> CommandResponse:
         """Send a key chord."""
 
-    def type_keyboard_text(self, text: str) -> CommandAcceptedResponse:
+    def type_keyboard_text(self, text: str) -> CommandResponse:
         """Type text."""
 
     def get_clipboard(self) -> ClipboardResponse:
         """Fetch the clipboard."""
 
-    def set_clipboard(self, text: str) -> CommandAcceptedResponse:
+    def set_clipboard(self, text: str) -> CommandResponse:
         """Set the clipboard."""
 
-    def request_reconnect(self) -> CommandAcceptedResponse:
+    def request_reconnect(self) -> CommandResponse:
         """Request a VNC reconnect."""
 
     def iter_events(self) -> Iterator[Event]:
