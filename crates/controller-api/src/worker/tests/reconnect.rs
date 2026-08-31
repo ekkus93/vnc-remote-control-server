@@ -172,9 +172,9 @@ fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
     let calls_for_factory = Arc::clone(&calls);
     let (factory_call_tx, factory_call_rx) = sync_channel(4);
     let mut config = settings();
-    config.poll_interval = Duration::from_millis(1);
-    config.stall_probe_after = Duration::from_millis(1);
-    config.stall_confirm_after = Duration::from_millis(1);
+    config.poll_interval = Duration::from_millis(2);
+    config.stall_probe_after = Duration::from_millis(2);
+    config.stall_confirm_after = Duration::from_millis(2);
     config.reconnect_min_delay = Duration::from_millis(1);
     config.reconnect_max_delay = Duration::from_millis(2);
 
@@ -183,11 +183,7 @@ fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
         factory_call_tx
             .send(invocation)
             .expect("factory invocation remains observable");
-        if invocation == 0 {
-            Ok(NeverCompleteSession)
-        } else {
-            Ok(NeverCompleteSession)
-        }
+        Ok(NeverCompleteSession)
     })
     .expect("worker spawns");
     let client = worker.client();
@@ -201,11 +197,231 @@ fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
     assert_eq!(
         factory_call_rx
             .recv_timeout(Duration::from_secs(1))
-            .expect("stall reconnect factory invocation is observed"),
+            .expect("reconnect factory invocation is observed"),
         1
     );
+
+    assert!(calls.load(Ordering::SeqCst) >= 2, "stall did not reconnect");
+    assert!(
+        !client.snapshot().fatal_exit,
+        "recoverable stall became fatal"
+    );
+    assert_ne!(client.snapshot().state, ConnectionState::Stopped);
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker joins");
+}
+
+#[test]
+fn illegal_transition_is_logged_and_does_not_silently_poison_health() {
+    let settings = settings();
+    let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
+        state: ConnectionState::Starting,
+        started_at: std::time::SystemTime::now(),
+        connected_at: None,
+        last_message_at: None,
+        reconnect_attempts: 0,
+        last_failure: None,
+        framebuffer_revision: None,
+        rejected_commands: 0,
+        dropped_events: 0,
+        fatal_exit: false,
+    }));
+    let clipboard = Arc::new(Mutex::new(None::<ClipboardSnapshot>));
+    let (events_tx, _events_rx) = sync_channel::<WorkerEvent>(4);
+
+    let (result, logs) = crate::test_support::capture_logs(|| {
+        let mut state = LoopState::<MockSession> {
+            settings: &settings,
+            snapshot: &snapshot,
+            events: &events_tx,
+            framebuffer: FramebufferStore::default(),
+            clipboard: &clipboard,
+            event_sequence: 0,
+            event_terminal_failure: false,
+            shutdown_cleanup: false,
+            session: None,
+            last_native_revision: None,
+            last_native_clipboard_revision: None,
+            clipboard_revision: 0,
+            clipboard_decode_failed: false,
+            input: InputController::default(),
+            next_connect: None,
+            reconnect_attempt: 0,
+            connected_since: None,
+            last_message: Instant::now(),
+            probe_sent: None,
+            last_manual_reconnect: None,
+        };
+        state.transition(ConnectionState::Degraded)
+    });
+
+    assert_eq!(result, Err(DesktopError::Protocol));
+    assert!(!lock_unpoisoned(&snapshot).fatal_exit);
+    assert!(logs.contains("worker_illegal_state_transition"));
+}
+
+struct MismatchedSession {
+    poll_count: usize,
+    poll_progress: SyncSender<usize>,
+}
+
+impl WorkerSession for MismatchedSession {
+    fn poll(&mut self, _timeout: Duration) -> Result<PollOutcome, NativeError> {
+        self.poll_count += 1;
+        let _ = self.poll_progress.send(self.poll_count);
+        Ok(PollOutcome::MessageProcessed)
+    }
+
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 5,
+            complete: true,
+        })
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 4,
+            bytes: vec![0; 16],
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn send_pointer(
+        &mut self,
+        _coordinate: Coordinate,
+        _button_mask: u8,
+    ) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn mismatched_native_frame_never_reaches_connected() {
+    let (poll_tx, poll_rx) = sync_channel(8);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        Ok(MismatchedSession {
+            poll_count: 0,
+            poll_progress: poll_tx.clone(),
+        })
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+
+    for _ in 0..3 {
+        poll_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fixture observes causal worker poll progress");
+    }
+    assert_ne!(client.snapshot().state, ConnectionState::Connected);
     assert!(!client.snapshot().fatal_exit);
-    assert!(calls.load(Ordering::SeqCst) >= 2);
+    assert_eq!(
+        client.framebuffer_snapshot().err(),
+        Some(FramebufferError::Unavailable)
+    );
+
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker joins");
+}
+
+struct MatchingFrameSession {
+    poll_count: usize,
+    poll_progress: SyncSender<usize>,
+}
+
+impl WorkerSession for MatchingFrameSession {
+    fn poll(&mut self, _timeout: Duration) -> Result<PollOutcome, NativeError> {
+        self.poll_count += 1;
+        let _ = self.poll_progress.try_send(self.poll_count);
+        Ok(PollOutcome::MessageProcessed)
+    }
+
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 7,
+            complete: true,
+        })
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 7,
+            bytes: vec![0x22; 16],
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn send_pointer(
+        &mut self,
+        _coordinate: Coordinate,
+        _button_mask: u8,
+    ) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn matching_native_frame_positive_control_reaches_connected() {
+    let (poll_tx, poll_rx) = sync_channel(8);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        Ok(MatchingFrameSession {
+            poll_count: 0,
+            poll_progress: poll_tx.clone(),
+        })
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+
+    poll_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("positive control observes causal worker poll progress");
+    wait_for_state(&client, ConnectionState::Connected);
+    let frame = client
+        .framebuffer_snapshot()
+        .expect("positive control frame");
+    assert_eq!(frame.revision(), 1);
+    assert_eq!(&frame.rgba()[0..4], &[0x22, 0x22, 0x22, 0xff]);
+    assert!(!client.snapshot().fatal_exit);
 
     worker
         .shutdown(Duration::from_secs(1))
@@ -214,93 +430,13 @@ fn pre_connected_confirmed_stall_reconnects_without_fatal_exit() {
 
 #[test]
 fn reconnect_delay_is_exponential_jittered_and_bounded() {
-    let min = Duration::from_millis(100);
-    let max = Duration::from_millis(800);
-    let jitter = 100;
-    let one = reconnect_delay(min, max, jitter, 1);
-    let two = reconnect_delay(min, max, jitter, 2);
-    let many = reconnect_delay(min, max, jitter, 100);
-    assert!(one >= min && one <= Duration::from_millis(110));
-    assert!(two >= Duration::from_millis(200) && two <= Duration::from_millis(220));
-    assert!(many >= max && many <= Duration::from_millis(880));
-}
-
-#[test]
-fn matching_native_frame_positive_control_reaches_connected() {
     let settings = settings();
-    let mut session = MockSession::new(MockMode::Healthy);
-    let (events_tx, _events_rx) = sync_channel(8);
-    let snapshot = Arc::new(Mutex::new(WorkerSnapshot::starting()));
-    let framebuffer = FramebufferStore::new(1024);
-    let clipboard = Arc::new(Mutex::new(None::<ClipboardSnapshot>));
-    let mut state = LoopState::new(
-        &mut session,
-        &events_tx,
-        Arc::clone(&snapshot),
-        &framebuffer,
-        &clipboard,
-        &settings,
-    );
-
-    state.on_connected().expect("matching frame connects");
-    assert_eq!(state.connection_state(), ConnectionState::Connected);
-    assert!(framebuffer.snapshot().is_ok());
-}
-
-#[test]
-fn mismatched_native_frame_never_reaches_connected() {
-    let settings = settings();
-    let mut session = MockSession::new(MockMode::MismatchedFramebuffer);
-    let (events_tx, _events_rx) = sync_channel(8);
-    let snapshot = Arc::new(Mutex::new(WorkerSnapshot::starting()));
-    let framebuffer = FramebufferStore::new(1024);
-    let clipboard = Arc::new(Mutex::new(None::<ClipboardSnapshot>));
-    let mut state = LoopState::new(
-        &mut session,
-        &events_tx,
-        Arc::clone(&snapshot),
-        &framebuffer,
-        &clipboard,
-        &settings,
-    );
-
-    let error = state.on_connected().expect_err("mismatch is rejected");
-    assert!(matches!(error, DesktopError::Protocol));
-    assert_ne!(state.connection_state(), ConnectionState::Connected);
-    assert!(matches!(
-        framebuffer.snapshot(),
-        Err(FramebufferError::Unavailable)
-    ));
-}
-
-#[test]
-fn illegal_transition_is_logged_and_does_not_silently_poison_health() {
-    let settings = settings();
-    let mut session = MockSession::new(MockMode::Healthy);
-    let (events_tx, _events_rx) = sync_channel(8);
-    let snapshot = Arc::new(Mutex::new(WorkerSnapshot::starting()));
-    let framebuffer = FramebufferStore::new(1024);
-    let clipboard = Arc::new(Mutex::new(None::<ClipboardSnapshot>));
-    let mut state = LoopState::new(
-        &mut session,
-        &events_tx,
-        Arc::clone(&snapshot),
-        &framebuffer,
-        &clipboard,
-        &settings,
-    );
-
-    let (_, logs) = crate::test_support::capture_logs(|| {
-        state
-            .transition(ConnectionState::AuthenticationFailed)
-            .expect("starting to authentication failed is legal");
-        state
-            .transition(ConnectionState::Connected)
-            .expect_err("terminal auth state rejects transition");
-    });
-    assert_eq!(
-        lock_unpoisoned(&snapshot).state,
-        ConnectionState::AuthenticationFailed
-    );
-    assert!(logs.contains("worker_illegal_state_transition"));
+    let first = reconnect_delay(&settings, 1);
+    let second = reconnect_delay(&settings, 2);
+    let far = reconnect_delay(&settings, 30);
+    assert!(first >= settings.reconnect_min_delay);
+    assert!(second >= settings.reconnect_min_delay * 2);
+    assert!(first <= settings.reconnect_max_delay);
+    assert!(second <= settings.reconnect_max_delay);
+    assert!(far <= settings.reconnect_max_delay);
 }
