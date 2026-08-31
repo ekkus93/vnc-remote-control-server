@@ -12,7 +12,12 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
-from vnc_remote_control import ApiError, ProtocolError, VncClient
+from vnc_remote_control import (
+    ApiError,
+    CommandOutcomeUnknownError,
+    ProtocolError,
+    VncClient,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
@@ -95,13 +100,19 @@ def _routing_http_open() -> tuple[Any, list[tuple[Any, float]]]:
             return FakeResponse(
                 200, b'{"text":"clipboard","revision":8,"updated_at_unix_ms":5}', headers
             )
+        if path == "/v1/commands/1":
+            return FakeResponse(
+                200,
+                b'{"command_id":1,"status":"succeeded","failure":null,"retry_safe":false}',
+                headers,
+            )
         if path in _FIXED_RESPONSE_BODIES:
             return FakeResponse(200, _FIXED_RESPONSE_BODIES[path], headers)
 
         next_command_id += 1
         return FakeResponse(
-            202,
-            json.dumps({"command_id": next_command_id, "status": "accepted"}).encode(),
+            200,
+            json.dumps({"command_id": next_command_id, "status": "succeeded"}).encode(),
             headers,
         )
 
@@ -181,7 +192,8 @@ class PythonClientTests(unittest.TestCase):
         self.assertEqual(screenshot.etag, '"process-7"')
         self.assertFalse(screenshot.not_modified)
         self.assertEqual(client.get_metrics(), "vrc_ready 1\n")
-        client.move_pointer(10, 20)
+        self.assertEqual(client.get_command_status(1).status, "succeeded")
+        self.assertEqual(client.move_pointer(10, 20).status, "succeeded")
         client.set_pointer_button(10, 20, "left", True)
         client.click_pointer(10, 20)
         client.double_click_pointer(10, 20, interval_ms=90)
@@ -203,6 +215,7 @@ class PythonClientTests(unittest.TestCase):
             ("GET", "/v1/display"),
             ("GET", "/v1/screenshot.png"),
             ("GET", "/v1/metrics"),
+            ("GET", "/v1/commands/1"),
             ("POST", "/v1/pointer/move"),
             ("POST", "/v1/pointer/button"),
             ("POST", "/v1/pointer/click"),
@@ -310,15 +323,143 @@ class PythonClientTests(unittest.TestCase):
             client.get_clipboard()
 
         client = _single_json_client(
-            "/v1/pointer/move", {"command_id": True, "status": "accepted"}, status=202
+            "/v1/pointer/move", {"command_id": True, "status": "succeeded"}
         )
         with self.assertRaises(ProtocolError):
             client.move_pointer(1, 1)
         client = _single_json_client(
-            "/v1/pointer/move", {"command_id": 1, "status": "queued"}, status=202
+            "/v1/pointer/move", {"command_id": 1, "status": "queued"}
         )
         with self.assertRaises(ProtocolError):
             client.move_pointer(1, 1)
+
+        client = _single_json_client(
+            "/v1/commands/7",
+            {"command_id": 7, "status": "mystery", "failure": None, "retry_safe": False},
+        )
+        with self.assertRaises(ProtocolError):
+            client.get_command_status(7)
+        client = _single_json_client(
+            "/v1/commands/7",
+            {"command_id": 8, "status": "succeeded", "failure": None, "retry_safe": False},
+        )
+        with self.assertRaises(ProtocolError):
+            client.get_command_status(7)
+
+    def test_command_timeout_is_distinct_non_retryable_error(self) -> None:
+        """An accepted command timeout preserves identity and forbids blind retry."""
+        calls = 0
+        body = json.dumps(
+            {
+                "error": {
+                    "code": "command_timeout",
+                    "message": "desktop command result wait timed out; execution outcome is unknown",
+                    "request_id": "timeout-request",
+                    "command_id": 77,
+                    "outcome": "unknown",
+                    "retry_safe": False,
+                }
+            }
+        ).encode()
+
+        def open_504(request: Any, *, timeout: float) -> FakeResponse:
+            nonlocal calls
+            del timeout
+            calls += 1
+            raise HTTPError(
+                request.full_url,
+                504,
+                "Gateway Timeout",
+                Message(),
+                io.BytesIO(body),
+            )
+
+        client = VncClient("http://controller", "token", _http_open=open_504)
+        with self.assertRaises(CommandOutcomeUnknownError) as captured:
+            client.click_pointer(1, 1)
+        error = captured.exception
+        self.assertEqual(error.command_id, 77)
+        self.assertEqual(error.outcome, "unknown")
+        self.assertFalse(error.retry_safe)
+        self.assertEqual(error.request_id, "timeout-request")
+        self.assertEqual(calls, 1, "mutation timeout must never auto-retry")
+
+    def test_accepted_known_failure_preserves_command_identity(self) -> None:
+        """Known post-admission failure remains distinguishable from rejection."""
+        body = json.dumps(
+            {
+                "error": {
+                    "code": "desktop_operation_failed",
+                    "message": "desktop operation failed",
+                    "request_id": "failure-request",
+                    "command_id": 41,
+                    "outcome": "failed",
+                    "retry_safe": False,
+                }
+            }
+        ).encode()
+
+        def open_502(request: Any, *, timeout: float) -> FakeResponse:
+            del timeout
+            raise HTTPError(
+                request.full_url,
+                502,
+                "Bad Gateway",
+                Message(),
+                io.BytesIO(body),
+            )
+
+        client = VncClient("http://controller", "token", _http_open=open_502)
+        with self.assertRaises(ApiError) as captured:
+            client.request_reconnect()
+        error = captured.exception
+        self.assertEqual(error.command_id, 41)
+        self.assertEqual(error.outcome, "failed")
+        self.assertFalse(error.retry_safe)
+
+    def test_command_timeout_context_is_fail_closed(self) -> None:
+        """Missing/inconsistent timeout metadata is a protocol error, never generic timeout."""
+        malformed = (
+            {
+                "code": "command_timeout",
+                "message": "unknown outcome",
+                "request_id": "id",
+            },
+            {
+                "code": "command_timeout",
+                "message": "unknown outcome",
+                "request_id": "id",
+                "command_id": 7,
+                "outcome": "failed",
+                "retry_safe": False,
+            },
+            {
+                "code": "command_timeout",
+                "message": "unknown outcome",
+                "request_id": "id",
+                "command_id": 7,
+                "outcome": "unknown",
+                "retry_safe": True,
+            },
+        )
+
+        for error_body in malformed:
+            with self.subTest(error_body=error_body):
+                body = json.dumps({"error": error_body}).encode()
+
+                def open_504(request: Any, *, timeout: float) -> FakeResponse:
+                    del timeout
+                    raise HTTPError(
+                        request.full_url,
+                        504,
+                        "Gateway Timeout",
+                        Message(),
+                        io.BytesIO(body),
+                    )
+
+                client = VncClient("http://controller", "token", _http_open=open_504)
+                with self.assertRaises(ProtocolError):
+                    client.move_pointer(1, 1)
 
     def test_nonempty_malformed_api_error_is_protocol_error(self) -> None:
         """Malformed structured error bodies are not silently downgraded."""
