@@ -111,9 +111,7 @@ impl HttpBackend for WorkerHttpBackend {
         let command_id = ticket.id();
         match ticket.wait(timeout) {
             Ok(()) => Ok(command_id),
-            Err(DesktopError::Timeout) => {
-                Err(CommandExecutionError::OutcomeUnknown { command_id })
-            }
+            Err(DesktopError::Timeout) => Err(CommandExecutionError::OutcomeUnknown { command_id }),
             Err(error) => Err(CommandExecutionError::Failed { command_id, error }),
         }
     }
