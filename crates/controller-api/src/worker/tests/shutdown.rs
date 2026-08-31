@@ -147,9 +147,100 @@ fn timed_out_ticket_remains_inspectable_and_later_succeeds() {
         }
     }
 
+    entered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker re-enters controlled poll after command completion");
+    client.request_shutdown();
+    release_tx.send(()).expect("release shutdown poll");
     worker
         .shutdown(Duration::from_secs(1))
         .expect("worker shuts down");
+}
+
+#[test]
+fn timed_out_ticket_remains_inspectable_and_later_fails() {
+    let (control, entered_rx, release_tx) = ControlledPoll::new();
+    let factory_control = Arc::clone(&control);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        Ok(ControlledPollSession::new(Arc::clone(&factory_control)))
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+    wait_for_state(&client, ConnectionState::Connected);
+    entered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker enters controlled poll");
+
+    let ticket = client
+        .submit(WorkerCommand::SetButton {
+            coordinate: Coordinate { x: 5000, y: 5000 },
+            button: MouseButton::Left,
+            pressed: true,
+        })
+        .expect("invalid-coordinate command is admitted before execution");
+    let command_id = ticket.id();
+    assert_eq!(ticket.wait(Duration::ZERO), Err(DesktopError::Timeout));
+
+    release_tx.send(()).expect("release controlled poll");
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match client.command_outcome(command_id) {
+            CommandOutcomeLookup::Found(record) if record.state() == CommandOutcomeState::Failed => {
+                assert_eq!(record.command_id(), command_id);
+                assert_eq!(record.failure(), Some("invalid_coordinate"));
+                assert!(!record.retry_safe());
+                break;
+            }
+            CommandOutcomeLookup::Found(_) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            other => panic!("command did not converge to failed: {other:?}"),
+        }
+    }
+
+    entered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker re-enters controlled poll after failed command");
+    client.request_shutdown();
+    release_tx.send(()).expect("release shutdown poll");
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker shuts down");
+}
+
+#[test]
+fn timed_out_accepted_command_is_aborted_when_worker_terminates() {
+    let (control, entered_rx, release_tx) = ControlledPoll::new();
+    let factory_control = Arc::clone(&control);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        Ok(ControlledPollSession::new(Arc::clone(&factory_control)))
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+    wait_for_state(&client, ConnectionState::Connected);
+    entered_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("worker enters controlled poll");
+
+    let ticket = client
+        .submit(WorkerCommand::RequestFullRefresh)
+        .expect("command queues while worker is blocked");
+    let command_id = ticket.id();
+    assert_eq!(ticket.wait(Duration::ZERO), Err(DesktopError::Timeout));
+
+    client.request_shutdown();
+    release_tx.send(()).expect("release controlled poll");
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker terminates");
+
+    let CommandOutcomeLookup::Found(record) = client.command_outcome(command_id) else {
+        panic!("terminated accepted command must remain inspectable");
+    };
+    assert_eq!(record.command_id(), command_id);
+    assert_eq!(record.state(), CommandOutcomeState::Aborted);
+    assert_eq!(record.failure(), Some("worker_unavailable"));
+    assert!(!record.retry_safe());
 }
 
 #[test]
