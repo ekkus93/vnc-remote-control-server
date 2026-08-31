@@ -55,9 +55,7 @@ pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
         | NativeError::ClipboardAllocationFailed
         | NativeError::ClipboardStateInvalid
         | NativeError::ClipboardRevisionExhausted
-        | NativeError::NativeFailure { .. } => {
-            WorkerFailureKind::Native
-        }
+        | NativeError::NativeFailure { .. } => WorkerFailureKind::Native,
     }
 }
 
