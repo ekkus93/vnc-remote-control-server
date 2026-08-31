@@ -149,3 +149,184 @@ fn shutdown_releases_tracked_buttons_and_keys() {
         ]
     );
 }
+
+struct ScrollRecoverySession {
+    generation: usize,
+    events: Arc<Mutex<Vec<(usize, InputEvent)>>>,
+    pointer_calls: usize,
+    fail_uncertain_pointer_recovery: bool,
+}
+
+impl ScrollRecoverySession {
+    fn new(
+        generation: usize,
+        events: Arc<Mutex<Vec<(usize, InputEvent)>>>,
+        fail_uncertain_pointer_recovery: bool,
+    ) -> Self {
+        Self {
+            generation,
+            events,
+            pointer_calls: 0,
+            fail_uncertain_pointer_recovery,
+        }
+    }
+
+    fn record_pointer(
+        &mut self,
+        coordinate: Coordinate,
+        button_mask: u8,
+    ) -> Result<(), NativeError> {
+        self.pointer_calls += 1;
+        if self.fail_uncertain_pointer_recovery && matches!(self.pointer_calls, 3 | 4 | 5) {
+            return Err(NativeError::NativeFailure {
+                message: "test-only scroll release failure".to_owned(),
+            });
+        }
+        lock_unpoisoned(&self.events).push((
+            self.generation,
+            InputEvent::Pointer(coordinate, button_mask),
+        ));
+        Ok(())
+    }
+
+    fn record(&mut self, event: InputEvent) {
+        lock_unpoisoned(&self.events).push((self.generation, event));
+    }
+}
+
+impl WorkerSession for ScrollRecoverySession {
+    fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
+        thread::sleep(timeout);
+        Ok(PollOutcome::MessageProcessed)
+    }
+
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 1,
+            complete: true,
+        })
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 1,
+            bytes: vec![1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0],
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn send_pointer(&mut self, coordinate: Coordinate, button_mask: u8) -> Result<(), NativeError> {
+        self.record_pointer(coordinate, button_mask)
+    }
+
+    fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
+        self.record(InputEvent::Key(key, pressed));
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, text: &str) -> Result<(), NativeError> {
+        self.record(InputEvent::Clipboard(text.to_owned()));
+        Ok(())
+    }
+}
+
+#[test]
+fn scroll_double_release_failure_quarantines_session_and_reconnects_cleanly() {
+    let events = Arc::new(Mutex::new(Vec::<(usize, InputEvent)>::new()));
+    let factory_events = Arc::clone(&events);
+    let generations = Arc::new(AtomicUsize::new(0));
+    let factory_generations = Arc::clone(&generations);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        let generation = factory_generations.fetch_add(1, Ordering::AcqRel) + 1;
+        Ok(ScrollRecoverySession::new(
+            generation,
+            Arc::clone(&factory_events),
+            generation == 1,
+        ))
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+    wait_for_state(&client, ConnectionState::Connected);
+    let point = Coordinate { x: 1, y: 1 };
+
+    client
+        .submit(WorkerCommand::SetKey {
+            key: KeyboardKey::CtrlLeft,
+            pressed: true,
+        })
+        .expect("pre-recovery key accepted")
+        .wait(Duration::from_secs(1))
+        .expect("pre-recovery key down");
+
+    client
+        .submit(WorkerCommand::Scroll {
+            coordinate: point,
+            delta_x: 0,
+            delta_y: 1,
+        })
+        .expect("scroll accepted")
+        .wait(Duration::from_secs(1))
+        .expect_err("double release failure must reach caller");
+
+    let reconnect_deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < reconnect_deadline {
+        if generations.load(Ordering::Acquire) >= 2
+            && client.snapshot().state == ConnectionState::Connected
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(generations.load(Ordering::Acquire) >= 2);
+    assert_eq!(client.snapshot().state, ConnectionState::Connected);
+
+    client
+        .submit(WorkerCommand::MovePointer { coordinate: point })
+        .expect("post-reconnect pointer move accepted")
+        .wait(Duration::from_secs(1))
+        .expect("fresh session accepts pointer input");
+    client
+        .submit(WorkerCommand::SetKey {
+            key: KeyboardKey::CtrlLeft,
+            pressed: true,
+        })
+        .expect("post-reconnect key accepted")
+        .wait(Duration::from_secs(1))
+        .expect("fresh session does not retain stale key state");
+    client
+        .submit(WorkerCommand::SetKey {
+            key: KeyboardKey::CtrlLeft,
+            pressed: false,
+        })
+        .expect("post-reconnect key release accepted")
+        .wait(Duration::from_secs(1))
+        .expect("fresh session key release");
+
+    assert_eq!(
+        *lock_unpoisoned(&events),
+        vec![
+            (1, InputEvent::Key(KeyboardKey::CtrlLeft, true)),
+            (1, InputEvent::Pointer(point, 0)),
+            (1, InputEvent::Pointer(point, 1 << 3)),
+            (1, InputEvent::Key(KeyboardKey::CtrlLeft, false)),
+            (2, InputEvent::Pointer(point, 0)),
+            (2, InputEvent::Key(KeyboardKey::CtrlLeft, true)),
+            (2, InputEvent::Key(KeyboardKey::CtrlLeft, false)),
+        ]
+    );
+
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker joins");
+}
