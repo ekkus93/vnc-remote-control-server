@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "reviewed_at": "2026-08-05",
-  "expires_at": "2026-09-04",
+  "reviewed_at": "2026-08-31",
+  "expires_at": "2026-09-30",
   "tracking_issue": 7,
   "entries": [
     {
@@ -25,17 +25,6 @@
       },
       "rationale": "No HTTP, WebSocket, LibVNCClient, startup, health-check, or deterministic desktop path extracts attacker-provided archives through Perl Archive::Tar. The vulnerable symlink extraction function is not reachable from service inputs.",
       "source": "https://security-tracker.debian.org/tracker/CVE-2026-42496"
-    },
-    {
-      "id": "CVE-2026-57433",
-      "decision": "not_exploitable",
-      "installed_version": "5.40.1-6",
-      "packages": {
-        "controller": ["perl-base"],
-        "desktop": ["libperl5.40", "perl", "perl-base", "perl-modules-5.40"]
-      },
-      "rationale": "The production services do not invoke Perl Storable and do not deserialize attacker-provided Storable records. The crafted SX_HOOK input required by the issue is absent from every exposed application path.",
-      "source": "https://security-tracker.debian.org/tracker/CVE-2026-57433"
     },
     {
       "id": "CVE-2026-8376",
