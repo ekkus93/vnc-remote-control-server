@@ -2,6 +2,7 @@ use super::channels::WorkerChannels;
 use super::command::CommandEnvelope;
 use super::helpers::{classify_native_error, lock_unpoisoned};
 use super::loop_state::LoopState;
+use super::outcome::CommandOutcomeRegistry;
 use super::session::WorkerSession;
 use super::snapshot::WorkerSnapshot;
 use super::{WorkerFailureKind, WorkerSettings};
@@ -19,11 +20,18 @@ use std::time::{Duration, Instant};
 
 /// Drains queued command envelopes without executing them, resolving each
 /// pending caller with `WorkerUnavailable` so command tickets do not hang
-/// until an arbitrary timeout during shutdown. Never inspects or logs command
+/// until an arbitrary timeout during shutdown. Accepted command outcomes are
+/// marked aborted before completion is signaled. Never inspects or logs command
 /// payloads. Dequeue ownership releases each envelope's submission permit.
-pub(super) fn drain_pending_commands(commands: &Receiver<CommandEnvelope>) {
+pub(super) fn drain_pending_commands(
+    commands: &Receiver<CommandEnvelope>,
+    outcomes: &CommandOutcomeRegistry,
+) {
     while let Ok(mut envelope) = commands.try_recv() {
         envelope.release_submission();
+        if let Some(command_id) = envelope.command_id {
+            outcomes.mark_aborted(command_id);
+        }
         let _ = envelope
             .completion
             .send(Err(DesktopError::WorkerUnavailable));
@@ -36,11 +44,12 @@ pub(super) fn drain_pending_commands(commands: &Receiver<CommandEnvelope>) {
 pub(super) fn shutdown_now(
     shutdown_requested: &AtomicBool,
     commands: &Receiver<CommandEnvelope>,
+    outcomes: &CommandOutcomeRegistry,
 ) -> bool {
     if !shutdown_requested.load(Ordering::Acquire) {
         return false;
     }
-    drain_pending_commands(commands);
+    drain_pending_commands(commands, outcomes);
     true
 }
 
@@ -64,6 +73,25 @@ impl Drop for WorkerExitSignal {
     }
 }
 
+/// Panic-safe finalizer for retained command outcomes. If the worker unwinds
+/// unexpectedly, accepted queued/running work becomes explicitly aborted rather
+/// than remaining forever pending in the status registry.
+struct CommandOutcomeExitGuard {
+    outcomes: CommandOutcomeRegistry,
+}
+
+impl CommandOutcomeExitGuard {
+    fn new(outcomes: CommandOutcomeRegistry) -> Self {
+        Self { outcomes }
+    }
+}
+
+impl Drop for CommandOutcomeExitGuard {
+    fn drop(&mut self) {
+        self.outcomes.terminate_nonterminal();
+    }
+}
+
 pub(super) enum ReceivedCommandAction {
     Execute(CommandEnvelope),
     Stop,
@@ -75,20 +103,30 @@ pub(super) fn classify_received_command(
     mut envelope: CommandEnvelope,
     shutdown_requested: &AtomicBool,
     commands: &Receiver<CommandEnvelope>,
+    outcomes: &CommandOutcomeRegistry,
 ) -> ReceivedCommandAction {
     envelope.release_submission();
     if matches!(&envelope.command, WorkerCommand::Shutdown) {
         shutdown_requested.store(true, Ordering::Release);
+        if let Some(command_id) = envelope.command_id {
+            outcomes.mark_succeeded(command_id);
+        }
         let _ = envelope.completion.send(Ok(()));
-        drain_pending_commands(commands);
+        drain_pending_commands(commands, outcomes);
         return ReceivedCommandAction::Stop;
     }
     if shutdown_requested.load(Ordering::Acquire) {
+        if let Some(command_id) = envelope.command_id {
+            outcomes.mark_aborted(command_id);
+        }
         let _ = envelope
             .completion
             .send(Err(DesktopError::WorkerUnavailable));
-        drain_pending_commands(commands);
+        drain_pending_commands(commands, outcomes);
         return ReceivedCommandAction::Stop;
+    }
+    if let Some(command_id) = envelope.command_id {
+        outcomes.mark_running(command_id);
     }
     ReceivedCommandAction::Execute(envelope)
 }
@@ -110,9 +148,11 @@ pub(super) fn run_worker<F, S>(
         startup,
         pending_overload,
         shutdown_requested,
+        command_outcomes,
         worker_exited,
     } = channels;
     let _worker_exit_signal = WorkerExitSignal::new(worker_exited);
+    let _command_outcome_exit_guard = CommandOutcomeExitGuard::new(command_outcomes.clone());
     let worker_span = tracing::info_span!("desktop_worker");
     let _worker_entered = worker_span.enter();
     let _ = startup.send(());
@@ -141,7 +181,7 @@ pub(super) fn run_worker<F, S>(
     let mut orderly_shutdown = false;
 
     loop {
-        if shutdown_now(&shutdown_requested, &commands) {
+        if shutdown_now(&shutdown_requested, &commands, &command_outcomes) {
             orderly_shutdown = true;
             break;
         }
@@ -209,31 +249,42 @@ pub(super) fn run_worker<F, S>(
             }
         }
 
-        if shutdown_now(&shutdown_requested, &commands) {
+        if shutdown_now(&shutdown_requested, &commands, &command_outcomes) {
             orderly_shutdown = true;
             break;
         }
 
         match commands.try_recv() {
             Ok(envelope) => {
-                let envelope =
-                    match classify_received_command(envelope, &shutdown_requested, &commands) {
-                        ReceivedCommandAction::Execute(envelope) => envelope,
-                        ReceivedCommandAction::Stop => {
-                            orderly_shutdown = true;
-                            break;
-                        }
-                    };
+                let envelope = match classify_received_command(
+                    envelope,
+                    &shutdown_requested,
+                    &commands,
+                    &command_outcomes,
+                ) {
+                    ReceivedCommandAction::Execute(envelope) => envelope,
+                    ReceivedCommandAction::Stop => {
+                        orderly_shutdown = true;
+                        break;
+                    }
+                };
+                let command_id = envelope
+                    .command_id
+                    .expect("ordinary worker command must retain its command id");
                 let result = match envelope.command {
                     WorkerCommand::Shutdown => unreachable!("shutdown handled before execution"),
                     WorkerCommand::Reconnect => state.manual_reconnect(),
                     command => state.execute(command),
                 };
+                match &result {
+                    Ok(()) => command_outcomes.mark_succeeded(command_id),
+                    Err(error) => command_outcomes.mark_failed(command_id, error),
+                }
                 let _ = envelope.completion.send(result);
                 if state.event_terminal_failure() {
                     break;
                 }
-                if shutdown_now(&shutdown_requested, &commands) {
+                if shutdown_now(&shutdown_requested, &commands, &command_outcomes) {
                     orderly_shutdown = true;
                     break;
                 }
@@ -243,7 +294,7 @@ pub(super) fn run_worker<F, S>(
             Err(TryRecvError::Empty) => {}
         }
 
-        if shutdown_now(&shutdown_requested, &commands) {
+        if shutdown_now(&shutdown_requested, &commands, &command_outcomes) {
             orderly_shutdown = true;
             break;
         }
@@ -257,9 +308,10 @@ pub(super) fn run_worker<F, S>(
         }
     }
 
-    // Closing the receiver drops any envelope that raced the final drain. Its
-    // submission permit releases automatically, and a racing `try_send()`
-    // receives `Disconnected` and drops its returned permit as well.
+    // Resolve any work still queued during an abnormal loop exit. Closing the
+    // receiver afterward drops any envelope that races this final drain; the
+    // exit guard conservatively terminates any retained state left non-terminal.
+    drain_pending_commands(&commands, &command_outcomes);
     drop(commands);
     if orderly_shutdown {
         state.begin_shutdown_cleanup();
