@@ -1,6 +1,7 @@
 //! Controller API process entry point.
 
 use controller_api::config::ControllerConfig;
+use controller_api::duration_policy::validate_startup_durations;
 use controller_api::events::EventHub;
 use controller_api::http::{HttpState, HttpWorkerSettings, router};
 use controller_api::observability::{Metrics, init_tracing};
@@ -25,6 +26,8 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let config = ControllerConfig::load()?;
+    validate_startup_durations(&config)?;
     let ControllerConfig {
         listen_address,
         api_token,
@@ -39,7 +42,7 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         websocket_ping_interval,
         websocket_idle_timeout,
         worker: worker_settings,
-    } = ControllerConfig::load()?;
+    } = config;
 
     let runtime = RuntimeSettings::load(maximum_json_bytes)?;
     let listener = TcpListener::bind(listen_address).await?;
