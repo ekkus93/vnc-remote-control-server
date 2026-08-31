@@ -330,3 +330,137 @@ fn scroll_double_release_failure_quarantines_session_and_reconnects_cleanly() {
         .shutdown(Duration::from_secs(1))
         .expect("worker joins");
 }
+
+struct ClipboardRecoverySession {
+    generation: usize,
+    reject_newer: Arc<std::sync::atomic::AtomicBool>,
+    enable_recovered: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl WorkerSession for ClipboardRecoverySession {
+    fn poll(&mut self, timeout: Duration) -> Result<PollOutcome, NativeError> {
+        thread::sleep(timeout);
+        if self.generation == 1 && self.reject_newer.load(Ordering::Acquire) {
+            return Err(NativeError::ClipboardTooLarge {
+                bytes: remote_desktop_core::MAX_CLIPBOARD_BYTES + 1,
+                maximum: remote_desktop_core::MAX_CLIPBOARD_BYTES,
+            });
+        }
+        Ok(PollOutcome::MessageProcessed)
+    }
+
+    fn request_full_refresh(&mut self) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn display_info(&self) -> Result<NativeDisplayInfo, NativeError> {
+        Ok(NativeDisplayInfo {
+            width: 2,
+            height: 2,
+            revision: 1,
+            complete: true,
+        })
+    }
+
+    fn framebuffer(&self) -> Result<NativeFramebuffer, NativeError> {
+        Ok(NativeFramebuffer {
+            width: 2,
+            height: 2,
+            revision: 1,
+            bytes: vec![1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0],
+        })
+    }
+
+    fn clipboard(&self) -> Result<NativeClipboard, NativeError> {
+        if self.generation == 1 {
+            return Ok(NativeClipboard {
+                text: "old clipboard".to_owned(),
+                revision: 1,
+            });
+        }
+        if self.enable_recovered.load(Ordering::Acquire) {
+            return Ok(NativeClipboard {
+                text: "recovered clipboard".to_owned(),
+                revision: 1,
+            });
+        }
+        Err(NativeError::ClipboardUnavailable)
+    }
+
+    fn send_pointer(
+        &mut self,
+        _coordinate: Coordinate,
+        _button_mask: u8,
+    ) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyboardKey, _pressed: bool) -> Result<(), NativeError> {
+        Ok(())
+    }
+
+    fn send_clipboard(&mut self, _text: &str) -> Result<(), NativeError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn rejected_newer_clipboard_invalidates_stale_cache_and_reconnect_recovers() {
+    let generations = Arc::new(AtomicUsize::new(0));
+    let reject_newer = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let enable_recovered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let factory_generations = Arc::clone(&generations);
+    let factory_reject = Arc::clone(&reject_newer);
+    let factory_recovered = Arc::clone(&enable_recovered);
+    let worker = DesktopWorker::spawn_with_factory(settings(), move || {
+        let generation = factory_generations.fetch_add(1, Ordering::AcqRel) + 1;
+        Ok(ClipboardRecoverySession {
+            generation,
+            reject_newer: Arc::clone(&factory_reject),
+            enable_recovered: Arc::clone(&factory_recovered),
+        })
+    })
+    .expect("worker spawns");
+    let client = worker.client();
+    wait_for_state(&client, ConnectionState::Connected);
+
+    let old_deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match client.clipboard_snapshot() {
+            Ok(snapshot) if snapshot.text.as_ref() == "old clipboard" => break,
+            _ if Instant::now() < old_deadline => thread::sleep(Duration::from_millis(1)),
+            other => panic!("initial clipboard did not become available: {other:?}"),
+        }
+    }
+
+    reject_newer.store(true, Ordering::Release);
+    let reconnect_deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < reconnect_deadline {
+        if generations.load(Ordering::Acquire) >= 2
+            && client.snapshot().state == ConnectionState::Connected
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(generations.load(Ordering::Acquire) >= 2);
+    assert_eq!(
+        client.clipboard_snapshot(),
+        Err(DesktopError::ClipboardUnavailable),
+        "stale pre-rejection clipboard must not survive session invalidation"
+    );
+
+    enable_recovered.store(true, Ordering::Release);
+    let recovered_deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match client.clipboard_snapshot() {
+            Ok(snapshot) if snapshot.text.as_ref() == "recovered clipboard" => break,
+            _ if Instant::now() < recovered_deadline => thread::sleep(Duration::from_millis(1)),
+            other => panic!("recovered clipboard did not become available: {other:?}"),
+        }
+    }
+
+    worker
+        .shutdown(Duration::from_secs(1))
+        .expect("worker joins");
+}

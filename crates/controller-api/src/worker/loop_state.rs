@@ -173,6 +173,12 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 self.last_native_clipboard_revision = Some(native.revision);
                 self.clipboard_decode_failed = false;
                 if validate_clipboard(&native.text).is_err() {
+                    let invalidated = lock_unpoisoned(self.clipboard).take().is_some();
+                    tracing::warn!(
+                        category = "invalid_payload",
+                        stale_snapshot_invalidated = invalidated,
+                        "worker_inbound_clipboard_rejected"
+                    );
                     self.record_failure(WorkerFailureKind::Protocol);
                     self.publish(DesktopEventKind::ProtocolError)?;
                     return Ok(());
@@ -192,8 +198,14 @@ impl<S: WorkerSession> LoopState<'_, S> {
             }
             Err(NativeError::ClipboardUnavailable) => Ok(()),
             Err(NativeError::ClipboardNotUtf8) => {
+                let invalidated = lock_unpoisoned(self.clipboard).take().is_some();
                 if !self.clipboard_decode_failed {
                     self.clipboard_decode_failed = true;
+                    tracing::warn!(
+                        category = "not_utf8",
+                        stale_snapshot_invalidated = invalidated,
+                        "worker_inbound_clipboard_rejected"
+                    );
                     self.record_failure(WorkerFailureKind::Protocol);
                     self.publish(DesktopEventKind::ProtocolError)?;
                 }
@@ -234,6 +246,10 @@ impl<S: WorkerSession> LoopState<'_, S> {
         self.last_native_revision = None;
         self.last_native_clipboard_revision = None;
         self.clipboard_decode_failed = false;
+        let clipboard_invalidated = lock_unpoisoned(self.clipboard).take().is_some();
+        if clipboard_invalidated {
+            tracing::info!("worker_clipboard_invalidated");
+        }
         let store_changed = self.framebuffer.invalidate();
         let had_frame = lock_unpoisoned(self.snapshot)
             .framebuffer_revision
@@ -469,6 +485,27 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 Ok(())
             }
             Err(error) => {
+                match &error {
+                    NativeError::ClipboardTooLarge { bytes, maximum } => tracing::warn!(
+                        category = "too_large",
+                        bytes,
+                        maximum,
+                        "worker_inbound_clipboard_rejected"
+                    ),
+                    NativeError::ClipboardAllocationFailed => tracing::warn!(
+                        category = "allocation_failed",
+                        "worker_inbound_clipboard_rejected"
+                    ),
+                    NativeError::ClipboardStateInvalid => tracing::warn!(
+                        category = "state_invalid",
+                        "worker_inbound_clipboard_rejected"
+                    ),
+                    NativeError::ClipboardRevisionExhausted => tracing::warn!(
+                        category = "revision_exhausted",
+                        "worker_inbound_clipboard_rejected"
+                    ),
+                    _ => {}
+                }
                 self.record_failure(classify_native_error(&error));
                 self.invalidate()?;
                 self.schedule_reconnect()?;

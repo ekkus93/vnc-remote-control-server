@@ -137,49 +137,51 @@ R0/R1 evidence and the exact test/CI references supporting these checks are reco
 - [x] Existing ordinary button tracking/release tests still pass.
 - [x] Existing key tracking/release tests still pass.
 
-R2 evidence, recovery policy, regression test names, and exact implementation-head validation are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R3-R15 remain intentionally open; this is not overall remediation sign-off.
+R2 evidence, recovery policy, regression test names, and exact implementation-head validation are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. R4-R15 remain intentionally open; this is not overall remediation sign-off.
 
 ## R3 — Propagate native clipboard callback failures
 
 ### R3.1 — Make callback failure machine-readable
 
-- [ ] Inspect `vrc_store_clipboard`, `GotXCutText`, `HandleRFBServerMessage`, and `vrc_client_poll` in `crates/libvnc-adapter/native/vnc_shim.c`.
-- [ ] Add explicit per-client callback failure state/status rather than relying only on an error string.
-- [ ] Clear callback error state before processing the next server message in a deterministic place.
-- [ ] Make `vrc_client_poll()` return non-success when a callback failed even if LibVNCClient's message handler itself returned success.
-- [ ] Ensure stale callback error state cannot poison later successful polls.
+- [x] Inspect `vrc_store_clipboard`, `GotXCutText`, `HandleRFBServerMessage`, and `vrc_client_poll` in `crates/libvnc-adapter/native/vnc_shim.c`.
+- [x] Add explicit per-client callback failure state/status rather than relying only on an error string.
+- [x] Clear callback error state before processing the next server message in a deterministic place.
+- [x] Make `vrc_client_poll()` return non-success when a callback failed even if LibVNCClient's message handler itself returned success.
+- [x] Ensure stale callback error state cannot poison later successful polls.
 
 ### R3.2 — Preserve useful failure classes
 
-- [ ] Distinguish oversize clipboard rejection from allocation/resource failure.
-- [ ] Distinguish invalid native/update state where possible.
-- [ ] Treat revision/counter exhaustion as an explicit fail-closed condition.
-- [ ] Map new native statuses into typed Rust errors without collapsing them into generic success/protocol behavior.
+- [x] Distinguish oversize clipboard rejection from allocation/resource failure.
+- [x] Distinguish invalid native/update state where possible.
+- [x] Treat revision/counter exhaustion as an explicit fail-closed condition.
+- [x] Map new native statuses into typed Rust errors without collapsing them into generic success/protocol behavior.
 
 ### R3.3 — Never serve a stale old clipboard as current
 
-- [ ] Add controller-side representation for clipboard unavailable/stale if the chosen recovery policy keeps the VNC session alive.
-- [ ] Invalidate the previously cached clipboard snapshot when a newer inbound update was rejected.
-- [ ] Ensure clipboard GET/read APIs do not return the previous value as current after rejection.
-- [ ] For allocation/native invariant failures, invalidate/reconnect or mark fatal according to the documented policy.
-- [ ] Ensure recovery after a later valid update or reconnect is explicit.
+- [x] Add controller-side representation for clipboard unavailable/stale if the chosen recovery policy keeps the VNC session alive.
+- [x] Invalidate the previously cached clipboard snapshot when a newer inbound update was rejected.
+- [x] Ensure clipboard GET/read APIs do not return the previous value as current after rejection.
+- [x] For allocation/native invariant failures, invalidate/reconnect or mark fatal according to the documented policy.
+- [x] Ensure recovery after a later valid update or reconnect is explicit.
 
 ### R3.4 — Clipboard observability and secrecy
 
-- [ ] Add structured event/metric/log metadata for callback rejection category.
-- [ ] Include only safe metadata such as category and byte count where useful.
-- [ ] Never log clipboard payload contents.
+- [x] Add structured event/metric/log metadata for callback rejection category.
+- [x] Include only safe metadata such as category and byte count where useful.
+- [x] Never log clipboard payload contents.
 
 ### R3.5 — R3 tests
 
-- [ ] Valid inbound clipboard update.
-- [ ] Oversize inbound clipboard update.
-- [ ] Allocation failure path using a deterministic test hook/helper if needed.
-- [ ] Invalid/revision failure helper path.
-- [ ] Callback error causes `vrc_client_poll()` non-success or explicit clipboard-unavailable signaling.
-- [ ] Previous clipboard is not served as current after failed newer update.
-- [ ] Subsequent valid update/reconnect recovers correctly.
-- [ ] C sanitizer/native tests remain clean.
+- [x] Valid inbound clipboard update.
+- [x] Oversize inbound clipboard update.
+- [x] Allocation failure path using a deterministic test hook/helper if needed.
+- [x] Invalid/revision failure helper path.
+- [x] Callback error causes `vrc_client_poll()` non-success or explicit clipboard-unavailable signaling.
+- [x] Previous clipboard is not served as current after failed newer update.
+- [x] Subsequent valid update/reconnect recovers correctly.
+- [x] C sanitizer/native tests remain clean.
+
+R3 evidence, callback failure classes, stale-cache invalidation/reconnect policy, deterministic poll-propagation tests, secrecy constraints, and exact implementation-head CI/Release Gates are recorded in `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_EVIDENCE_2026-08-31.md`. The controller-side unavailable/stale representation item is satisfied by the chosen fail-closed policy: callback failure drops the affected session and clears the cached snapshot rather than keeping the session alive. R4-R15 remain intentionally open.
 
 ## R4 — Align duration configuration with native/runtime constraints
 

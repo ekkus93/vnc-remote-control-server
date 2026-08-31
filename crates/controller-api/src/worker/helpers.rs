@@ -49,10 +49,13 @@ pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
         | NativeError::FramebufferUnavailable
         | NativeError::BufferTooSmall
         | NativeError::ClipboardUnavailable
+        | NativeError::ClipboardTooLarge { .. }
         | NativeError::ClipboardNotUtf8 => WorkerFailureKind::Protocol,
-        NativeError::AllocationFailed | NativeError::NativeFailure { .. } => {
-            WorkerFailureKind::Native
-        }
+        NativeError::AllocationFailed
+        | NativeError::ClipboardAllocationFailed
+        | NativeError::ClipboardStateInvalid
+        | NativeError::ClipboardRevisionExhausted
+        | NativeError::NativeFailure { .. } => WorkerFailureKind::Native,
     }
 }
 

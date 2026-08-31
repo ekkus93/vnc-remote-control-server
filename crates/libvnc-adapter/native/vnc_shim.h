@@ -20,7 +20,11 @@ typedef enum vrc_status {
     VRC_STATUS_FRAMEBUFFER_UNAVAILABLE = 6,
     VRC_STATUS_BUFFER_TOO_SMALL = 7,
     VRC_STATUS_CLIPBOARD_UNAVAILABLE = 8,
-    VRC_STATUS_PROTOCOL_INITIALIZATION_FAILED = 9
+    VRC_STATUS_PROTOCOL_INITIALIZATION_FAILED = 9,
+    VRC_STATUS_CLIPBOARD_TOO_LARGE = 10,
+    VRC_STATUS_CLIPBOARD_ALLOCATION_FAILED = 11,
+    VRC_STATUS_CLIPBOARD_STATE_INVALID = 12,
+    VRC_STATUS_CLIPBOARD_REVISION_EXHAUSTED = 13
 } vrc_status;
 
 vrc_client *vrc_client_create(
@@ -68,6 +72,7 @@ vrc_status vrc_client_copy_clipboard(
 
 int vrc_client_protocol_major(const vrc_client *client);
 const char *vrc_client_last_error(const vrc_client *client);
+size_t vrc_client_last_callback_clipboard_bytes(const vrc_client *client);
 void vrc_client_destroy(vrc_client *client);
 
 #ifdef __cplusplus
