@@ -1,6 +1,8 @@
-use super::*;
 use super::super::outcome::{CommandOutcomeLookup, CommandOutcomeState};
-use libvnc_adapter::{NativeClipboard, NativeDisplayInfo, NativeError, NativeFramebuffer, PollOutcome};
+use super::*;
+use libvnc_adapter::{
+    NativeClipboard, NativeDisplayInfo, NativeError, NativeFramebuffer, PollOutcome,
+};
 use remote_desktop_core::{DesktopError, WorkerCommand};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::Duration;
@@ -17,7 +19,9 @@ impl WorkerSession for PanicAfterReleaseSession {
         if self.poll_count == 1 {
             return Ok(PollOutcome::MessageProcessed);
         }
-        self.entered.send(()).expect("test observer remains present");
+        self.entered
+            .send(())
+            .expect("test observer remains present");
         self.release.recv().expect("test release remains present");
         panic!("test-only unexpected worker panic after command admission");
     }
