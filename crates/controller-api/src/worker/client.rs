@@ -155,14 +155,16 @@ impl WorkerClient {
             return Err(error);
         }
         before_send();
+
+        // Publish queue admission state before `try_send`: the receiving worker
+        // can dequeue immediately once the send succeeds. A failed send below
+        // replaces this transient state with an explicit pre-admission reject.
+        self.command_outcomes.mark_queued(id);
         match self.commands.try_send(envelope) {
-            Ok(()) => {
-                self.command_outcomes.mark_queued(id);
-                Ok(CommandTicket {
-                    id,
-                    completion: completion_rx,
-                })
-            }
+            Ok(()) => Ok(CommandTicket {
+                id,
+                completion: completion_rx,
+            }),
             Err(TrySendError::Full(_)) => {
                 let error = DesktopError::CommandQueueFull;
                 self.command_outcomes.mark_rejected(id, &error);
