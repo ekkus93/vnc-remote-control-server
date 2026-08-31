@@ -63,7 +63,7 @@ class NativeContractTests(unittest.TestCase):
         """Framebuffer updates must rely on libvncclient's automatic rearm, not manual resends."""
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         callback_start = source.index("static void vrc_finished_framebuffer_update")
-        callback_end = source.index("static void vrc_store_clipboard", callback_start)
+        callback_end = source.index("static vrc_status vrc_store_clipboard", callback_start)
         callback = source[callback_start:callback_end]
         self.assertNotIn("SendFramebufferUpdateRequest(", callback)
         self.assertIn("client->revision += 1U;", callback)
@@ -111,7 +111,7 @@ class NativeContractTests(unittest.TestCase):
         helper = source[helper_start:helper_end]
         self.assertIn("vrc_scrub_and_free(*clipboard, *length + 1U);", helper)
 
-        store_start = source.index("static void vrc_store_clipboard")
+        store_start = source.index("static vrc_status vrc_store_clipboard")
         store_end = source.index("static void vrc_got_clipboard", store_start)
         store = source[store_start:store_end]
         self.assertLess(store.index("clipboard revision overflow"), store.index("copy = malloc"))
@@ -151,6 +151,27 @@ class NativeContractTests(unittest.TestCase):
             source,
         )
         self.assertIn("requires one additional owned", source)
+
+    def test_clipboard_callback_failures_are_machine_readable_and_tested(self) -> None:
+        """Callback failures must propagate through poll and invalidate stale data."""
+        header = SHIM_HEADER.read_text(encoding="utf-8")
+        source = SHIM_SOURCE.read_text(encoding="utf-8")
+        smoke = NATIVE_SMOKE.read_text(encoding="utf-8")
+        for status in (
+            "VRC_STATUS_CLIPBOARD_TOO_LARGE",
+            "VRC_STATUS_CLIPBOARD_ALLOCATION_FAILED",
+            "VRC_STATUS_CLIPBOARD_STATE_INVALID",
+            "VRC_STATUS_CLIPBOARD_REVISION_EXHAUSTED",
+        ):
+            self.assertIn(status, header)
+            self.assertIn(status, source)
+        poll_start = source.index("vrc_status vrc_client_poll")
+        poll_end = source.index("vrc_status vrc_client_request_full_refresh", poll_start)
+        poll = source[poll_start:poll_end]
+        self.assertIn("vrc_clear_callback_failure(client);", poll)
+        self.assertIn("client->callback_status != VRC_STATUS_OK", poll)
+        self.assertIn("return client->callback_status;", poll)
+        self.assertIn("tests/native/vnc_shim_clipboard_callback_test.c", smoke)
 
     def test_native_smoke_is_bounded_and_uses_file_mounted_password(self) -> None:
         """The native smoke test must be time-bounded and read the VNC password from a file."""
