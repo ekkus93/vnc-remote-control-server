@@ -60,7 +60,7 @@ def _assert_queue_saturation(harness: Harness) -> None:
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         results = list(executor.map(long_click, range(12)))
     succeeded = [result for result in results if result.status == 200]
-    require(succeeded, "queue saturation produced no completed command")
+    require(bool(succeeded), "queue saturation produced no completed command")
     for result in succeeded:
         payload = result.json()
         require(payload.get("status") == "succeeded", "completed command omitted succeeded status")
