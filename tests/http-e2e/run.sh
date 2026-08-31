@@ -193,8 +193,8 @@ if (width, height) != (1280, 800):
     raise SystemExit("documented screenshot dimensions are wrong")
 for name in ("documented-pointer.json", "documented-text.json", "documented-clipboard.json"):
     payload = json.loads((root / name).read_text())
-    if payload.get("status") != "accepted" or not isinstance(payload.get("command_id"), int):
-        raise SystemExit(f"{name} did not return accepted command semantics")
+    if payload.get("status") != "succeeded" or not isinstance(payload.get("command_id"), int):
+        raise SystemExit(f"{name} did not return completed command semantics")
 PYDOC
 
 log "verifying bearer authentication fails closed"
@@ -367,7 +367,7 @@ try:
     response = connection.getresponse()
     response.read()
     connection.close()
-    if response.status != 202:
+    if response.status != 200:
         raise AssertionError(f"reconnect returned HTTP {response.status}")
 
     observed = []
@@ -405,9 +405,9 @@ status="$(curl --silent --show-error --output "$temporary_directory/pointer.json
     --header 'Content-Type: application/json' \
     --data '{"x":417,"y":263}' \
     "http://127.0.0.1:${api_port}/v1/pointer/move")"
-[[ "$status" == "202" ]] || fail "authenticated pointer request returned HTTP $status"
-grep -Fq '"status":"accepted"' "$temporary_directory/pointer.json" || \
-    fail "pointer response did not publish the accepted marker"
+[[ "$status" == "200" ]] || fail "authenticated pointer request returned HTTP $status"
+grep -Fq '"status":"succeeded"' "$temporary_directory/pointer.json" || \
+    fail "pointer response did not publish the succeeded marker"
 
 status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --request POST \
@@ -415,7 +415,7 @@ status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code
     --header 'Content-Type: application/json' \
     --data "{\"text\":\"${typed_secret}\"}" \
     "http://127.0.0.1:${api_port}/v1/keyboard/text")"
-[[ "$status" == "202" ]] || fail "authenticated text request returned HTTP $status"
+[[ "$status" == "200" ]] || fail "authenticated text request returned HTTP $status"
 
 status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
     --request PUT \
@@ -423,7 +423,7 @@ status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code
     --header 'Content-Type: application/json' \
     --data "{\"text\":\"${clipboard_secret}\"}" \
     "http://127.0.0.1:${api_port}/v1/clipboard")"
-[[ "$status" == "202" ]] || fail "authenticated clipboard request returned HTTP $status"
+[[ "$status" == "200" ]] || fail "authenticated clipboard request returned HTTP $status"
 
 log "verifying TigerVNC delivered the HTTP command to the deterministic desktop"
 docker exec -i "$container_name" python3 - <<'PY'
@@ -472,8 +472,8 @@ curl --fail-with-body --silent --show-error \
     --header "$authorization_header" \
     --output "$temporary_directory/documented-reconnect.json" \
     "$base_url/v1/connection/reconnect"
-grep -Fq '"status":"accepted"' "$temporary_directory/documented-reconnect.json" || \
-    fail "documented reconnect example did not return accepted semantics"
+grep -Fq '"status":"succeeded"' "$temporary_directory/documented-reconnect.json" || \
+    fail "documented reconnect example did not return completed semantics"
 wait_for_controller
 
 log "requesting signal-driven graceful shutdown"
