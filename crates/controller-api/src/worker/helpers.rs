@@ -41,6 +41,39 @@ pub(super) fn reconnect_delay(settings: &WorkerSettings, attempt: u32) -> Durati
     }
 }
 
+/// Authoritative classification for public/domain errors observed by the worker.
+///
+/// The result is intentionally payload-free and keeps caller validation,
+/// bounded-capacity, availability, and rate-limit failures distinct rather than
+/// silently collapsing unrelated failures into `Protocol`.
+pub(super) fn classify_desktop_error(error: &DesktopError) -> WorkerFailureKind {
+    match error {
+        DesktopError::InvalidCoordinate { .. }
+        | DesktopError::ChordTooLong { .. }
+        | DesktopError::TextTooLarge { .. }
+        | DesktopError::ClipboardTooLarge { .. }
+        | DesktopError::UnsupportedTextCharacter { .. }
+        | DesktopError::ClipboardContainsNul
+        | DesktopError::ScrollTooLarge { .. } => WorkerFailureKind::Request,
+        DesktopError::CommandQueueFull
+        | DesktopError::CommandOutcomeCapacityFull
+        | DesktopError::CommandIdExhausted => WorkerFailureKind::Capacity,
+        DesktopError::DisplayUnavailable
+        | DesktopError::WorkerUnavailable
+        | DesktopError::FramebufferUnavailable
+        | DesktopError::ClipboardUnavailable => WorkerFailureKind::Unavailable,
+        DesktopError::ReconnectRateLimited => WorkerFailureKind::RateLimited,
+        DesktopError::Configuration(_) => WorkerFailureKind::Configuration,
+        DesktopError::AuthenticationFailed => WorkerFailureKind::Authentication,
+        DesktopError::Transport => WorkerFailureKind::Transport,
+        DesktopError::Timeout => WorkerFailureKind::Timeout,
+        DesktopError::InvalidRectangle
+        | DesktopError::InvalidFramebufferDimensions
+        | DesktopError::Protocol => WorkerFailureKind::Protocol,
+        DesktopError::Native => WorkerFailureKind::Native,
+    }
+}
+
 pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
     match error {
         NativeError::InvalidArgument | NativeError::EmbeddedNul => WorkerFailureKind::Configuration,
@@ -79,6 +112,66 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
     use std::thread;
+
+    #[test]
+    fn desktop_error_mapping_preserves_representative_failure_families() {
+        let cases = [
+            (
+                DesktopError::InvalidCoordinate {
+                    x: 2,
+                    y: 3,
+                    width: 1,
+                    height: 1,
+                },
+                WorkerFailureKind::Request,
+            ),
+            (
+                DesktopError::ClipboardTooLarge { maximum: 16 },
+                WorkerFailureKind::Request,
+            ),
+            (DesktopError::CommandQueueFull, WorkerFailureKind::Capacity),
+            (
+                DesktopError::CommandOutcomeCapacityFull,
+                WorkerFailureKind::Capacity,
+            ),
+            (
+                DesktopError::WorkerUnavailable,
+                WorkerFailureKind::Unavailable,
+            ),
+            (
+                DesktopError::FramebufferUnavailable,
+                WorkerFailureKind::Unavailable,
+            ),
+            (
+                DesktopError::ClipboardUnavailable,
+                WorkerFailureKind::Unavailable,
+            ),
+            (
+                DesktopError::ReconnectRateLimited,
+                WorkerFailureKind::RateLimited,
+            ),
+            (
+                DesktopError::Configuration("invalid fixture".to_owned()),
+                WorkerFailureKind::Configuration,
+            ),
+            (
+                DesktopError::AuthenticationFailed,
+                WorkerFailureKind::Authentication,
+            ),
+            (DesktopError::Transport, WorkerFailureKind::Transport),
+            (DesktopError::Timeout, WorkerFailureKind::Timeout),
+            (DesktopError::Protocol, WorkerFailureKind::Protocol),
+            (
+                DesktopError::InvalidFramebufferDimensions,
+                WorkerFailureKind::Protocol,
+            ),
+            (DesktopError::Native, WorkerFailureKind::Native),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(classify_desktop_error(&error), expected, "{error}");
+        }
+    }
 
     #[test]
     fn protocol_initialization_failure_is_protocol_regardless_of_message_text() {
