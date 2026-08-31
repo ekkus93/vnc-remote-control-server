@@ -177,7 +177,7 @@ impl ScrollRecoverySession {
         button_mask: u8,
     ) -> Result<(), NativeError> {
         self.pointer_calls += 1;
-        if self.fail_uncertain_pointer_recovery && matches!(self.pointer_calls, 3 | 4 | 5) {
+        if self.fail_uncertain_pointer_recovery && matches!(self.pointer_calls, 3..=5) {
             return Err(NativeError::NativeFailure {
                 message: "test-only scroll release failure".to_owned(),
             });
