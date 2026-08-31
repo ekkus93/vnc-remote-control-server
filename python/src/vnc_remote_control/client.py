@@ -12,13 +12,16 @@ from urllib.request import Request, urlopen
 
 from .errors import (
     ApiError,
+    CommandOutcomeUnknownError,
     OptionalDependencyError,
     ProtocolError,
     TransportError,
 )
 from .models import (
     ClipboardResponse,
-    CommandAcceptedResponse,
+    CommandResponse,
+    CommandStatus,
+    CommandStatusResponse,
     ConnectionState,
     DisplayResponse,
     Event,
@@ -40,9 +43,11 @@ except ImportError:
 # repeating the closed vocabularies here, so the two can never drift apart.
 _CONNECTION_STATES = frozenset(get_args(ConnectionState))
 _WORKER_FAILURES = frozenset(get_args(WorkerFailure))
+_COMMAND_OUTCOME_STATES = frozenset(get_args(CommandStatus))
 _HEALTH_STATUSES = frozenset({"alive", "ready"})
 _DISPLAY_STATUSES = frozenset({"current"})
-_COMMAND_STATUSES = frozenset({"accepted"})
+_COMMAND_STATUSES = frozenset({"succeeded"})
+_COMMAND_ERROR_OUTCOMES = frozenset({"failed", "unknown"})
 _EMPTY_RUNTIME_ERROR_STATUSES = frozenset({400, 408, 413})
 
 
@@ -115,6 +120,12 @@ def _require_string(value: Any, field: str, context: str) -> str:
     if not isinstance(value, str):
         raise ProtocolError(f"{context} field {field} was not a string")
     return value
+
+
+def _require_nullable_string(value: Any, field: str, context: str) -> str | None:
+    if value is None:
+        return None
+    return _require_string(value, field, context)
 
 
 def _require_bool(value: Any, field: str, context: str) -> bool:
@@ -295,20 +306,56 @@ class VncRemoteControlClient:
 
         document = _require_object(body, "error response")
         _require_exact_fields(document, ("error",), "error response")
-        error = _require_object_value(document["error"], "error response error field")
-        _require_exact_fields(
-            error, ("code", "message", "request_id"), "error response error field"
+        context = "error response error field"
+        error = _require_object_value(document["error"], context)
+        base_fields = ("code", "message", "request_id")
+        command_fields = ("command_id", "outcome", "retry_safe")
+        _require_fields(error, base_fields, context)
+        allowed = frozenset((*base_fields, *command_fields))
+        if any(field not in allowed for field in error):
+            raise ProtocolError(f"{context} contained unexpected field(s)")
+
+        code = _require_string(error["code"], "code", context)
+        message = _require_string(error["message"], "message", context)
+        request_id = _require_string(error["request_id"], "request_id", context)
+        command_context_present = any(field in error for field in command_fields)
+        if not command_context_present:
+            if code == "command_timeout":
+                raise ProtocolError("command_timeout error omitted command outcome context")
+            return ApiError(
+                status,
+                message,
+                code=code,
+                request_id=request_id,
+            )
+
+        _require_fields(error, command_fields, context)
+        command_id = _require_int(error["command_id"], "command_id", context, minimum=1)
+        outcome = _require_enum(
+            error["outcome"], "outcome", context, _COMMAND_ERROR_OUTCOMES
         )
-        code = _require_string(error["code"], "code", "error response error field")
-        message = _require_string(error["message"], "message", "error response error field")
-        request_id = _require_string(
-            error["request_id"], "request_id", "error response error field"
-        )
+        retry_safe = _require_bool(error["retry_safe"], "retry_safe", context)
+
+        if code == "command_timeout":
+            if status != 504 or outcome != "unknown" or retry_safe:
+                raise ProtocolError("command_timeout error contained inconsistent outcome context")
+            return CommandOutcomeUnknownError(
+                status,
+                message,
+                command_id=command_id,
+                request_id=request_id,
+            )
+
+        if outcome != "failed" or retry_safe:
+            raise ProtocolError("accepted command failure contained inconsistent outcome context")
         return ApiError(
             status,
             message,
             code=code,
             request_id=request_id,
+            command_id=command_id,
+            outcome=outcome,
+            retry_safe=retry_safe,
         )
 
     def _request(
@@ -530,22 +577,49 @@ class VncRemoteControlClient:
         except UnicodeDecodeError as exc:
             raise ProtocolError("metrics response was not valid UTF-8") from exc
 
-    def _command(self, path: str, body: dict[str, Any] | None = None) -> CommandAcceptedResponse:
-        """POST (or PUT, for clipboard) a command and return its 202 acknowledgement."""
+    def get_command_status(self, command_id: int) -> CommandStatusResponse:
+        """Fetch the retained lifecycle state for one process-local command ID."""
+        if not isinstance(command_id, int) or isinstance(command_id, bool) or command_id < 1:
+            raise ValueError("command_id must be a positive integer")
+        value = self._json_request(
+            "GET",
+            f"/v1/commands/{command_id}",
+            200,
+            _RequestOptions(authenticated=True),
+        )
+        context = "command status response"
+        _require_exact_fields(
+            value, ("command_id", "status", "failure", "retry_safe"), context
+        )
+        returned_id = _require_int(value["command_id"], "command_id", context, minimum=1)
+        if returned_id != command_id:
+            raise ProtocolError("command status response identifier did not match the request")
+        status = _require_enum(
+            value["status"], "status", context, _COMMAND_OUTCOME_STATES
+        )
+        return CommandStatusResponse(
+            command_id=returned_id,
+            status=cast(CommandStatus, status),
+            failure=_require_nullable_string(value["failure"], "failure", context),
+            retry_safe=_require_bool(value["retry_safe"], "retry_safe", context),
+        )
+
+    def _command(self, path: str, body: dict[str, Any] | None = None) -> CommandResponse:
+        """Execute one synchronous mutation and return its terminal success."""
         value = self._json_request(
             "POST" if path != "/v1/clipboard" else "PUT",
             path,
-            202,
+            200,
             _RequestOptions(authenticated=True, json_body=body),
         )
         context = f"{path} response"
         _require_exact_fields(value, ("command_id", "status"), context)
-        return CommandAcceptedResponse(
+        return CommandResponse(
             command_id=_require_int(value["command_id"], "command_id", context, minimum=1),
             status=_require_enum(value["status"], "status", context, _COMMAND_STATUSES),
         )
 
-    def move_pointer(self, x: int, y: int) -> CommandAcceptedResponse:
+    def move_pointer(self, x: int, y: int) -> CommandResponse:
         """Move the pointer to `(x, y)` without changing button state."""
         return self._command("/v1/pointer/move", {"x": x, "y": y})
 
@@ -555,7 +629,7 @@ class VncRemoteControlClient:
         y: int,
         button: MouseButton,
         pressed: bool,
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Move to `(x, y)` and set `button` to pressed or released."""
         return self._command(
             "/v1/pointer/button",
@@ -564,7 +638,7 @@ class VncRemoteControlClient:
 
     def click_pointer(
         self, x: int, y: int, button: MouseButton = "left"
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Move to `(x, y)` and click `button` once."""
         return self._command(
             "/v1/pointer/click", {"x": x, "y": y, "button": button}
@@ -577,7 +651,7 @@ class VncRemoteControlClient:
         button: MouseButton = "left",
         *,
         interval_ms: int = 100,
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Move to `(x, y)` and double-click `button` with the given interval."""
         return self._command(
             "/v1/pointer/double-click",
@@ -596,24 +670,22 @@ class VncRemoteControlClient:
         delta_y: int,
         *,
         delta_x: int = 0,
-    ) -> CommandAcceptedResponse:
+    ) -> CommandResponse:
         """Move to `(x, y)` and scroll by `(delta_x, delta_y)`."""
         return self._command(
             "/v1/pointer/scroll",
             {"x": x, "y": y, "delta_x": delta_x, "delta_y": delta_y},
         )
 
-    def set_keyboard_key(
-        self, key: str, action: KeyAction
-    ) -> CommandAcceptedResponse:
+    def set_keyboard_key(self, key: str, action: KeyAction) -> CommandResponse:
         """Press or release a single named keyboard key."""
         return self._command("/v1/keyboard/key", {"key": key, "action": action})
 
-    def send_keyboard_chord(self, keys: Sequence[str]) -> CommandAcceptedResponse:
+    def send_keyboard_chord(self, keys: Sequence[str]) -> CommandResponse:
         """Press and release `keys` together as a chord."""
         return self._command("/v1/keyboard/chord", {"keys": list(keys)})
 
-    def type_keyboard_text(self, text: str) -> CommandAcceptedResponse:
+    def type_keyboard_text(self, text: str) -> CommandResponse:
         """Type `text` via per-character key events."""
         return self._command("/v1/keyboard/text", {"text": text})
 
@@ -634,11 +706,11 @@ class VncRemoteControlClient:
             ),
         )
 
-    def set_clipboard(self, text: str) -> CommandAcceptedResponse:
+    def set_clipboard(self, text: str) -> CommandResponse:
         """Set the desktop's clipboard to `text`."""
         return self._command("/v1/clipboard", {"text": text})
 
-    def request_reconnect(self) -> CommandAcceptedResponse:
+    def request_reconnect(self) -> CommandResponse:
         """Request the worker manually reconnect to the desktop."""
         return self._command("/v1/connection/reconnect")
 
