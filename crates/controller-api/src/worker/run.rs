@@ -18,12 +18,21 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Drains queued command envelopes without executing them, resolving each
-/// pending caller with `WorkerUnavailable` so command tickets do not hang
-/// until an arbitrary timeout during shutdown. Accepted command outcomes are
-/// marked aborted before completion is signaled. Never inspects or logs command
-/// payloads. Dequeue ownership releases each envelope's submission permit.
-pub(super) fn drain_pending_commands(
+/// Low-level queue ownership helper retained for tests that construct internal
+/// envelopes without public command identities.
+#[cfg(test)]
+pub(super) fn drain_pending_commands(commands: &Receiver<CommandEnvelope>) {
+    while let Ok(mut envelope) = commands.try_recv() {
+        envelope.release_submission();
+        let _ = envelope
+            .completion
+            .send(Err(DesktopError::WorkerUnavailable));
+    }
+}
+
+/// Production drain path. Accepted command outcomes are marked aborted before
+/// completion is signaled so a timed-out caller can inspect the final state.
+fn drain_pending_commands_with_outcomes(
     commands: &Receiver<CommandEnvelope>,
     outcomes: &CommandOutcomeRegistry,
 ) {
@@ -49,7 +58,7 @@ pub(super) fn shutdown_now(
     if !shutdown_requested.load(Ordering::Acquire) {
         return false;
     }
-    drain_pending_commands(commands, outcomes);
+    drain_pending_commands_with_outcomes(commands, outcomes);
     true
 }
 
@@ -112,7 +121,7 @@ pub(super) fn classify_received_command(
             outcomes.mark_succeeded(command_id);
         }
         let _ = envelope.completion.send(Ok(()));
-        drain_pending_commands(commands, outcomes);
+        drain_pending_commands_with_outcomes(commands, outcomes);
         return ReceivedCommandAction::Stop;
     }
     if shutdown_requested.load(Ordering::Acquire) {
@@ -122,7 +131,7 @@ pub(super) fn classify_received_command(
         let _ = envelope
             .completion
             .send(Err(DesktopError::WorkerUnavailable));
-        drain_pending_commands(commands, outcomes);
+        drain_pending_commands_with_outcomes(commands, outcomes);
         return ReceivedCommandAction::Stop;
     }
     if let Some(command_id) = envelope.command_id {
@@ -270,7 +279,7 @@ pub(super) fn run_worker<F, S>(
                 };
                 let command_id = envelope
                     .command_id
-                    .expect("ordinary worker command must retain its command id");
+                    .expect("ordinary production worker command must retain its command id");
                 let result = match envelope.command {
                     WorkerCommand::Shutdown => unreachable!("shutdown handled before execution"),
                     WorkerCommand::Reconnect => state.manual_reconnect(),
@@ -311,7 +320,7 @@ pub(super) fn run_worker<F, S>(
     // Resolve any work still queued during an abnormal loop exit. Closing the
     // receiver afterward drops any envelope that races this final drain; the
     // exit guard conservatively terminates any retained state left non-terminal.
-    drain_pending_commands(&commands, &command_outcomes);
+    drain_pending_commands_with_outcomes(&commands, &command_outcomes);
     drop(commands);
     if orderly_shutdown {
         state.begin_shutdown_cleanup();
