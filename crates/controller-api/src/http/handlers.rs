@@ -1,7 +1,8 @@
+use super::backend::CommandExecutionError;
 use super::ids::RequestId;
 use super::responses::{
-    ApiError, ClipboardResponse, CommandAcceptedResponse, DisplayResponse, HealthResponse,
-    StatusResponse,
+    ApiError, ClipboardResponse, CommandResponse, CommandStatusResponse, DisplayResponse,
+    HealthResponse, StatusResponse,
 };
 use super::state::HttpState;
 use super::support::{
@@ -16,14 +17,15 @@ use crate::api_contract::{
 use crate::events::{EventSequenceError, EventSubscription, ServerEvent, WebSocketCapacityError};
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::ScreenshotOutcome;
+use crate::worker::CommandOutcomeLookup;
 use axum::Json;
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{Extension, State, ws::WebSocketUpgrade};
+use axum::extract::{Extension, Path, State, ws::WebSocketUpgrade};
 use axum::http::header::{CONTENT_TYPE, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
-use remote_desktop_core::WorkerCommand;
+use remote_desktop_core::{DesktopError, WorkerCommand};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -136,6 +138,23 @@ pub(super) async fn status(
     }))
 }
 
+pub(super) async fn command_status(
+    State(state): State<HttpState>,
+    Extension(request_id): Extension<RequestId>,
+    Path(command_id): Path<u64>,
+) -> Result<Json<CommandStatusResponse>, ApiError> {
+    match state.backend.command_outcome(command_id) {
+        CommandOutcomeLookup::Found(record) => Ok(Json(CommandStatusResponse {
+            command_id: record.command_id(),
+            status: record.state().as_str(),
+            failure: record.failure(),
+            retry_safe: record.retry_safe(),
+        })),
+        CommandOutcomeLookup::Expired => Err(ApiError::command_status_expired(request_id)),
+        CommandOutcomeLookup::Unknown => Err(ApiError::command_status_unknown(request_id)),
+    }
+}
+
 pub(super) async fn display(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
@@ -216,7 +235,7 @@ pub(super) async fn pointer_move(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<PointerMoveRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     let display = current_display(&state, request_id.clone())?;
     let command = payload
@@ -229,7 +248,7 @@ pub(super) async fn pointer_button(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<PointerButtonRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     let display = current_display(&state, request_id.clone())?;
     let command = payload
@@ -242,7 +261,7 @@ pub(super) async fn pointer_click(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<PointerClickRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     let display = current_display(&state, request_id.clone())?;
     let command = payload
@@ -255,7 +274,7 @@ pub(super) async fn pointer_double_click(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<PointerDoubleClickRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     let display = current_display(&state, request_id.clone())?;
     let command = payload
@@ -268,7 +287,7 @@ pub(super) async fn pointer_scroll(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<PointerScrollRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     let display = current_display(&state, request_id.clone())?;
     let command = payload
@@ -281,7 +300,7 @@ pub(super) async fn keyboard_key(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<KeyRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     execute_command(state, request_id, payload.into_command()).await
 }
@@ -290,7 +309,7 @@ pub(super) async fn keyboard_chord(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<ChordRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     let keys = payload
         .into_domain()
@@ -302,7 +321,7 @@ pub(super) async fn keyboard_text(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<TextRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     payload
         .validate()
@@ -336,7 +355,7 @@ pub(super) async fn set_clipboard(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
     payload: Result<Json<ClipboardRequest>, JsonRejection>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     let payload = json_payload(payload, request_id.clone())?;
     payload
         .validate()
@@ -352,7 +371,7 @@ pub(super) async fn set_clipboard(
 pub(super) async fn reconnect(
     State(state): State<HttpState>,
     Extension(request_id): Extension<RequestId>,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     execute_command(state, request_id, WorkerCommand::Reconnect).await
 }
 
@@ -360,7 +379,7 @@ async fn execute_command(
     state: HttpState,
     request_id: RequestId,
     command: WorkerCommand,
-) -> Result<(StatusCode, Json<CommandAcceptedResponse>), ApiError> {
+) -> Result<(StatusCode, Json<CommandResponse>), ApiError> {
     if state.is_shutting_down() {
         return Err(ApiError::shutting_down(request_id));
     }
@@ -370,19 +389,38 @@ async fn execute_command(
     let result = tokio::task::spawn_blocking(move || backend.execute_command(command, timeout))
         .await
         .map_err(|_| ApiError::internal(request_id.clone()))?;
-    let result = match result {
+    let command_id = match result {
         Ok(command_id) => command_id,
-        Err(error) => {
+        Err(CommandExecutionError::NotAccepted(error)) => {
             state.metrics.record_command_failure(&error);
-            tracing::warn!(error = %error, request_id = %request_id.0, "desktop_command_failed");
+            tracing::warn!(error = %error, request_id = %request_id.0, "desktop_command_rejected");
             return Err(domain_error(error, request_id));
+        }
+        Err(CommandExecutionError::Failed { command_id, error }) => {
+            state.metrics.record_command_failure(&error);
+            tracing::warn!(
+                error = %error,
+                command_id,
+                request_id = %request_id.0,
+                "desktop_command_failed"
+            );
+            return Err(domain_error(error, request_id));
+        }
+        Err(CommandExecutionError::OutcomeUnknown { command_id }) => {
+            state.metrics.record_command_failure(&DesktopError::Timeout);
+            tracing::warn!(
+                command_id,
+                request_id = %request_id.0,
+                "desktop_command_outcome_unknown"
+            );
+            return Err(ApiError::command_timeout(command_id, request_id));
         }
     };
     Ok((
-        StatusCode::ACCEPTED,
-        Json(CommandAcceptedResponse {
-            command_id: result,
-            status: "accepted",
+        StatusCode::OK,
+        Json(CommandResponse {
+            command_id,
+            status: "succeeded",
         }),
     ))
 }
