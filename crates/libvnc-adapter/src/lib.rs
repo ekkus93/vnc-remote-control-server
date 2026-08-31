@@ -22,6 +22,10 @@ const STATUS_FRAMEBUFFER_UNAVAILABLE: c_int = 6;
 const STATUS_BUFFER_TOO_SMALL: c_int = 7;
 const STATUS_CLIPBOARD_UNAVAILABLE: c_int = 8;
 const STATUS_PROTOCOL_INITIALIZATION_FAILED: c_int = 9;
+const STATUS_CLIPBOARD_TOO_LARGE: c_int = 10;
+const STATUS_CLIPBOARD_ALLOCATION_FAILED: c_int = 11;
+const STATUS_CLIPBOARD_STATE_INVALID: c_int = 12;
+const STATUS_CLIPBOARD_REVISION_EXHAUSTED: c_int = 13;
 
 #[repr(C)]
 struct VrcClient {
@@ -78,6 +82,7 @@ unsafe extern "C" {
     ) -> c_int;
     fn vrc_client_protocol_major(client: *const VrcClient) -> c_int;
     fn vrc_client_last_error(client: *const VrcClient) -> *const c_char;
+    fn vrc_client_last_callback_clipboard_bytes(client: *const VrcClient) -> usize;
     fn vrc_client_destroy(client: *mut VrcClient);
 }
 
@@ -178,6 +183,19 @@ pub enum NativeError {
     BufferTooSmall,
     /// No inbound clipboard value has been observed.
     ClipboardUnavailable,
+    /// An inbound clipboard update exceeded the fixed native maximum.
+    ClipboardTooLarge {
+        /// Rejected UTF-8 byte count reported by the shim.
+        bytes: usize,
+        /// Fixed maximum accepted by the shim.
+        maximum: usize,
+    },
+    /// Native allocation for a newer inbound clipboard update failed.
+    ClipboardAllocationFailed,
+    /// The native clipboard callback received invalid state or arguments.
+    ClipboardStateInvalid,
+    /// The native clipboard revision counter is exhausted.
+    ClipboardRevisionExhausted,
     /// Native clipboard bytes were not valid UTF-8.
     ClipboardNotUtf8,
     /// A configuration string contained an embedded NUL.
@@ -201,6 +219,18 @@ impl fmt::Display for NativeError {
             }
             Self::BufferTooSmall => formatter.write_str("native destination buffer is too small"),
             Self::ClipboardUnavailable => formatter.write_str("native clipboard is unavailable"),
+            Self::ClipboardTooLarge { maximum, .. } => {
+                write!(formatter, "native clipboard exceeds {maximum} bytes")
+            }
+            Self::ClipboardAllocationFailed => {
+                formatter.write_str("native clipboard allocation failed")
+            }
+            Self::ClipboardStateInvalid => {
+                formatter.write_str("native clipboard callback state is invalid")
+            }
+            Self::ClipboardRevisionExhausted => {
+                formatter.write_str("native clipboard revision is exhausted")
+            }
             Self::ClipboardNotUtf8 => formatter.write_str("native clipboard is not valid UTF-8"),
             Self::EmbeddedNul => {
                 formatter.write_str("native configuration contains an embedded NUL")
@@ -218,9 +248,13 @@ impl From<NativeError> for DesktopError {
                 Self::Configuration("native adapter rejected configuration".to_owned())
             }
             NativeError::ProtocolInitializationFailed => Self::Protocol,
+            NativeError::ClipboardTooLarge { maximum, .. } => Self::ClipboardTooLarge { maximum },
             NativeError::AllocationFailed
             | NativeError::NativeFailure { .. }
             | NativeError::BufferTooSmall
+            | NativeError::ClipboardAllocationFailed
+            | NativeError::ClipboardStateInvalid
+            | NativeError::ClipboardRevisionExhausted
             | NativeError::ClipboardNotUtf8 => Self::Native,
             NativeError::Disconnected => Self::Transport,
             NativeError::FramebufferUnavailable => Self::FramebufferUnavailable,
@@ -488,6 +522,13 @@ impl NativeClient {
             STATUS_FRAMEBUFFER_UNAVAILABLE => NativeError::FramebufferUnavailable,
             STATUS_BUFFER_TOO_SMALL => NativeError::BufferTooSmall,
             STATUS_CLIPBOARD_UNAVAILABLE => NativeError::ClipboardUnavailable,
+            STATUS_CLIPBOARD_TOO_LARGE => NativeError::ClipboardTooLarge {
+                bytes: self.last_callback_clipboard_bytes(),
+                maximum: remote_desktop_core::MAX_CLIPBOARD_BYTES,
+            },
+            STATUS_CLIPBOARD_ALLOCATION_FAILED => NativeError::ClipboardAllocationFailed,
+            STATUS_CLIPBOARD_STATE_INVALID => NativeError::ClipboardStateInvalid,
+            STATUS_CLIPBOARD_REVISION_EXHAUSTED => NativeError::ClipboardRevisionExhausted,
             STATUS_TIMEOUT => NativeError::NativeFailure {
                 message: "unexpected timeout status".to_owned(),
             },
@@ -495,6 +536,11 @@ impl NativeClient {
                 message: "unknown native status".to_owned(),
             },
         }
+    }
+
+    fn last_callback_clipboard_bytes(&self) -> usize {
+        // SAFETY: the opaque handle is live for `self`; the shim returns copied metadata only.
+        unsafe { vrc_client_last_callback_clipboard_bytes(self.pointer.as_ptr()) }
     }
 
     fn last_error(&self) -> String {
@@ -566,6 +612,31 @@ mod tests {
             NativeClient::connect(&config),
             Err(NativeError::EmbeddedNul)
         ));
+    }
+
+    #[test]
+    fn clipboard_callback_failures_map_to_distinct_domain_errors() {
+        assert_eq!(
+            DesktopError::from(NativeError::ClipboardTooLarge {
+                bytes: remote_desktop_core::MAX_CLIPBOARD_BYTES + 1,
+                maximum: remote_desktop_core::MAX_CLIPBOARD_BYTES,
+            }),
+            DesktopError::ClipboardTooLarge {
+                maximum: remote_desktop_core::MAX_CLIPBOARD_BYTES,
+            }
+        );
+        assert_eq!(
+            DesktopError::from(NativeError::ClipboardAllocationFailed),
+            DesktopError::Native
+        );
+        assert_eq!(
+            DesktopError::from(NativeError::ClipboardStateInvalid),
+            DesktopError::Native
+        );
+        assert_eq!(
+            DesktopError::from(NativeError::ClipboardRevisionExhausted),
+            DesktopError::Native
+        );
     }
 
     #[test]
