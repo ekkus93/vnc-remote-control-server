@@ -3,6 +3,7 @@
 from .client import VncClient, VncRemoteControlClient
 from .errors import (
     ApiError,
+    CommandOutcomeUnknownError,
     OptionalDependencyError,
     ProtocolError,
     TransportError,
@@ -11,6 +12,8 @@ from .errors import (
 from .models import (
     ClipboardResponse,
     CommandAcceptedResponse,
+    CommandResponse,
+    CommandStatusResponse,
     ConnectionState,
     DisplayResponse,
     Event,
@@ -26,6 +29,9 @@ __all__ = [
     "ApiError",
     "ClipboardResponse",
     "CommandAcceptedResponse",
+    "CommandOutcomeUnknownError",
+    "CommandResponse",
+    "CommandStatusResponse",
     "ConnectionState",
     "DisplayResponse",
     "Event",
