@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 mod clipboard_and_input;
 mod lifecycle;
 mod metric_semantics;
+mod outcome_panic;
 mod privacy;
 mod reconnect;
 mod shutdown;

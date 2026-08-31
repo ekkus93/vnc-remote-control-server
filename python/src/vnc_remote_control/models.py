@@ -28,6 +28,15 @@ WorkerFailure: TypeAlias = Literal[
     "protocol",
     "native",
 ]
+CommandStatus: TypeAlias = Literal[
+    "reserved",
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "aborted",
+    "rejected",
+]
 MouseButton: TypeAlias = Literal["left", "middle", "right"]
 KeyAction: TypeAlias = Literal["down", "up"]
 
@@ -70,11 +79,26 @@ class DisplayResponse:
 
 
 @dataclass(frozen=True, slots=True)
-class CommandAcceptedResponse:
-    """Body of a 202-Accepted response for a queued command."""
+class CommandResponse:
+    """Terminal-success response for a synchronous mutation command."""
 
     command_id: int
     status: str
+
+
+# Backward-compatible import alias. The server no longer returns HTTP 202 or an
+# "accepted" status for these synchronous mutation methods.
+CommandAcceptedResponse = CommandResponse
+
+
+@dataclass(frozen=True, slots=True)
+class CommandStatusResponse:
+    """Retained lifecycle status for one process-local command identifier."""
+
+    command_id: int
+    status: CommandStatus
+    failure: str | None
+    retry_safe: bool
 
 
 @dataclass(frozen=True, slots=True)

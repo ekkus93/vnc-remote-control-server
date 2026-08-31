@@ -47,22 +47,41 @@ impl Drop for SubmissionPermit {
 }
 
 pub(super) struct CommandEnvelope {
+    /// Stable process-local identifier for ordinary submitted commands.
+    /// Synthetic/internal test envelopes and shutdown nudges may carry no
+    /// externally visible ID.
+    pub(super) command_id: Option<u64>,
     pub(super) command: WorkerCommand,
     pub(super) completion: SyncSender<Result<(), DesktopError>>,
     submission: Option<SubmissionPermit>,
 }
 
 impl CommandEnvelope {
+    /// Constructs an internal envelope without a public command identity.
+    /// Production client submissions use `new_with_id`; this constructor is
+    /// retained for queue-ownership tests that deliberately bypass admission.
     pub(super) fn new(
         command: WorkerCommand,
         completion: SyncSender<Result<(), DesktopError>>,
         submissions_in_flight: Arc<AtomicUsize>,
     ) -> Self {
         Self {
+            command_id: None,
             command,
             completion,
             submission: Some(SubmissionPermit::acquire(submissions_in_flight)),
         }
+    }
+
+    pub(super) fn new_with_id(
+        command_id: u64,
+        command: WorkerCommand,
+        completion: SyncSender<Result<(), DesktopError>>,
+        submissions_in_flight: Arc<AtomicUsize>,
+    ) -> Self {
+        let mut envelope = Self::new(command, completion, submissions_in_flight);
+        envelope.command_id = Some(command_id);
+        envelope
     }
 
     pub(super) fn shutdown_without_waiter(submissions_in_flight: Arc<AtomicUsize>) -> Self {

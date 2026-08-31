@@ -144,6 +144,12 @@ pub(super) fn domain_error(error: DesktopError, request_id: RequestId) -> ApiErr
             "command capacity is exhausted",
             request_id,
         ),
+        DesktopError::CommandOutcomeCapacityFull => ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "command_outcome_capacity_full",
+            "command outcome capacity is exhausted",
+            request_id,
+        ),
         DesktopError::CommandIdExhausted => ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "command_id_exhausted",
@@ -165,7 +171,7 @@ pub(super) fn domain_error(error: DesktopError, request_id: RequestId) -> ApiErr
         DesktopError::Timeout => ApiError::new(
             StatusCode::GATEWAY_TIMEOUT,
             "command_timeout",
-            "desktop command acknowledgement timed out",
+            "desktop command timed out",
             request_id,
         ),
         DesktopError::ReconnectRateLimited => ApiError::new(

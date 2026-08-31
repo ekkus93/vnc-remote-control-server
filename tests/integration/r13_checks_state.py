@@ -16,6 +16,13 @@ from r13_harness import Harness
 from r13_helpers import error_code, parse_png_dimensions, post_json, require, wait_until
 
 
+def _require_command_succeeded(response: Any, context: str) -> None:
+    require(response.status == 200, f"{context} returned {response.status}")
+    payload = response.json()
+    require(payload.get("status") == "succeeded", f"{context} did not report succeeded")
+    require(isinstance(payload.get("command_id"), int), f"{context} omitted command_id")
+
+
 def assert_initial_state_and_screenshots(harness: Harness) -> str:
     """Verify connected state, display metadata, PNG size, ETag, and 304 revalidation.
 
@@ -80,7 +87,7 @@ def _assert_clipboard_initially_unavailable(harness: Harness) -> None:
 def _assert_text_and_key_ordering(harness: Harness) -> None:
     harness.log("verifying text preflight and key ordering")
     response = post_json(harness, "/v1/keyboard/text", {"text": SUPPORTED_TEXT})
-    require(response.status == 202, f"supported text returned {response.status}")
+    _require_command_succeeded(response, "supported text")
     state = harness.wait_desktop_state(lambda value: value.get("text") == SUPPORTED_TEXT)
     baseline_text = state["text"]
     unsupported = post_json(harness, "/v1/keyboard/text", {"text": UNSUPPORTED_TEXT})
@@ -99,9 +106,9 @@ def _assert_text_and_key_ordering(harness: Harness) -> None:
         {"key": "F5", "action": "up"},
     ):
         response = post_json(harness, "/v1/keyboard/key", payload)
-        require(response.status == 202, f"key transition failed: {response.status}")
+        _require_command_succeeded(response, "key transition")
     response = post_json(harness, "/v1/keyboard/chord", {"keys": ["CTRL_LEFT", "SHIFT_LEFT", "F6"]})
-    require(response.status == 202, f"chord failed: {response.status}")
+    _require_command_succeeded(response, "chord")
 
     expected_keys = [
         ("key_down", "F5"),
@@ -130,7 +137,7 @@ def _assert_text_and_key_ordering(harness: Harness) -> None:
 def _assert_clipboard_round_trip(harness: Harness) -> dict[str, Any]:
     harness.log("verifying public clipboard flow")
     response = harness.request("PUT", "/v1/clipboard", {"text": OUTBOUND_CLIPBOARD})
-    require(response.status == 202, f"outbound clipboard failed: {response.status}")
+    _require_command_succeeded(response, "outbound clipboard")
     clipboard_reader = r'''
 import sys, time, tkinter as tk
 expected = sys.argv[1]
@@ -172,7 +179,7 @@ root.destroy()
             "/v1/pointer/click",
             {"x": int(point["x"]), "y": int(point["y"]), "button": "left"},
         )
-        require(click.status == 202, f"{name} control click failed: {click.status}")
+        _require_command_succeeded(click, f"{name} control click")
 
     click_control("paste")
     harness.wait_desktop_state(
@@ -196,7 +203,7 @@ root.destroy()
         )
     )
     response = post_json(harness, "/v1/keyboard/text", {"text": INBOUND_CLIPBOARD})
-    require(response.status == 202, "copy fixture typing failed")
+    _require_command_succeeded(response, "copy fixture typing")
     harness.wait_desktop_state(lambda value: value.get("text") == INBOUND_CLIPBOARD)
     click_control("copy")
     harness.wait_desktop_state(
@@ -252,7 +259,7 @@ def _assert_pointer_and_scroll_input(
     ]
     for path, payload in requests:
         response = post_json(harness, path, payload)
-        require(response.status == 202, f"{path} returned {response.status}: {response.body!r}")
+        _require_command_succeeded(response, path)
 
     def input_complete(value: dict[str, Any]) -> bool:
         events = [

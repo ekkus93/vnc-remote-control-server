@@ -29,6 +29,7 @@ EXPECTED_OPERATIONS = {
     "/v1/screenshot.png": {"get"},
     "/v1/events": {"get"},
     "/v1/metrics": {"get"},
+    "/v1/commands/{command_id}": {"get"},
     "/v1/pointer/move": {"post"},
     "/v1/pointer/button": {"post"},
     "/v1/pointer/click": {"post"},
@@ -72,10 +73,13 @@ EXPECTED_ERROR_CODES = {
     "invalid_clipboard",
     "scroll_too_large",
     "command_queue_full",
+    "command_outcome_capacity_full",
     "command_id_exhausted",
     "worker_unavailable",
     "clipboard_unavailable",
     "command_timeout",
+    "command_status_unknown",
+    "command_status_expired",
     "reconnect_rate_limited",
     "invalid_request",
     "desktop_operation_failed",
@@ -278,18 +282,41 @@ class DocumentationContractTests(unittest.TestCase):
                         document, media["schema"], media["example"], f"{method} {path}"
                     )
 
-        command_schema = document["components"]["schemas"]["CommandAcceptedResponse"]
-        self.assertEqual(command_schema["properties"]["status"]["const"], "accepted")
+        command_schema = document["components"]["schemas"]["CommandResponse"]
+        self.assertEqual(command_schema["properties"]["status"]["const"], "succeeded")
+        command_status_schema = document["components"]["schemas"]["CommandStatusResponse"]
+        self.assertEqual(
+            set(command_status_schema["properties"]["status"]["enum"]),
+            {"reserved", "queued", "running", "succeeded", "failed", "aborted", "rejected"},
+        )
+        self.assertIn("retry_safe", command_status_schema["required"])
+        self.assertEqual(
+            document["paths"]["/v1/commands/{command_id}"]["get"]["responses"]["200"]
+            ["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/CommandStatusResponse",
+        )
+        self.assertIn(
+            "404", document["paths"]["/v1/commands/{command_id}"]["get"]["responses"]
+        )
+        self.assertIn(
+            "410", document["paths"]["/v1/commands/{command_id}"]["get"]["responses"]
+        )
         for path in EXPECTED_OPERATIONS:
             for method, operation in document["paths"][path].items():
                 if method in {"post", "put"} and path != "/health/ready":
-                    self.assertIn("202", operation["responses"])
-                    description = operation["responses"]["202"]["description"]
-                    self.assertIn("acknowledg", description.lower())
+                    self.assertIn("200", operation["responses"])
+                    description = operation["responses"]["200"]["description"]
+                    self.assertIn("terminal", description.lower())
 
         error_schema = document["components"]["schemas"]["ErrorBody"]
         error_codes = set(error_schema["properties"]["code"]["enum"])
         self.assertEqual(error_codes, EXPECTED_ERROR_CODES)
+        for field in ("command_id", "outcome", "retry_safe"):
+            self.assertIn(field, error_schema["properties"])
+        command_timeout = document["components"]["responses"]["CommandTimeout"]["description"]
+        self.assertIn("outcome is unknown", command_timeout)
+        self.assertIn("retry_safe false", command_timeout)
+        self.assertIn("/v1/commands/{command_id}", command_timeout)
         scroll_schema = document["components"]["schemas"]["PointerScrollRequest"]
         self.assertEqual(scroll_schema["properties"]["delta_x"]["enum"], [0])
 
@@ -317,7 +344,7 @@ class DocumentationContractTests(unittest.TestCase):
             "## 5. Build and start",
             "## 6. API binding and TLS",
             "## 9. Authenticated HTTP examples",
-            "## 10. Asynchronous command semantics",
+            "## 10. Command completion and outcome semantics",
             "## 11. WebSocket events",
             "## 12. Shutdown behavior",
             "## 13. Recovery behavior",
@@ -338,6 +365,10 @@ class DocumentationContractTests(unittest.TestCase):
             "VRC_WEBSOCKET_MAX_CLIENTS",
             "VRC_COMMAND_CAPACITY",
             "docker compose -f deploy/compose.yaml down",
+            "outcome: \"unknown\"",
+            "retry_safe: false",
+            "/v1/commands/$COMMAND_ID",
+            "Do not automatically retry the original mutation",
         ):
             self.assertIn(required, guide)
 

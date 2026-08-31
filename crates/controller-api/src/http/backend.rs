@@ -1,8 +1,34 @@
 use crate::framebuffer::FramebufferMetadata;
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome, ScreenshotService};
-use crate::worker::{WorkerClient, WorkerSnapshot};
+use crate::worker::{CommandOutcomeLookup, WorkerClient, WorkerSnapshot};
 use remote_desktop_core::{ClipboardSnapshot, DesktopError, WorkerCommand};
 use std::time::Duration;
+
+/// Failure returned by one HTTP mutation after command preflight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandExecutionError {
+    /// The command never entered the worker queue and cannot execute.
+    NotAccepted(DesktopError),
+    /// The accepted command completed with a known failure.
+    Failed {
+        /// Stable process-local command identifier.
+        command_id: u64,
+        /// Sanitized domain error returned by worker execution.
+        error: DesktopError,
+    },
+    /// The command was accepted but this caller did not observe a terminal
+    /// result before its acknowledgement deadline. The command may still run.
+    OutcomeUnknown {
+        /// Stable process-local command identifier for later status lookup.
+        command_id: u64,
+    },
+}
+
+impl From<DesktopError> for CommandExecutionError {
+    fn from(error: DesktopError) -> Self {
+        Self::NotAccepted(error)
+    }
+}
 
 /// Backend required by the authenticated HTTP surface.
 pub trait HttpBackend: Send + Sync + 'static {
@@ -20,7 +46,9 @@ pub trait HttpBackend: Send + Sync + 'static {
         &self,
         command: WorkerCommand,
         timeout: Duration,
-    ) -> Result<u64, DesktopError>;
+    ) -> Result<u64, CommandExecutionError>;
+    /// Returns one retained process-local command outcome.
+    fn command_outcome(&self, command_id: u64) -> CommandOutcomeLookup;
     /// Returns the last valid inbound clipboard snapshot.
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError>;
     /// Returns command submissions whose ownership permit remains live.
@@ -75,11 +103,21 @@ impl HttpBackend for WorkerHttpBackend {
         &self,
         command: WorkerCommand,
         timeout: Duration,
-    ) -> Result<u64, DesktopError> {
-        let ticket = self.client.submit(command)?;
+    ) -> Result<u64, CommandExecutionError> {
+        let ticket = self
+            .client
+            .submit(command)
+            .map_err(CommandExecutionError::NotAccepted)?;
         let command_id = ticket.id();
-        ticket.wait(timeout)?;
-        Ok(command_id)
+        match ticket.wait(timeout) {
+            Ok(()) => Ok(command_id),
+            Err(DesktopError::Timeout) => Err(CommandExecutionError::OutcomeUnknown { command_id }),
+            Err(error) => Err(CommandExecutionError::Failed { command_id, error }),
+        }
+    }
+
+    fn command_outcome(&self, command_id: u64) -> CommandOutcomeLookup {
+        self.client.command_outcome(command_id)
     }
 
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {

@@ -338,13 +338,26 @@ Metrics use bounded labels and exclude request payloads and secret values. Every
 
 `vrc_worker_command_submissions_in_flight` is a gauge of command submissions that have acquired an accounting permit but have not yet released it. Permit acquisition occurs before bounded-queue admission, so this value can transiently exceed `VRC_COMMAND_CAPACITY`; it is not queue depth. The earlier `vrc_worker_command_queue_depth` name was removed without an alias in v0.1 because no repository-local dashboard, alert, API response, or R13 contract consumed it.
 
-## 10. Asynchronous command semantics
+## 10. Command completion and outcome semantics
 
-Input, clipboard-set, and reconnect endpoints return `202 Accepted` only after the command has been admitted to the bounded worker queue and its bounded worker acknowledgement succeeds. The response contains a process-local `command_id` and `status: "accepted"`.
+Input, clipboard-set, and reconnect endpoints are synchronous with respect to the controller worker. They return HTTP `200` with a process-local `command_id` and `status: "succeeded"` only after validation, worker admission, execution, and a successful worker completion result. This proves that the controller completed the RFB operation without a reported worker failure; it does not guarantee that a target desktop application interpreted the input semantically.
 
-`202` does not promise that a target desktop application interpreted the input semantically. It proves that the controller validated and executed the RFB operation without a reported worker failure.
+A command can be accepted by the worker and still outlive the HTTP wait. If the configured command acknowledgement deadline elapses after admission, the response is `504 command_timeout` and includes the same `command_id`, `outcome: "unknown"`, and `retry_safe: false`. **Do not automatically retry the original mutation.** The command may still execute after the HTTP response.
 
-Queue saturation, shutdown, timeouts, and transport failures remain visible as non-2xx responses. Commands are not silently dropped.
+Inspect an accepted command by ID instead:
+
+```bash
+COMMAND_ID=17
+curl --fail-with-body \
+  --header "$AUTH_HEADER" \
+  "$BASE_URL/v1/commands/$COMMAND_ID"
+```
+
+The authenticated status response contains only sanitized lifecycle metadata: `command_id`, `status`, optional `failure`, and `retry_safe`. Lifecycle values are `reserved`, `queued`, `running`, `succeeded`, `failed`, `aborted`, and `rejected`. `reserved` and `rejected` are pre-admission states; accepted `queued`/`running` work and every terminal result after admission are conservatively non-retry-safe. Command payloads, typed text, clipboard contents, and credentials are never retained in the outcome registry.
+
+The registry is process-local and bounded. Nonterminal records are never evicted to make room for new submissions. Terminal records may eventually expire; querying an ID that was retained but has expired returns `410 command_status_expired`, while an ID not known to this process instance returns `404 command_status_unknown`.
+
+Known failures after worker admission include the stable `command_id`, `outcome: "failed"`, and `retry_safe: false`. Pre-admission validation, shutdown, queue-capacity, or outcome-registry-capacity failures do not pretend that remote work was accepted. Queue saturation, shutdown, timeouts, and transport failures therefore remain visible rather than being silently dropped or converted to success.
 
 ## 11. WebSocket events
 
@@ -527,13 +540,14 @@ Do not serve a cached pre-disconnect screenshot as current.
 
 ### Commands return `503` or `504`
 
-- `command_queue_full`: clients are producing commands faster than the single worker can execute them;
-- `command_id_exhausted`: the process-local command identifier sequence is permanently exhausted; the controller can no longer safely acknowledge new commands and must be recreated (this is distinct from, and does not recover like, `command_queue_full` or `worker_unavailable`);
-- `worker_unavailable`: shutdown or worker failure is active;
-- `command_timeout`: the bounded acknowledgement deadline elapsed;
-- `desktop_operation_failed`: the native VNC operation failed.
+- `command_queue_full`: the command was not admitted because clients are producing commands faster than the single worker can execute them;
+- `command_outcome_capacity_full`: unresolved outcome records already occupy the bounded registry, so the new command was rejected before admission rather than making an accepted command uninspectable;
+- `command_id_exhausted`: the process-local command identifier sequence is permanently exhausted; the controller can no longer safely identify new commands and must be recreated;
+- `worker_unavailable`: shutdown or worker failure prevented admission or execution;
+- `command_timeout`: the command was already admitted, the bounded HTTP wait elapsed, and the remote execution outcome is unknown. The response's `command_id` must be inspected with `GET /v1/commands/{command_id}`; do not blindly retry the mutation;
+- `desktop_operation_failed`: an admitted native VNC operation reached a known failure. The error includes the stable `command_id` and is conservatively non-retry-safe.
 
-Back off at the client. Do not retry tight loops, and do not hide these failures as successful input.
+Back off on pre-admission overload. For an admitted command with unknown or failed outcome, preserve its command ID and inspect status rather than issuing a duplicate mutation. Do not hide any of these states as successful input.
 
 ## 16. Validation commands
 

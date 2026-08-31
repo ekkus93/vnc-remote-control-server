@@ -38,9 +38,17 @@ pub(super) struct DisplayResponse {
 }
 
 #[derive(Serialize)]
-pub(super) struct CommandAcceptedResponse {
+pub(super) struct CommandResponse {
     pub(super) command_id: u64,
     pub(super) status: &'static str,
+}
+
+#[derive(Serialize)]
+pub(super) struct CommandStatusResponse {
+    pub(super) command_id: u64,
+    pub(super) status: &'static str,
+    pub(super) failure: Option<&'static str>,
+    pub(super) retry_safe: bool,
 }
 
 #[derive(Serialize)]
@@ -60,6 +68,12 @@ struct ErrorBody<'a> {
     code: &'static str,
     message: &'static str,
     request_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    outcome: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retry_safe: Option<bool>,
 }
 
 pub(super) struct ApiError {
@@ -67,6 +81,9 @@ pub(super) struct ApiError {
     code: &'static str,
     message: &'static str,
     request_id: RequestId,
+    command_id: Option<u64>,
+    outcome: Option<&'static str>,
+    retry_safe: Option<bool>,
 }
 
 impl ApiError {
@@ -81,7 +98,53 @@ impl ApiError {
             code,
             message,
             request_id,
+            command_id: None,
+            outcome: None,
+            retry_safe: None,
         }
+    }
+
+    /// Attaches stable identity and retry semantics to an error for a command
+    /// that was already admitted to the worker. This must never be used for a
+    /// pre-admission rejection.
+    pub(super) fn with_command_context(
+        mut self,
+        command_id: u64,
+        outcome: &'static str,
+        retry_safe: bool,
+    ) -> Self {
+        self.command_id = Some(command_id);
+        self.outcome = Some(outcome);
+        self.retry_safe = Some(retry_safe);
+        self
+    }
+
+    pub(super) fn command_timeout(command_id: u64, request_id: RequestId) -> Self {
+        Self::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "command_timeout",
+            "desktop command result wait timed out; execution outcome is unknown",
+            request_id,
+        )
+        .with_command_context(command_id, "unknown", false)
+    }
+
+    pub(super) fn command_status_unknown(request_id: RequestId) -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            "command_status_unknown",
+            "command identifier is not known to this process instance",
+            request_id,
+        )
+    }
+
+    pub(super) fn command_status_expired(request_id: RequestId) -> Self {
+        Self::new(
+            StatusCode::GONE,
+            "command_status_expired",
+            "command status record has expired",
+            request_id,
+        )
     }
 
     pub(super) fn unauthorized(request_id: RequestId) -> Self {
@@ -155,6 +218,9 @@ impl IntoResponse for ApiError {
                 code: self.code,
                 message: self.message,
                 request_id: &self.request_id.0,
+                command_id: self.command_id,
+                outcome: self.outcome,
+                retry_safe: self.retry_safe,
             },
         });
         let mut response = body.into_response();

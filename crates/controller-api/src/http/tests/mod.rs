@@ -1,4 +1,4 @@
-use super::backend::HttpBackend;
+use super::backend::{CommandExecutionError, HttpBackend};
 use super::ids::RequestId;
 use super::middleware::{AccessLogContext, REQUEST_ID_HEADER, format_access_log};
 use super::router::router;
@@ -8,13 +8,16 @@ use crate::config::ApiToken;
 use crate::framebuffer::FramebufferMetadata;
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::{ScreenshotError, ScreenshotOutcome};
-use crate::worker::WorkerSnapshot;
+use crate::worker::{
+    CommandOutcomeLookup, CommandOutcomeRecord, CommandOutcomeState, WorkerSnapshot,
+};
 use axum::body::{Body, to_bytes};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderValue, Request as HttpRequest, StatusCode};
 use libvnc_adapter::SecretString;
 use remote_desktop_core::{ClipboardSnapshot, ConnectionState, DesktopError, WorkerCommand};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,6 +25,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tower::ServiceExt;
 
 mod access_log_and_validation;
+mod command_status_matrix;
 mod commands;
 mod display_and_screenshot;
 mod docs_ui;
@@ -40,7 +44,9 @@ pub(super) struct MockBackend {
     framebuffer: FramebufferMetadata,
     screenshot: Mutex<MockScreenshot>,
     pub(super) commands: Mutex<Vec<WorkerCommand>>,
-    pub(super) execute_error: Mutex<Option<DesktopError>>,
+    pub(super) execute_error: Mutex<Option<CommandExecutionError>>,
+    pub(super) command_outcomes: Mutex<HashMap<u64, (CommandOutcomeState, Option<&'static str>)>>,
+    pub(super) expired_command_id: Mutex<Option<u64>>,
     pub(super) clipboard: Mutex<Option<ClipboardSnapshot>>,
     next_command_id: AtomicU64,
     command_submissions_in_flight: usize,
@@ -88,20 +94,78 @@ impl HttpBackend for MockBackend {
         &self,
         command: WorkerCommand,
         _timeout: Duration,
-    ) -> Result<u64, DesktopError> {
+    ) -> Result<u64, CommandExecutionError> {
         if let Some(error) = self
             .execute_error
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
         {
+            match &error {
+                CommandExecutionError::NotAccepted(_) => {}
+                CommandExecutionError::Failed {
+                    command_id,
+                    error: domain_error,
+                } => {
+                    self.commands
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(command);
+                    self.command_outcomes
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(
+                            *command_id,
+                            (
+                                CommandOutcomeState::Failed,
+                                Some(mock_failure_name(domain_error)),
+                            ),
+                        );
+                }
+                CommandExecutionError::OutcomeUnknown { command_id } => {
+                    self.commands
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(command);
+                    self.command_outcomes
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(*command_id, (CommandOutcomeState::Running, None));
+                }
+            }
             return Err(error);
         }
         self.commands
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(command);
-        Ok(self.next_command_id.fetch_add(1, Ordering::Relaxed))
+        let command_id = self.next_command_id.fetch_add(1, Ordering::Relaxed);
+        self.command_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(command_id, (CommandOutcomeState::Succeeded, None));
+        Ok(command_id)
+    }
+
+    fn command_outcome(&self, command_id: u64) -> CommandOutcomeLookup {
+        if self
+            .expired_command_id
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some_and(|expired| expired == command_id)
+        {
+            return CommandOutcomeLookup::Expired;
+        }
+        let outcomes = self
+            .command_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match outcomes.get(&command_id) {
+            Some((state, failure)) => CommandOutcomeLookup::Found(
+                CommandOutcomeRecord::from_parts(command_id, *state, *failure),
+            ),
+            None => CommandOutcomeLookup::Unknown,
+        }
     }
 
     fn clipboard_snapshot(&self) -> Result<ClipboardSnapshot, DesktopError> {
@@ -118,6 +182,34 @@ impl HttpBackend for MockBackend {
 
     fn command_queue_capacity(&self) -> usize {
         self.command_queue_capacity
+    }
+}
+
+fn mock_failure_name(error: &DesktopError) -> &'static str {
+    match error {
+        DesktopError::DisplayUnavailable => "display_unavailable",
+        DesktopError::InvalidCoordinate { .. } => "invalid_coordinate",
+        DesktopError::InvalidRectangle => "invalid_rectangle",
+        DesktopError::InvalidFramebufferDimensions => "invalid_framebuffer_dimensions",
+        DesktopError::ChordTooLong { .. } => "chord_too_long",
+        DesktopError::TextTooLarge { .. } => "text_too_large",
+        DesktopError::ClipboardTooLarge { .. } => "clipboard_too_large",
+        DesktopError::UnsupportedTextCharacter { .. } => "unsupported_text",
+        DesktopError::ClipboardContainsNul => "invalid_clipboard",
+        DesktopError::ScrollTooLarge { .. } => "scroll_too_large",
+        DesktopError::CommandQueueFull => "command_queue_full",
+        DesktopError::CommandOutcomeCapacityFull => "command_outcome_capacity_full",
+        DesktopError::CommandIdExhausted => "command_id_exhausted",
+        DesktopError::WorkerUnavailable => "worker_unavailable",
+        DesktopError::FramebufferUnavailable => "framebuffer_unavailable",
+        DesktopError::ClipboardUnavailable => "clipboard_unavailable",
+        DesktopError::Timeout => "timeout",
+        DesktopError::ReconnectRateLimited => "reconnect_rate_limited",
+        DesktopError::Configuration(_) => "configuration",
+        DesktopError::AuthenticationFailed => "authentication",
+        DesktopError::Transport => "transport",
+        DesktopError::Protocol => "protocol",
+        DesktopError::Native => "native",
     }
 }
 
@@ -157,6 +249,8 @@ pub(super) fn test_state_with_backend(
         screenshot: Mutex::new(screenshot),
         commands: Mutex::new(Vec::new()),
         execute_error: Mutex::new(None),
+        command_outcomes: Mutex::new(HashMap::new()),
+        expired_command_id: Mutex::new(None),
         clipboard: Mutex::new(None),
         next_command_id: AtomicU64::new(1),
         command_submissions_in_flight: 3,

@@ -62,6 +62,9 @@ pub enum DesktopError {
     /// The bounded worker command queue is full.
     #[error("command queue is full")]
     CommandQueueFull,
+    /// The bounded command-outcome registry cannot retain another unresolved command.
+    #[error("command outcome capacity is full")]
+    CommandOutcomeCapacityFull,
     /// The process-local command identifier sequence is permanently exhausted.
     #[error("command identifier sequence is exhausted")]
     CommandIdExhausted,

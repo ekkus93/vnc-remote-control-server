@@ -59,10 +59,12 @@ def _assert_queue_saturation(harness: Harness) -> None:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         results = list(executor.map(long_click, range(12)))
-    require(
-        any(result.status == 202 for result in results),
-        "queue saturation produced no accepted command",
-    )
+    succeeded = [result for result in results if result.status == 200]
+    require(bool(succeeded), "queue saturation produced no completed command")
+    for result in succeeded:
+        payload = result.json()
+        require(payload.get("status") == "succeeded", "completed command omitted succeeded status")
+        require(isinstance(payload.get("command_id"), int), "completed command omitted command_id")
     require(
         any(
             result.status == 503 and error_code(result) == "command_queue_full"
@@ -75,7 +77,10 @@ def _assert_queue_saturation(harness: Harness) -> None:
 def _assert_reconnect_rate_limit(harness: Harness) -> None:
     first = post_json(harness, "/v1/connection/reconnect", {})
     second = post_json(harness, "/v1/connection/reconnect", {})
-    require(first.status == 202, f"first reconnect failed: {first.status}")
+    require(first.status == 200, f"first reconnect failed: {first.status}")
+    first_payload = first.json()
+    require(first_payload.get("status") == "succeeded", "first reconnect did not report succeeded")
+    require(isinstance(first_payload.get("command_id"), int), "first reconnect omitted command_id")
     require(
         second.status == 429 and error_code(second) == "reconnect_rate_limited",
         "reconnect rate limit was not explicit",

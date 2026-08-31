@@ -3,8 +3,8 @@ use super::docs_ui::{
     swagger_ui_bundle_js_asset, swagger_ui_css_asset, swagger_ui_standalone_preset_js_asset,
 };
 use super::handlers::{
-    clipboard, display, events, keyboard_chord, keyboard_key, keyboard_text, liveness,
-    metrics_endpoint, pointer_button, pointer_click, pointer_double_click, pointer_move,
+    clipboard, command_status, display, events, keyboard_chord, keyboard_key, keyboard_text,
+    liveness, metrics_endpoint, pointer_button, pointer_click, pointer_double_click, pointer_move,
     pointer_scroll, readiness, reconnect, screenshot, set_clipboard, status,
 };
 use super::middleware::{access_log, assign_request_id, require_bearer};
@@ -18,6 +18,7 @@ use axum::routing::{get, post};
 pub fn router(state: HttpState) -> Router {
     let protected = Router::new()
         .route("/status", get(status))
+        .route("/commands/{command_id}", get(command_status))
         .route("/display", get(display))
         .route("/screenshot.png", get(screenshot))
         .route("/events", get(events))

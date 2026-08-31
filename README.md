@@ -66,7 +66,7 @@ Release acceptance is fail-closed: both permanent `CI` and `Release Gates` must 
 
 ## Security revalidation reminder
 
-**Before September 4, 2026**, rebuild both container images from current Debian base images, refresh the pinned base-image digests as appropriate, run the repository's Trivy-backed Release Gates, and re-review every remaining CRITICAL finding recorded in [`security/trivy-critical-vex.json`](security/trivy-critical-vex.json).
+**Before September 30, 2026**, rebuild both container images from current Debian base images, refresh the pinned base-image digests as appropriate, run the repository's Trivy-backed Release Gates, and re-review every remaining CRITICAL finding recorded in [`security/trivy-critical-vex.json`](security/trivy-critical-vex.json).
 
 Running `apt update` and `apt upgrade` inside an existing container is not sufficient. Produce new images from updated base images and package indexes, rescan those exact images, remove resolved VEX entries, and renew only the remaining determinations that are still demonstrably non-exploitable. An expired or mismatched determination must continue to fail closed. [Issue #7](https://github.com/ekkus93/vnc-remote-control-server/issues/7) tracks this maintenance work.
 

@@ -41,7 +41,11 @@ fn command_failure_json_logs_exclude_text_and_clipboard_sentinels() {
         *backend
             .execute_error
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(DesktopError::Native);
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(CommandExecutionError::Failed {
+                command_id: 41,
+                error: DesktopError::Native,
+            });
         let request = authenticated_json_request(method, uri, payload);
 
         let ((status, body), records) = crate::test_support::capture_json_logs(|| {
@@ -62,6 +66,9 @@ fn command_failure_json_logs_exclude_text_and_clipboard_sentinels() {
 
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert_eq!(body["error"]["code"], "desktop_operation_failed");
+        assert_eq!(body["error"]["command_id"], 41);
+        assert_eq!(body["error"]["outcome"], "failed");
+        assert_eq!(body["error"]["retry_safe"], false);
         assert!(crate::test_support::json_logs_contain(
             &records,
             "desktop_command_failed"

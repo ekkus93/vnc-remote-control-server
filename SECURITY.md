@@ -52,4 +52,4 @@ This guarantee does not cover Rust clipboard request/response values, Axum respo
 
 Release acceptance is governed by [`docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md`](docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md). Both permanent `CI` and `Release Gates` must pass on the exact candidate SHA. Release Gates records static/supply-chain evidence, native sanitizer/Miri evidence, image vulnerability reports, exact CRITICAL VEX evaluation, and CycloneDX SBOMs.
 
-Current CRITICAL determinations are stored in [`security/trivy-critical-vex.json`](security/trivy-critical-vex.json). They expire on September 4, 2026; an expired determination, changed package version, or unmatched CRITICAL finding must fail closed.
+Current CRITICAL determinations are stored in [`security/trivy-critical-vex.json`](security/trivy-critical-vex.json). They were re-reviewed on August 31, 2026 and expire on September 30, 2026; an expired determination, changed package version, stale VEX tuple, or unmatched CRITICAL finding must fail closed.

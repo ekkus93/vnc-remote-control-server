@@ -2,6 +2,7 @@ use super::WorkerSettings;
 use super::channels::WorkerChannels;
 use super::client::WorkerClient;
 use super::command::CommandEnvelope;
+use super::outcome::{COMMAND_OUTCOME_CAPACITY, CommandOutcomeRegistry};
 use super::run::run_worker;
 use super::session::WorkerSession;
 use super::snapshot::{WorkerEvents, WorkerSnapshot};
@@ -127,6 +128,8 @@ impl DesktopWorker {
         let thread_pending_overload = Arc::clone(&pending_overload);
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         let thread_shutdown_requested = Arc::clone(&shutdown_requested);
+        let command_outcomes = CommandOutcomeRegistry::new(COMMAND_OUTCOME_CAPACITY);
+        let thread_command_outcomes = command_outcomes.clone();
         let snapshot = Arc::new(Mutex::new(WorkerSnapshot {
             state: ConnectionState::Starting,
             started_at: SystemTime::now(),
@@ -151,6 +154,7 @@ impl DesktopWorker {
                         startup: startup_tx,
                         pending_overload: thread_pending_overload,
                         shutdown_requested: thread_shutdown_requested,
+                        command_outcomes: thread_command_outcomes,
                         worker_exited: worker_exited_tx,
                     };
                     before_startup();
@@ -180,6 +184,7 @@ impl DesktopWorker {
                     command_submissions_in_flight,
                     command_queue_capacity: command_capacity,
                     pending_overload,
+                    command_outcomes,
                     shutdown_requested,
                 },
                 events: Some(WorkerEvents { receiver: event_rx }),
