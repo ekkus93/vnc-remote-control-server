@@ -3,6 +3,7 @@
 
 pub mod api_contract;
 pub mod config;
+pub mod duration_policy;
 pub mod events;
 pub mod framebuffer;
 pub mod http;
