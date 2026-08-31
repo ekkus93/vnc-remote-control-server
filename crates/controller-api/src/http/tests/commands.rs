@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn pointer_routes_return_202_and_preserve_preflighted_commands() {
+async fn pointer_routes_return_completed_200_and_preserve_preflighted_commands() {
     let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
     let app = router(state);
     let fixtures = [
@@ -29,9 +29,9 @@ async fn pointer_routes_return_202_and_preserve_preflighted_commands() {
             .oneshot(authenticated_json_request("POST", uri, payload))
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(response.status(), StatusCode::OK);
         let body = json_body(response).await;
-        assert_eq!(body["status"], "accepted");
+        assert_eq!(body["status"], "succeeded");
         assert_eq!(body["command_id"], u64::try_from(index + 1).unwrap());
     }
     let commands = backend
@@ -67,6 +67,7 @@ async fn invalid_pointer_request_never_reaches_worker() {
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = json_body(response).await;
     assert_eq!(body["error"]["code"], "invalid_coordinate");
+    assert!(body["error"].get("command_id").is_none());
     assert!(
         backend
             .commands
@@ -108,7 +109,8 @@ async fn keyboard_text_and_clipboard_preflight_before_worker_execution() {
             .oneshot(authenticated_json_request(method, uri, payload))
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["status"], "succeeded");
     }
     let count_before = backend
         .commands
@@ -126,6 +128,7 @@ async fn keyboard_text_and_clipboard_preflight_before_worker_execution() {
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = json_body(response).await;
     assert_eq!(body["error"]["code"], "unsupported_text");
+    assert!(body["error"].get("command_id").is_none());
     assert_eq!(
         backend
             .commands
@@ -134,6 +137,175 @@ async fn keyboard_text_and_clipboard_preflight_before_worker_execution() {
             .len(),
         count_before
     );
+}
+
+#[tokio::test]
+async fn command_status_is_authenticated_and_reports_sanitized_lifecycle() {
+    let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+    let app = router(state);
+
+    let response = app
+        .clone()
+        .oneshot(authenticated_json_request(
+            "POST",
+            "/v1/keyboard/text",
+            serde_json::json!({"text": "secret command payload"}),
+        ))
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["command_id"], 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            request("/v1/commands/1")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("status response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["command_id"], 1);
+    assert_eq!(body["status"], "succeeded");
+    assert!(body["failure"].is_null());
+    assert_eq!(body["retry_safe"], false);
+    assert!(!body.to_string().contains("secret command payload"));
+    assert!(!body.to_string().contains("test-token"));
+
+    backend
+        .command_outcomes
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(9, (CommandOutcomeState::Aborted, Some("worker_unavailable")));
+    let response = app
+        .clone()
+        .oneshot(
+            request("/v1/commands/9")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("aborted status response");
+    let body = json_body(response).await;
+    assert_eq!(body["status"], "aborted");
+    assert_eq!(body["failure"], "worker_unavailable");
+    assert_eq!(body["retry_safe"], false);
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(request("/v1/commands/1").body(Body::empty()).expect("request"))
+        .await
+        .expect("response");
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let unknown = app
+        .clone()
+        .oneshot(
+            request("/v1/commands/999")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(unknown).await["error"]["code"], "command_status_unknown");
+
+    *backend
+        .expired_command_id
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(8);
+    let expired = app
+        .oneshot(
+            request("/v1/commands/8")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(expired.status(), StatusCode::GONE);
+    assert_eq!(json_body(expired).await["error"]["code"], "command_status_expired");
+}
+
+#[tokio::test]
+async fn pre_admission_rejection_and_post_admission_outcomes_are_distinct() {
+    let pre_admission = CommandExecutionError::NotAccepted(DesktopError::CommandQueueFull);
+    let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+    *backend
+        .execute_error
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(pre_admission);
+    let response = router(state)
+        .oneshot(
+            request("/v1/connection/reconnect")
+                .method("POST")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], "command_queue_full");
+    assert!(body["error"].get("command_id").is_none());
+    assert!(body["error"].get("outcome").is_none());
+    assert!(body["error"].get("retry_safe").is_none());
+
+    let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+    *backend
+        .execute_error
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(CommandExecutionError::Failed {
+        command_id: 41,
+        error: DesktopError::Transport,
+    });
+    let response = router(state)
+        .oneshot(
+            request("/v1/connection/reconnect")
+                .method("POST")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], "desktop_operation_failed");
+    assert_eq!(body["error"]["command_id"], 41);
+    assert_eq!(body["error"]["outcome"], "failed");
+    assert_eq!(body["error"]["retry_safe"], false);
+
+    let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
+    *backend
+        .execute_error
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        Some(CommandExecutionError::OutcomeUnknown { command_id: 77 });
+    let response = router(state)
+        .oneshot(
+            request("/v1/connection/reconnect")
+                .method("POST")
+                .header(AUTHORIZATION, "Bearer test-token")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["code"], "command_timeout");
+    assert_eq!(body["error"]["command_id"], 77);
+    assert_eq!(body["error"]["outcome"], "unknown");
+    assert_eq!(body["error"]["retry_safe"], false);
+    assert!(body["error"]["message"].as_str().unwrap().contains("unknown"));
 }
 
 #[tokio::test]
@@ -176,52 +348,6 @@ async fn clipboard_snapshot_and_unavailable_error_are_stable() {
     assert_eq!(body["text"], "inbound clipboard");
     assert_eq!(body["revision"], 9);
     assert_eq!(body["updated_at_unix_ms"], 200_000);
-}
-
-#[tokio::test]
-async fn worker_failures_map_to_stable_payload_free_errors() {
-    for (error, status, code) in [
-        (
-            DesktopError::CommandQueueFull,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "command_queue_full",
-        ),
-        (
-            DesktopError::WorkerUnavailable,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "worker_unavailable",
-        ),
-        (
-            DesktopError::Timeout,
-            StatusCode::GATEWAY_TIMEOUT,
-            "command_timeout",
-        ),
-        (
-            DesktopError::ReconnectRateLimited,
-            StatusCode::TOO_MANY_REQUESTS,
-            "reconnect_rate_limited",
-        ),
-    ] {
-        let (state, backend) = test_state_with_backend(true, MockScreenshot::Png);
-        *backend
-            .execute_error
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
-        let response = router(state)
-            .oneshot(
-                request("/v1/connection/reconnect")
-                    .method("POST")
-                    .header(AUTHORIZATION, "Bearer test-token")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(response.status(), status);
-        let body = json_body(response).await;
-        assert_eq!(body["error"]["code"], code);
-        assert!(!body.to_string().contains("test-token"));
-    }
 }
 
 #[tokio::test]
