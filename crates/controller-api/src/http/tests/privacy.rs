@@ -41,12 +41,11 @@ fn command_failure_json_logs_exclude_text_and_clipboard_sentinels() {
         *backend
             .execute_error
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(
-            CommandExecutionError::Failed {
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(CommandExecutionError::Failed {
                 command_id: 41,
                 error: DesktopError::Native,
-            },
-        );
+            });
         let request = authenticated_json_request(method, uri, payload);
 
         let ((status, body), records) = crate::test_support::capture_json_logs(|| {
