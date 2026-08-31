@@ -353,7 +353,10 @@ class PythonClientTests(unittest.TestCase):
             {
                 "error": {
                     "code": "command_timeout",
-                    "message": "desktop command result wait timed out; execution outcome is unknown",
+                    "message": (
+                        "desktop command result wait timed out; "
+                        "execution outcome is unknown"
+                    ),
                     "request_id": "timeout-request",
                     "command_id": 77,
                     "outcome": "unknown",
@@ -447,14 +450,16 @@ class PythonClientTests(unittest.TestCase):
             with self.subTest(error_body=error_body):
                 body = json.dumps({"error": error_body}).encode()
 
-                def open_504(request: Any, *, timeout: float) -> FakeResponse:
+                def open_504(
+                    request: Any, *, timeout: float, response_body: bytes = body
+                ) -> FakeResponse:
                     del timeout
                     raise HTTPError(
                         request.full_url,
                         504,
                         "Gateway Timeout",
                         Message(),
-                        io.BytesIO(body),
+                        io.BytesIO(response_body),
                     )
 
                 client = VncClient("http://controller", "token", _http_open=open_504)
