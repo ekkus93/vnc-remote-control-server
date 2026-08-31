@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, sync_channel};
 use std::time::SystemTime;
 
+use super::super::outcome::{COMMAND_OUTCOME_CAPACITY, CommandOutcomeRegistry};
 use super::super::snapshot::WorkerSnapshot;
 
 #[test]
@@ -34,6 +35,7 @@ fn in_flight_depth_can_exceed_capacity_and_still_converges_to_zero() {
         command_submissions_in_flight: Arc::clone(&submissions),
         command_queue_capacity: 1,
         pending_overload: Arc::new(AtomicU64::new(0)),
+        command_outcomes: CommandOutcomeRegistry::new(COMMAND_OUTCOME_CAPACITY),
         shutdown_requested: Arc::new(AtomicBool::new(false)),
     };
 
