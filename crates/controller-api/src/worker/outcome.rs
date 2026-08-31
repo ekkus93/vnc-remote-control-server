@@ -6,15 +6,18 @@ use std::sync::{Arc, Mutex};
 /// Maximum process-local command outcome records retained for later inspection.
 ///
 /// The registry never evicts a non-terminal record. When all slots are occupied
-/// by accepted commands that have not reached a terminal state, new submissions
-/// fail before worker admission rather than making an unresolved command
+/// by commands that have not reached a terminal state, new submissions fail
+/// before worker admission rather than making an unresolved command
 /// uninspectable.
 pub const COMMAND_OUTCOME_CAPACITY: usize = 4096;
 
 /// Public lifecycle state for one process-local command identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandOutcomeState {
-    /// Reserved and accepted for worker admission but not yet dequeued.
+    /// Registry capacity has been reserved but worker queue admission has not
+    /// yet completed. This is never treated as accepted remote work.
+    Reserved,
+    /// Accepted into the worker queue but not yet dequeued.
     Queued,
     /// Dequeued by the worker and eligible to touch the remote desktop.
     Running,
@@ -32,6 +35,7 @@ impl CommandOutcomeState {
     /// Stable wire name used by the authenticated command-status endpoint.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Reserved => "reserved",
             Self::Queued => "queued",
             Self::Running => "running",
             Self::Succeeded => "succeeded",
@@ -75,11 +79,13 @@ impl CommandOutcomeRecord {
 
     /// Whether blindly retrying the original mutation is known to be safe.
     ///
-    /// Only a command rejected before admission is retry-safe at this generic
-    /// layer. Every accepted command is conservatively non-retry-safe even when
-    /// its eventual operation failure is known.
+    /// Only work that has not been admitted to the worker is retry-safe at this
+    /// generic layer. Every accepted command is conservatively non-retry-safe.
     pub const fn retry_safe(&self) -> bool {
-        matches!(self.state, CommandOutcomeState::Rejected)
+        matches!(
+            self.state,
+            CommandOutcomeState::Reserved | CommandOutcomeState::Rejected
+        )
     }
 }
 
@@ -140,10 +146,14 @@ impl CommandOutcomeRegistry {
         state.highest_reserved = state.highest_reserved.max(command_id);
         state.entries.push_back(CommandOutcomeRecord {
             command_id,
-            state: CommandOutcomeState::Queued,
+            state: CommandOutcomeState::Reserved,
             failure: None,
         });
         Ok(())
+    }
+
+    pub(super) fn mark_queued(&self, command_id: u64) {
+        self.update(command_id, CommandOutcomeState::Queued, None);
     }
 
     pub(super) fn mark_running(&self, command_id: u64) {
@@ -179,12 +189,24 @@ impl CommandOutcomeRegistry {
     }
 
     /// Marks all accepted non-terminal commands as aborted during worker exit.
-    pub(super) fn abort_nonterminal(&self) {
+    /// A still-reserved pre-admission record is rejected instead because it was
+    /// never accepted for remote execution.
+    pub(super) fn terminate_nonterminal(&self) {
         let mut state = lock_unpoisoned(&self.state);
         for record in &mut state.entries {
-            if matches!(record.state, CommandOutcomeState::Queued | CommandOutcomeState::Running) {
-                record.state = CommandOutcomeState::Aborted;
-                record.failure = Some("worker_unavailable");
+            match record.state {
+                CommandOutcomeState::Reserved => {
+                    record.state = CommandOutcomeState::Rejected;
+                    record.failure = Some("worker_unavailable");
+                }
+                CommandOutcomeState::Queued | CommandOutcomeState::Running => {
+                    record.state = CommandOutcomeState::Aborted;
+                    record.failure = Some("worker_unavailable");
+                }
+                CommandOutcomeState::Succeeded
+                | CommandOutcomeState::Failed
+                | CommandOutcomeState::Aborted
+                | CommandOutcomeState::Rejected => {}
             }
         }
     }
@@ -269,7 +291,9 @@ mod tests {
     fn terminal_records_are_evicted_but_pending_records_are_not() {
         let registry = CommandOutcomeRegistry::new(2);
         registry.reserve(1).unwrap();
+        registry.mark_queued(1);
         registry.reserve(2).unwrap();
+        registry.mark_queued(2);
         assert_eq!(
             registry.reserve(3),
             Err(DesktopError::CommandOutcomeCapacityFull)
@@ -288,12 +312,16 @@ mod tests {
     }
 
     #[test]
-    fn retained_records_never_store_payloads_and_abort_nonterminal() {
+    fn retained_records_never_store_payloads_and_terminate_nonterminal() {
         let registry = CommandOutcomeRegistry::new(4);
         registry.reserve(1).unwrap();
+        registry.mark_queued(1);
         registry.reserve(2).unwrap();
+        registry.mark_queued(2);
         registry.mark_running(2);
-        registry.abort_nonterminal();
+        registry.reserve(3).unwrap();
+        registry.terminate_nonterminal();
+
         for id in [1, 2] {
             let CommandOutcomeLookup::Found(record) = registry.lookup(id) else {
                 panic!("record must remain retained");
@@ -302,6 +330,11 @@ mod tests {
             assert_eq!(record.failure(), Some("worker_unavailable"));
             assert!(!record.retry_safe());
         }
+        let CommandOutcomeLookup::Found(reserved) = registry.lookup(3) else {
+            panic!("reserved record must remain retained");
+        };
+        assert_eq!(reserved.state(), CommandOutcomeState::Rejected);
+        assert!(reserved.retry_safe());
     }
 
     #[test]
