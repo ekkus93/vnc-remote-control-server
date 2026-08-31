@@ -94,8 +94,8 @@ mod tests {
 
     #[test]
     fn controller_duration_maximum_is_explicit_and_checked() {
-        let accepted = load(&[("VRC_COMMAND_ACK_TIMEOUT_MS", "86400000")])
-            .expect("parser accepts maximum");
+        let accepted =
+            load(&[("VRC_COMMAND_ACK_TIMEOUT_MS", "86400000")]).expect("parser accepts maximum");
         validate_startup_durations(&accepted).expect("24h maximum is valid");
 
         let rejected = load(&[("VRC_COMMAND_ACK_TIMEOUT_MS", "86400001")])
@@ -109,8 +109,7 @@ mod tests {
 
     #[test]
     fn controller_duration_minimum_is_one_millisecond() {
-        let accepted = load(&[("VRC_SCREENSHOT_TIMEOUT_MS", "1")])
-            .expect("one millisecond parses");
+        let accepted = load(&[("VRC_SCREENSHOT_TIMEOUT_MS", "1")]).expect("one millisecond parses");
         validate_startup_durations(&accepted).expect("one millisecond is valid");
 
         let error = load(&[("VRC_SCREENSHOT_TIMEOUT_MS", "0")])
