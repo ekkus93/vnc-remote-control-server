@@ -29,10 +29,16 @@ class ApiError(VncRemoteControlError):
         *,
         code: str | None = None,
         request_id: str | None = None,
+        command_id: int | None = None,
+        outcome: str | None = None,
+        retry_safe: bool | None = None,
     ) -> None:
         self.status_code = status_code
         self.code = code
         self.request_id = request_id
+        self.command_id = command_id
+        self.outcome = outcome
+        self.retry_safe = retry_safe
         self.message = message
         super().__init__(self._format_message())
 
@@ -41,6 +47,39 @@ class ApiError(VncRemoteControlError):
         if self.code:
             parts.append(self.code)
         parts.append(self.message)
+        if self.command_id is not None:
+            parts.append(f"command_id={self.command_id}")
+        if self.outcome is not None:
+            parts.append(f"outcome={self.outcome}")
+        if self.retry_safe is not None:
+            parts.append(f"retry_safe={self.retry_safe}")
         if self.request_id:
             parts.append(f"request_id={self.request_id}")
         return ": ".join(parts)
+
+
+class CommandOutcomeUnknownError(ApiError):
+    """An accepted mutation timed out before its terminal outcome was observed.
+
+    The command may still execute after this exception is raised. Callers must
+    inspect ``command_id`` with the command-status endpoint before deciding on
+    any further mutation; blind automatic retry is explicitly unsafe.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        command_id: int,
+        request_id: str | None = None,
+    ) -> None:
+        super().__init__(
+            status_code,
+            message,
+            code="command_timeout",
+            request_id=request_id,
+            command_id=command_id,
+            outcome="unknown",
+            retry_safe=False,
+        )
