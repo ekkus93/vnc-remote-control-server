@@ -47,6 +47,9 @@ impl Drop for SubmissionPermit {
 }
 
 pub(super) struct CommandEnvelope {
+    /// Stable process-local identifier for ordinary submitted commands.
+    /// Synthetic shutdown nudges deliberately carry no externally visible ID.
+    pub(super) command_id: Option<u64>,
     pub(super) command: WorkerCommand,
     pub(super) completion: SyncSender<Result<(), DesktopError>>,
     submission: Option<SubmissionPermit>,
@@ -54,11 +57,13 @@ pub(super) struct CommandEnvelope {
 
 impl CommandEnvelope {
     pub(super) fn new(
+        command_id: u64,
         command: WorkerCommand,
         completion: SyncSender<Result<(), DesktopError>>,
         submissions_in_flight: Arc<AtomicUsize>,
     ) -> Self {
         Self {
+            command_id: Some(command_id),
             command,
             completion,
             submission: Some(SubmissionPermit::acquire(submissions_in_flight)),
@@ -67,7 +72,12 @@ impl CommandEnvelope {
 
     pub(super) fn shutdown_without_waiter(submissions_in_flight: Arc<AtomicUsize>) -> Self {
         let (completion, _receiver) = sync_channel(1);
-        Self::new(WorkerCommand::Shutdown, completion, submissions_in_flight)
+        Self {
+            command_id: None,
+            command: WorkerCommand::Shutdown,
+            completion,
+            submission: Some(SubmissionPermit::acquire(submissions_in_flight)),
+        }
     }
 
     /// Releases submission ownership immediately after a successful dequeue.
