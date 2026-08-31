@@ -27,6 +27,6 @@ mod support;
 #[cfg(test)]
 mod tests;
 
-pub use backend::{HttpBackend, WorkerHttpBackend};
+pub use backend::{CommandExecutionError, HttpBackend, WorkerHttpBackend};
 pub use router::router;
 pub use state::{HttpBuildError, HttpState, HttpWorkerSettings};
