@@ -184,7 +184,7 @@ for event in client.iter_events():
 
 The bearer token is sent in the WebSocket HTTP upgrade `Authorization` header. It is never placed in the URL.
 
-## Errors
+## Errors and indeterminate command outcomes
 
 Non-success controller responses raise `ApiError`, with structured fields when the controller returned the documented error envelope:
 
@@ -197,6 +197,21 @@ except ApiError as error:
     print(error.status_code, error.code, error.request_id)
 ```
 
+A timeout that happens **after the worker accepted a side-effecting command is different from a known command failure**. The client raises `CommandOutcomeUnknownError`, which carries the stable `command_id` and has `retry_safe == False`. Do not automatically retry the original mutation: it may still execute or may already have executed. Inspect the retained command status instead:
+
+```python
+from vnc_remote_control import CommandOutcomeUnknownError
+
+try:
+    client.click_pointer(640, 400)
+except CommandOutcomeUnknownError as error:
+    print("outcome unknown", error.command_id, error.retry_safe)
+    status = client.get_command_status(error.command_id)
+    print(status.command_id, status.status, status.failure, status.retry_safe)
+```
+
+A later status can report `queued`, `running`, `succeeded`, `failed`, `aborted`, or another documented lifecycle state while the bounded process-local record is retained. Unknown or expired command IDs remain explicit API errors; the client never converts them into an apparent successful mutation. The command-status response contains sanitized metadata only and never includes typed text, clipboard content, bearer tokens, VNC credentials, or screenshots.
+
 Transport failures raise `TransportError`. Every typed response is strictly validated: a malformed success response (wrong field type, unknown enum value, missing/unexpected field) raises `ProtocolError` instead of being coerced into an apparently valid value, and a non-empty structured error body that fails to parse as the documented error envelope also raises `ProtocolError` rather than being silently reported as a generic `ApiError`. Calling WebSocket events without the optional dependency raises `OptionalDependencyError`.
 
-The server remains authoritative for operation limits and validation. The client does not silently clamp coordinates, scroll deltas, text, clipboard content, or other values.
+The server remains authoritative for operation limits and validation. The client does not silently clamp coordinates, scroll deltas, text, clipboard content, or other values, and it never automatically retries a mutation whose execution outcome is unknown.
