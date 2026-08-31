@@ -74,8 +74,8 @@ fn confirmed_stall_invalidates_reconnects_and_advances_revision() {
     let modes_for_factory = Arc::clone(&modes);
     let mut config = settings();
     config.poll_interval = Duration::from_millis(1);
-    config.stall_probe_after = Duration::from_nanos(1);
-    config.stall_confirm_after = Duration::from_nanos(1);
+    config.stall_probe_after = Duration::from_millis(1);
+    config.stall_confirm_after = Duration::from_millis(1);
     config.reconnect_min_delay = Duration::from_millis(1);
     config.reconnect_max_delay = Duration::from_millis(2);
 
