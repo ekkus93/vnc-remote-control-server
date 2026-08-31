@@ -344,7 +344,7 @@ class DocumentationContractTests(unittest.TestCase):
             "## 5. Build and start",
             "## 6. API binding and TLS",
             "## 9. Authenticated HTTP examples",
-            "## 10. Asynchronous command semantics",
+            "## 10. Command completion and outcome semantics",
             "## 11. WebSocket events",
             "## 12. Shutdown behavior",
             "## 13. Recovery behavior",
@@ -365,6 +365,10 @@ class DocumentationContractTests(unittest.TestCase):
             "VRC_WEBSOCKET_MAX_CLIENTS",
             "VRC_COMMAND_CAPACITY",
             "docker compose -f deploy/compose.yaml down",
+            "outcome: \"unknown\"",
+            "retry_safe: false",
+            "/v1/commands/$COMMAND_ID",
+            "Do not automatically retry the original mutation",
         ):
             self.assertIn(required, guide)
 
