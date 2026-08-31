@@ -22,6 +22,7 @@ class FakeResponse:
         self.headers = Message()
 
     def read(self) -> bytes:
+        """Return the fixed response body."""
         return self._body
 
     def __enter__(self) -> FakeResponse:
@@ -32,6 +33,7 @@ class FakeResponse:
 
 
 def timeout_body(command_id: int) -> bytes:
+    """Build the strict structured timeout body for one accepted command."""
     return json.dumps(
         {
             "error": {
@@ -44,6 +46,12 @@ def timeout_body(command_id: int) -> bytes:
             }
         }
     ).encode()
+
+
+def gateway_timeout(url: str, command_id: int) -> HTTPError:
+    """Build the urllib error used to simulate an accepted command timeout."""
+    body = io.BytesIO(timeout_body(command_id))
+    return HTTPError(url, 504, "Gateway Timeout", Message(), body)
 
 
 class PythonCommandOutcomeTests(unittest.TestCase):
@@ -62,13 +70,7 @@ class PythonCommandOutcomeTests(unittest.TestCase):
             path = urlsplit(request.full_url).path
             if path == "/v1/keyboard/text":
                 mutation_calls += 1
-                raise HTTPError(
-                    request.full_url,
-                    504,
-                    "Gateway Timeout",
-                    Message(),
-                    io.BytesIO(timeout_body(command_id)),
-                )
+                raise gateway_timeout(request.full_url, command_id)
             if path == f"/v1/commands/{command_id}":
                 status_calls += 1
                 return FakeResponse(
@@ -110,9 +112,11 @@ class PythonCommandOutcomeTests(unittest.TestCase):
         self.assertEqual(status_calls, 1)
 
     def test_unknown_timeout_can_later_report_success(self) -> None:
+        """A timed-out accepted mutation can later reconcile to success."""
         self._run_reconciliation("succeeded", None)
 
     def test_unknown_timeout_can_later_report_failure(self) -> None:
+        """A timed-out accepted mutation can later reconcile to failure."""
         self._run_reconciliation("failed", "transport")
 
 
