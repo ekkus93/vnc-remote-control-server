@@ -44,8 +44,7 @@ pub(super) struct MockBackend {
     screenshot: Mutex<MockScreenshot>,
     pub(super) commands: Mutex<Vec<WorkerCommand>>,
     pub(super) execute_error: Mutex<Option<CommandExecutionError>>,
-    pub(super) command_outcomes:
-        Mutex<HashMap<u64, (CommandOutcomeState, Option<&'static str>)>>,
+    pub(super) command_outcomes: Mutex<HashMap<u64, (CommandOutcomeState, Option<&'static str>)>>,
     pub(super) expired_command_id: Mutex<Option<u64>>,
     pub(super) clipboard: Mutex<Option<ClipboardSnapshot>>,
     next_command_id: AtomicU64,
@@ -114,7 +113,13 @@ impl HttpBackend for MockBackend {
                     self.command_outcomes
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .insert(*command_id, (CommandOutcomeState::Failed, Some(mock_failure_name(domain_error))));
+                        .insert(
+                            *command_id,
+                            (
+                                CommandOutcomeState::Failed,
+                                Some(mock_failure_name(domain_error)),
+                            ),
+                        );
                 }
                 CommandExecutionError::OutcomeUnknown { command_id } => {
                     self.commands
@@ -155,11 +160,9 @@ impl HttpBackend for MockBackend {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match outcomes.get(&command_id) {
-            Some((state, failure)) => CommandOutcomeLookup::Found(CommandOutcomeRecord::from_parts(
-                command_id,
-                *state,
-                *failure,
-            )),
+            Some((state, failure)) => CommandOutcomeLookup::Found(
+                CommandOutcomeRecord::from_parts(command_id, *state, *failure),
+            ),
             None => CommandOutcomeLookup::Unknown,
         }
     }
