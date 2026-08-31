@@ -146,7 +146,11 @@ impl CommandOutcomeRegistry {
     pub(super) fn reserve(&self, command_id: u64) -> Result<(), DesktopError> {
         let mut state = lock_unpoisoned(&self.state);
         if state.entries.len() == self.capacity {
-            let Some(index) = state.entries.iter().position(|record| record.state.terminal()) else {
+            let Some(index) = state
+                .entries
+                .iter()
+                .position(|record| record.state.terminal())
+            else {
                 return Err(DesktopError::CommandOutcomeCapacityFull);
             };
             let expired = state
@@ -245,12 +249,7 @@ impl CommandOutcomeRegistry {
         self.capacity
     }
 
-    fn update(
-        &self,
-        command_id: u64,
-        next: CommandOutcomeState,
-        failure: Option<&'static str>,
-    ) {
+    fn update(&self, command_id: u64, next: CommandOutcomeState, failure: Option<&'static str>) {
         let mut state = lock_unpoisoned(&self.state);
         if let Some(record) = state
             .entries
