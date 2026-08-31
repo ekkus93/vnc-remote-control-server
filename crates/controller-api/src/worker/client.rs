@@ -136,7 +136,7 @@ impl WorkerClient {
         self.command_outcomes.reserve(id)?;
 
         let (completion_tx, completion_rx) = sync_channel(1);
-        let envelope = CommandEnvelope::new(
+        let envelope = CommandEnvelope::new_with_id(
             id,
             command,
             completion_tx,
