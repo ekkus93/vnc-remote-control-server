@@ -103,7 +103,10 @@ class PythonCommandOutcomeTests(unittest.TestCase):
         self.assertNotIn(token_sentinel, str(error))
         self.assertNotIn(token_sentinel, repr(error))
 
-        status = client.get_command_status(error.command_id)
+        accepted_id = error.command_id
+        if accepted_id is None:
+            self.fail("command timeout omitted accepted command_id")
+        status = client.get_command_status(accepted_id)
         self.assertEqual(status.command_id, command_id)
         self.assertEqual(status.status, terminal_status)
         self.assertEqual(status.failure, failure)
