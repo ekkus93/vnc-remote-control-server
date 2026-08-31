@@ -8,9 +8,9 @@ Companion TODO: `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_TODO_202
 
 This is the cumulative evidence document for the 2026-08-31 code-review remediation pass.
 
-**R0 and R1 are implemented and validated. R2-R15 remain open.** This document must therefore not be read as final sign-off for the complete remediation pass. MCP implementation remains out of scope until the remediation TODO is complete.
+**R0, R1, and R2 are implemented and validated. R3-R15 remain open.** This document must therefore not be read as final sign-off for the complete remediation pass. MCP implementation remains out of scope until the remediation TODO is complete.
 
-The R1 implementation was developed on PR #19, `ralph/code-review-remediation-20260831-r1`.
+The R1 implementation was developed on PR #19 / replacement merge PR #20, `ralph/code-review-remediation-20260831-r1`. The R2 implementation is developed on PR #21, `ralph/code-review-remediation-20260831-r2`.
 
 ## R0 — Baseline and preserved safety constraints
 
@@ -19,7 +19,7 @@ The R1 implementation was developed on PR #19, `ralph/code-review-remediation-20
 - Starting reviewed `master` SHA: `62fd4cd6c15ea705227fe943eddbaaca26fe4345`.
 - Baseline regular CI: run `31265957251`, conclusion `success`, head SHA `62fd4cd6c15ea705227fe943eddbaaca26fe4345`.
 - Baseline Release Gates: run `31265957258`, conclusion `success`, head SHA `62fd4cd6c15ea705227fe943eddbaaca26fe4345`.
-- The companion remediation specification was kept separate from the future MCP phase. No MCP implementation was added in R1.
+- The companion remediation specification was kept separate from the future MCP phase. No MCP implementation was added in R1 or R2.
 
 ### Safety constraints preserved through R1
 
@@ -256,7 +256,7 @@ Release Gates run `33436761617`: **success**.
 
 The release run retained blocking static/supply-chain policy, secret scanning, native sanitizer/Miri validation, exact image vulnerability/SBOM/VEX validation, and did not add a release bypass.
 
-A documentation-only R1 closeout commit will be validated again with both workflows before PR #19 is merged. The resulting merge to `master` will be verified separately. These R1 closeout runs are not the final R13/R14 evidence for the entire R0-R15 remediation pass because R2-R12 remain outstanding.
+The R1 branch was subsequently reconciled, validated again, and squash-merged to `master` as `992210538befddf7b683bc9539dc31d9ab991583` through replacement PR #20 after the installed connector's draft-to-ready GraphQL wrapper failed. The replacement used the identical validated branch head and unchanged base; no code was changed to work around the connector. Push-triggered master CI `33439766598` and Release Gates `33439766636` both passed on that exact SHA.
 
 ## R1 — Silent-failure review limited to this slice
 
@@ -277,8 +277,123 @@ The comprehensive changed/adjacent fallback audit remains R9 and is **not** clai
 - No release-critical gate was weakened.
 - MCP implementation was not started as part of R1.
 
+## R2 — Scroll-wheel pointer-state uncertainty and recovery
+
+### Unsafe behavior removed
+
+Before R2, the vertical scroll path attempted to return the tracked base button mask after a transient wheel-button press. If the first release failed, it performed a second release attempt with:
+
+```text
+let _ = sink.send_pointer(...)
+```
+
+The second result was discarded. If both release attempts failed, the command returned the first native error while the same VNC session remained live. The remote pointer mask could therefore be unknown, yet later input commands could continue on that session as though the pointer state were authoritative.
+
+R2 removes that silent fallback. The second release result is now observed and changes worker-owned state when it also fails.
+
+### Pointer-state representation
+
+`InputController` now carries a typed internal `PointerState` with two states:
+
+- `Known`
+- `Uncertain`
+
+The ordinary tracked `button_mask` remains authoritative while pointer state is known. A scroll wheel step still sends the preserved base mask, the transient wheel mask, then the preserved base mask again.
+
+If the first wheel-release attempt fails but the retry succeeds:
+
+- the retry result is observed;
+- `PointerState` remains `Known`;
+- the remote pointer mask is known to have returned to the preserved base mask;
+- the original operation error is still returned to the caller rather than silently turning a partial failure into success;
+- the current VNC session remains usable.
+
+If both release attempts fail:
+
+- `PointerState` becomes `Uncertain`;
+- the second failure is no longer ignored;
+- the caller still receives the original operation error;
+- the worker treats the session as unsafe for further input.
+
+### Fail-closed session quarantine
+
+`LoopState::execute` checks the pointer-state flag immediately after the scroll operation returns. Because worker command execution is single-threaded, no later command can be dequeued between the double-release failure and the recovery action.
+
+On `PointerState::Uncertain`, the worker:
+
+1. emits the payload-free sanitized diagnostic `worker_input_pointer_state_uncertain`;
+2. calls `invalidate()` before returning from command execution;
+3. performs one best-effort tracked-input cleanup pass on the affected session;
+4. drops the VNC session even if that cleanup release itself fails;
+5. explicitly abandons/clears any unresolved local pointer/key tracking only after the session is no longer retained;
+6. invalidates framebuffer/session state;
+7. schedules the normal bounded reconnect path.
+
+The cleanup path also reports only safe counters/booleans through `worker_input_release_incomplete` and `worker_input_release_abandoned`; it does not log keys, coordinates, typed text, clipboard data, credentials, or other payloads.
+
+If cleanup succeeds, the old session is still discarded because it had already crossed the uncertainty boundary. If cleanup fails, the session is likewise discarded; the implementation does not use a “best effort, then keep going” fallback.
+
+If an unrelated failure prevents reconnect scheduling or event publication, the unsafe session has already been removed and the unresolved local input state abandoned. The failure mode therefore remains fail closed rather than allowing later input on the tainted session.
+
+### Clean recovery semantics
+
+A newly established VNC session begins with `InputController` pointer state `Known`, button mask `0`, and an empty pressed-key set. The R2 worker regression deliberately holds a key before provoking the scroll uncertainty and also forces the old session's cleanup pointer release to fail. It then verifies that:
+
+- the first session receives no later ordinary pointer command after the double-release failure;
+- a second VNC session is created;
+- the first post-reconnect pointer event uses mask `0`;
+- a key that was held before the failure can be freshly pressed and released on the new session, proving stale key tracking was not carried across the session boundary.
+
+### R2 regression tests
+
+The implementation includes the following focused coverage:
+
+- `vertical_scroll_is_bounded_atomic_and_preserves_mask` — normal wheel press/release behavior and preservation of an already-held ordinary button mask.
+- `scroll_release_failure_retry_success_keeps_pointer_state_known` — first release fails, retry succeeds, original error is reported, pointer state remains known, and the session remains usable.
+- `scroll_double_release_failure_marks_pointer_state_uncertain_and_cleanup_recovers` — both releases fail, typed pointer state becomes uncertain, and an explicit cleanup release can restore known state.
+- `scroll_double_release_failure_quarantines_session_and_reconnects_cleanly` — both releases fail, the cleanup pointer release also fails, the old session is dropped, reconnect occurs, and the fresh session starts with clean pointer/key tracking.
+- `release_all_reports_failed_pointer_release_without_silent_clear` — a failed tracked pointer cleanup remains represented until the session is explicitly abandoned rather than being silently cleared.
+- `explicit_buttons_preserve_full_mask`, `disconnect_release_clears_buttons_and_keys`, and the existing key/chord/text tests remain part of the full passing Rust suite and protect ordinary button/key tracking semantics.
+
+The integration regression uses generation-tagged test sessions so a post-failure input event on the original session would fail the exact event-sequence assertion. It also forces pointer calls 3 through 5 on generation 1 to fail, covering first release, second release, and subsequent cleanup release failure.
+
+### R2 implementation-head validation
+
+Exact R2 implementation candidate before TODO/evidence closeout documentation:
+
+`f081541e927977ef1dc5506487f2ce586834b2e9`
+
+Regular CI run `33442324230`: **success**.
+
+That run passed the complete repository-quality suite, including rustfmt, Clippy with warnings denied, all Rust tests (including the new R2 regression tests), rustdoc, Python Ruff/Pylint/mypy/contracts, and shell syntax. It also passed the secured desktop/native chain, WorkerHandle input and text/clipboard E2E, authenticated HTTP TigerVNC E2E, controller image/Compose/persistence smoke, and R13 Compose integration.
+
+Release Gates run `33442324185`: **success**.
+
+That run passed full-history secret scanning, shell/action/Docker/Compose policy, dependency/advisory/license/source/duplicate policy, release binary inspection, ASan, TSan, Miri, image vulnerability scanning, CycloneDX SBOM generation, and exact CRITICAL VEX enforcement.
+
+No release-critical gate was weakened for R2.
+
+### R2 silent-failure review limited to this slice
+
+The correctness-sensitive ignored second wheel-release result was removed. The replacement does not silently downgrade uncertainty to success and does not continue using a session after unresolved pointer state.
+
+R2 intentionally retains best-effort cleanup attempts only under an explicit fail-closed invariant: cleanup results are observed and reported; unresolved state remains tracked until the affected session is dropped; after the drop, `abandon()` clears local tracking because that state can no longer be used to drive the discarded native session. A failed cleanup does not permit session reuse.
+
+The separate comprehensive changed/adjacent fallback audit remains R9 and is not claimed complete here.
+
+## Explicit R2 safety statements
+
+- A second failed scroll-wheel release is observed, not discarded.
+- Double-release failure marks pointer state uncertain.
+- No subsequent input command executes on the tainted VNC session.
+- The tainted session is dropped even when best-effort cleanup also fails.
+- Recovery uses a fresh session with clean pointer and key tracking.
+- R2 diagnostics contain no secret or input payload material.
+- No release-critical gate was weakened.
+- MCP implementation remains out of scope.
+
 ## Remaining remediation
 
-R2-R15 remain open. In particular, this evidence does **not** claim completion of scroll-wheel state recovery, clipboard callback propagation, duration hardening, WebSocket inbound hardening, XFCE startup hardening, shutdown/detach lifecycle hardening, failure classification, the full R9 fallback audit, or final project-wide exact-`master` sign-off.
+R3-R15 remain open. In particular, this evidence does **not** claim completion of clipboard callback propagation, duration hardening, WebSocket inbound hardening, XFCE startup hardening, shutdown/detach lifecycle hardening, failure classification, the full R9 fallback audit, or final project-wide exact-`master` sign-off.
 
 The final remediation evidence will extend this file as those slices are completed.
