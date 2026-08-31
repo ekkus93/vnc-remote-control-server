@@ -62,6 +62,18 @@ pub struct CommandOutcomeRecord {
 }
 
 impl CommandOutcomeRecord {
+    pub(crate) const fn from_parts(
+        command_id: u64,
+        state: CommandOutcomeState,
+        failure: Option<&'static str>,
+    ) -> Self {
+        Self {
+            command_id,
+            state,
+            failure,
+        }
+    }
+
     /// Process-local command identifier.
     pub const fn command_id(&self) -> u64 {
         self.command_id
