@@ -2,7 +2,6 @@ use super::WorkerSettings;
 use super::channels::WorkerChannels;
 use super::client::WorkerClient;
 use super::command::CommandEnvelope;
-use super::helpers::lock_unpoisoned;
 use super::outcome::{COMMAND_OUTCOME_CAPACITY, CommandOutcomeRegistry};
 use super::run::run_worker;
 use super::session::WorkerSession;
@@ -257,7 +256,13 @@ impl DesktopWorker {
     }
 
     fn mark_abnormal_detach(&self) {
-        lock_unpoisoned(&self.client.snapshot).fatal_exit = true;
+        match self.client.snapshot.lock() {
+            Ok(mut snapshot) => snapshot.fatal_exit = true,
+            Err(poisoned) => {
+                tracing::error!("desktop_worker_detach_snapshot_poisoned");
+                poisoned.into_inner().fatal_exit = true;
+            }
+        }
     }
 
     fn detach_worker(&mut self) {
@@ -271,7 +276,7 @@ impl DesktopWorker {
         };
         let result = join_worker_handle(join);
         if result.is_err() {
-            lock_unpoisoned(&self.client.snapshot).fatal_exit = true;
+            self.mark_abnormal_detach();
         }
         result
     }
