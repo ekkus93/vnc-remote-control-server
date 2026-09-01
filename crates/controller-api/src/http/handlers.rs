@@ -45,11 +45,11 @@ pub(super) fn prepare_event_session(
         )
     })?;
     let snapshot = state.backend.snapshot();
-    let clipboard_revision = state
-        .backend
-        .clipboard_snapshot()
-        .ok()
-        .map(|clipboard| clipboard.revision);
+    let clipboard_revision = match state.backend.clipboard_snapshot() {
+        Ok(clipboard) => Some(clipboard.revision),
+        Err(DesktopError::ClipboardUnavailable) => None,
+        Err(error) => return Err(domain_error(error, request_id.clone())),
+    };
     let initial = state
         .events
         .snapshot_event(&snapshot, clipboard_revision)
