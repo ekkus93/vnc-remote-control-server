@@ -25,11 +25,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     let host = env::var("VRC_VNC_HOST")?;
     let port = env::var("VRC_VNC_PORT")?.parse::<u16>()?;
     let password_path = env::var("VRC_VNC_PASSWORD_FILE")?;
-    let proof_hold_seconds = env::var("VRC_PROOF_HOLD_SECONDS")
-        .ok()
-        .map(|value| value.parse::<u64>())
-        .transpose()?
-        .unwrap_or(0);
+    let proof_hold_seconds = match env::var("VRC_PROOF_HOLD_SECONDS") {
+        Ok(value) => value.parse::<u64>()?,
+        Err(env::VarError::NotPresent) => 0,
+        Err(error @ env::VarError::NotUnicode(_)) => return Err(error.into()),
+    };
     let mut password = fs::read_to_string(password_path)?;
     while matches!(password.as_bytes().last(), Some(b'\n' | b'\r')) {
         password.pop();
