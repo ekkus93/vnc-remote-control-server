@@ -1094,7 +1094,9 @@ mod tests {
         let (socket, inbound_tx, mut outbound_rx) = socket_pair();
         let serving_hub = hub.clone();
         let server = tokio::spawn(async move {
-            serving_hub.serve_socket(socket, subscription, initial).await;
+            serving_hub
+                .serve_socket(socket, subscription, initial)
+                .await;
         });
 
         expect_initial_snapshot(&mut outbound_rx).await;
@@ -1142,7 +1144,9 @@ mod tests {
         let (socket, inbound_tx, mut outbound_rx) = socket_pair();
         let serving_hub = hub.clone();
         let server = tokio::spawn(async move {
-            serving_hub.serve_socket(socket, subscription, initial).await;
+            serving_hub
+                .serve_socket(socket, subscription, initial)
+                .await;
         });
 
         expect_initial_snapshot(&mut outbound_rx).await;
