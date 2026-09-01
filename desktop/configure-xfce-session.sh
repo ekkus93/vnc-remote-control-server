@@ -26,6 +26,10 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
     if (( set_ok == 1 )); then
         if value="$(xfconf-query -c xfce4-session -p /general/SaveOnExit 2>/dev/null)"; then
             if [[ "$value" == "false" ]]; then
+                if ! kill -0 "$XFCE_PID" 2>/dev/null; then
+                    printf 'XFCE session exited during SaveOnExit verification\n' >&2
+                    exit 1
+                fi
                 exit 0
             fi
         fi
