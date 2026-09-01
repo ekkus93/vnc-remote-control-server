@@ -14,7 +14,10 @@ use crate::api_contract::{
     ChordRequest, ClipboardRequest, KeyRequest, PointerButtonRequest, PointerClickRequest,
     PointerDoubleClickRequest, PointerMoveRequest, PointerScrollRequest, TextRequest,
 };
-use crate::events::{EventSequenceError, EventSubscription, ServerEvent, WebSocketCapacityError};
+use crate::events::{
+    EventSequenceError, EventSubscription, ServerEvent, WEBSOCKET_MAX_FRAME_BYTES,
+    WEBSOCKET_MAX_MESSAGE_BYTES, WebSocketCapacityError,
+};
 use crate::framebuffer::FramebufferStatus;
 use crate::screenshot::ScreenshotOutcome;
 use crate::worker::CommandOutcomeLookup;
@@ -69,9 +72,12 @@ pub(super) async fn events(
 ) -> Result<Response, ApiError> {
     let (subscription, initial) = prepare_event_session(&state, request_id)?;
     let events = state.events.clone();
-    Ok(websocket.on_upgrade(move |socket| async move {
-        events.serve(socket, subscription, initial).await;
-    }))
+    Ok(websocket
+        .max_message_size(WEBSOCKET_MAX_MESSAGE_BYTES)
+        .max_frame_size(WEBSOCKET_MAX_FRAME_BYTES)
+        .on_upgrade(move |socket| async move {
+            events.serve(socket, subscription, initial).await;
+        }))
 }
 
 pub(super) async fn metrics_endpoint(State(state): State<HttpState>) -> Response {
