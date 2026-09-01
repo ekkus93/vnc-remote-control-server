@@ -821,16 +821,19 @@ mod tests {
             ("VRC_VNC_READ_TIMEOUT_MS".to_owned(), "1000".to_owned()),
             ("VRC_POLL_INTERVAL_MS".to_owned(), "1000".to_owned()),
         ];
-        let below = MapEnvironment(HashMap::from_iter(common.clone().into_iter().chain([(
-            "VRC_SHUTDOWN_TIMEOUT_MS".to_owned(),
-            "1499".to_owned(),
-        )])));
+        let below = MapEnvironment(HashMap::from_iter(
+            common
+                .clone()
+                .into_iter()
+                .chain([("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "1499".to_owned())]),
+        ));
         assert!(ControllerConfig::load_from(&below, &secrets()).is_err());
 
-        let floor = MapEnvironment(HashMap::from_iter(common.into_iter().chain([(
-            "VRC_SHUTDOWN_TIMEOUT_MS".to_owned(),
-            "1500".to_owned(),
-        )])));
+        let floor = MapEnvironment(HashMap::from_iter(
+            common
+                .into_iter()
+                .chain([("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "1500".to_owned())]),
+        ));
         let config = ControllerConfig::load_from(&floor, &secrets()).expect("floor is valid");
         assert_eq!(config.shutdown_timeout, Duration::from_millis(1500));
     }
