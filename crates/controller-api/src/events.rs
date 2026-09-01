@@ -25,6 +25,12 @@ const BASE_PROCESS_SHUTDOWN_MINIMUM_MS: u64 = 500;
 const PROCESS_SHUTDOWN_POLL_MULTIPLIER: u64 = 8;
 const EVENT_SEQUENCE_EXHAUSTED_CLOSE_REASON: &str = "event sequence exhausted";
 const EVENT_TIMESTAMP_INVALID_CLOSE_REASON: &str = "event timestamp invalid";
+const UNSUPPORTED_CLIENT_DATA_CLOSE_REASON: &str = "client application data is not supported";
+const OVERSIZED_CLIENT_DATA_CLOSE_REASON: &str = "client application message is too large";
+/// Maximum inbound WebSocket message size. Control frames remain far below this bound.
+pub const WEBSOCKET_MAX_MESSAGE_BYTES: usize = 4096;
+/// Maximum inbound WebSocket frame size. Event clients never send application frames.
+pub const WEBSOCKET_MAX_FRAME_BYTES: usize = 4096;
 
 /// Poll interval used by the dependency-free bridge stop loop.
 pub(crate) const EVENT_BRIDGE_POLL_INTERVAL: Duration =
@@ -310,10 +316,34 @@ impl EventHub {
                                 break;
                             }
                         }
-                        Some(Ok(Message::Pong(_)
-                            | Message::Text(_)
-                            | Message::Binary(_))) => {
+                        Some(Ok(Message::Pong(_))) => {
                             last_activity = Instant::now();
+                        }
+                        Some(Ok(message @ (Message::Text(_) | Message::Binary(_)))) => {
+                            let oversized = match &message {
+                                Message::Text(text) => text.len() > WEBSOCKET_MAX_MESSAGE_BYTES,
+                                Message::Binary(bytes) => bytes.len() > WEBSOCKET_MAX_MESSAGE_BYTES,
+                                _ => false,
+                            };
+                            let (code, reason, category) = if oversized {
+                                (
+                                    1009,
+                                    OVERSIZED_CLIENT_DATA_CLOSE_REASON,
+                                    "application_data_too_large",
+                                )
+                            } else {
+                                (
+                                    1003,
+                                    UNSUPPORTED_CLIENT_DATA_CLOSE_REASON,
+                                    "unsupported_application_data",
+                                )
+                            };
+                            tracing::warn!(category, "websocket_inbound_message_rejected");
+                            let _ = socket.send(Message::Close(Some(CloseFrame {
+                                code,
+                                reason: reason.into(),
+                            }))).await;
+                            break;
                         }
                         Some(Ok(Message::Close(_))) | None => break,
                         Some(Err(())) => break,
@@ -739,6 +769,10 @@ const fn worker_failure_name(failure: WorkerFailureKind) -> &'static str {
     match failure {
         WorkerFailureKind::Authentication => "authentication",
         WorkerFailureKind::Configuration => "configuration",
+        WorkerFailureKind::Request => "request",
+        WorkerFailureKind::Capacity => "capacity",
+        WorkerFailureKind::Unavailable => "unavailable",
+        WorkerFailureKind::RateLimited => "rate_limited",
         WorkerFailureKind::Transport => "transport",
         WorkerFailureKind::Timeout => "timeout",
         WorkerFailureKind::Protocol => "protocol",
@@ -1012,6 +1046,159 @@ mod tests {
         let rendered = metrics.render(&snapshot(), 0, 4);
         assert!(rendered.contains("vrc_websocket_clients 0"));
         assert!(rendered.contains("vrc_websocket_rejected_total 1"));
+    }
+
+    fn socket_pair() -> (
+        EventSocket,
+        tokio::sync::mpsc::UnboundedSender<Message>,
+        tokio::sync::mpsc::UnboundedReceiver<Message>,
+    ) {
+        let (outbound_tx, outbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        (
+            EventSocket::Test(TestSocket {
+                outbound: outbound_tx,
+                inbound: inbound_rx,
+            }),
+            inbound_tx,
+            outbound_rx,
+        )
+    }
+
+    async fn expect_initial_snapshot(
+        outbound_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Message>,
+    ) {
+        let message = time::timeout(Duration::from_millis(100), outbound_rx.recv())
+            .await
+            .expect("initial snapshot is delivered within the bound")
+            .expect("event socket remains open");
+        let Message::Text(text) = message else {
+            panic!("expected initial text snapshot");
+        };
+        assert!(text.contains("\"type\":\"snapshot\""));
+    }
+
+    #[tokio::test]
+    async fn client_ping_is_answered_and_pong_and_close_are_allowed() {
+        let hub = EventHub::detached(
+            4,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            Metrics::default(),
+        );
+        let subscription = hub.subscribe().expect("client subscribes");
+        let initial = hub
+            .snapshot_event(&snapshot(), None)
+            .expect("initial snapshot sequence allocates");
+        let (socket, inbound_tx, mut outbound_rx) = socket_pair();
+        let serving_hub = hub.clone();
+        let server = tokio::spawn(async move {
+            serving_hub.serve_socket(socket, subscription, initial).await;
+        });
+
+        expect_initial_snapshot(&mut outbound_rx).await;
+        inbound_tx
+            .send(Message::Ping(vec![1, 2, 3].into()))
+            .expect("ping enters socket");
+        let pong = time::timeout(Duration::from_millis(100), outbound_rx.recv())
+            .await
+            .expect("pong is prompt")
+            .expect("event socket remains open");
+        assert_eq!(pong, Message::Pong(vec![1, 2, 3].into()));
+
+        inbound_tx
+            .send(Message::Pong(Vec::new().into()))
+            .expect("pong enters socket");
+        inbound_tx
+            .send(Message::Close(None))
+            .expect("close enters socket");
+        time::timeout(Duration::from_millis(100), server)
+            .await
+            .expect("client close terminates service promptly")
+            .expect("server task does not panic");
+        assert!(
+            hub.subscribe().is_ok(),
+            "client permit is released after close"
+        );
+    }
+
+    async fn assert_application_data_rejected(
+        message: Message,
+        expected_code: u16,
+        expected_reason: &str,
+    ) {
+        let hub = EventHub::detached(
+            4,
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            Metrics::default(),
+        );
+        let subscription = hub.subscribe().expect("client subscribes");
+        let initial = hub
+            .snapshot_event(&snapshot(), None)
+            .expect("initial snapshot sequence allocates");
+        let (socket, inbound_tx, mut outbound_rx) = socket_pair();
+        let serving_hub = hub.clone();
+        let server = tokio::spawn(async move {
+            serving_hub.serve_socket(socket, subscription, initial).await;
+        });
+
+        expect_initial_snapshot(&mut outbound_rx).await;
+        inbound_tx.send(message).expect("message enters socket");
+        let close = time::timeout(Duration::from_millis(100), outbound_rx.recv())
+            .await
+            .expect("protocol close is prompt")
+            .expect("close frame is emitted");
+        let Message::Close(Some(frame)) = close else {
+            panic!("expected close frame, got {close:?}");
+        };
+        assert_eq!(frame.code, expected_code);
+        assert_eq!(frame.reason, expected_reason);
+        time::timeout(Duration::from_millis(100), server)
+            .await
+            .expect("rejected client terminates promptly")
+            .expect("server task does not panic");
+        assert!(
+            hub.subscribe().is_ok(),
+            "client permit is released after rejection"
+        );
+    }
+
+    #[tokio::test]
+    async fn text_and_binary_application_data_are_rejected_with_1003() {
+        assert_application_data_rejected(
+            Message::Text("ignored-client-text".into()),
+            1003,
+            UNSUPPORTED_CLIENT_DATA_CLOSE_REASON,
+        )
+        .await;
+        assert_application_data_rejected(
+            Message::Binary(vec![0x41, 0x42].into()),
+            1003,
+            UNSUPPORTED_CLIENT_DATA_CLOSE_REASON,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn oversized_application_data_is_rejected_with_1009() {
+        assert_application_data_rejected(
+            Message::Binary(vec![0x41; WEBSOCKET_MAX_MESSAGE_BYTES + 1].into()),
+            1009,
+            OVERSIZED_CLIENT_DATA_CLOSE_REASON,
+        )
+        .await;
+    }
+
+    #[test]
+    fn websocket_inbound_limits_are_small_and_control_frame_safe() {
+        const MAX_CONTROL_FRAME_PAYLOAD_BYTES: usize = 125;
+        assert_eq!(WEBSOCKET_MAX_MESSAGE_BYTES, 4096);
+        assert_eq!(WEBSOCKET_MAX_FRAME_BYTES, 4096);
+        assert!(WEBSOCKET_MAX_MESSAGE_BYTES >= MAX_CONTROL_FRAME_PAYLOAD_BYTES);
+        assert!(WEBSOCKET_MAX_FRAME_BYTES >= MAX_CONTROL_FRAME_PAYLOAD_BYTES);
     }
 
     #[test]
