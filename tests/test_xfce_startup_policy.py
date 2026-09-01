@@ -53,6 +53,13 @@ class XfceStartupPolicyTests(unittest.TestCase):
                             if (( is_get == 1 )); then printf 'true\\n'; fi
                             exit 0
                             ;;
+                        exit_during_verify)
+                            if (( is_get == 1 )); then
+                                kill -TERM "$XFCE_PID"
+                                printf 'false\\n'
+                            fi
+                            exit 0
+                            ;;
                         *) exit 2 ;;
                     esac
                     """
@@ -109,6 +116,11 @@ class XfceStartupPolicyTests(unittest.TestCase):
         result = self.run_scenario("immediate", live_process=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("XFCE session exited", result.stderr)
+
+    def test_xfce_exit_during_verified_read_is_fatal(self) -> None:
+        result = self.run_scenario("exit_during_verify")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("XFCE session exited during SaveOnExit verification", result.stderr)
 
 
 if __name__ == "__main__":
