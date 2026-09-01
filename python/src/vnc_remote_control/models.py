@@ -123,83 +123,17 @@ class ScreenshotResponse:
     """
 
     data: bytes | None
-    etag: str
-    cache_control: str
+    etag: str | None
+    cache_control: str | None
+    request_id: str | None
     not_modified: bool
 
 
 @dataclass(frozen=True, slots=True)
-class CommandEvent:
-    """Base payload shared by every parsed event model."""
+class Event:
+    """A single parsed `/v1/events` WebSocket message."""
 
     sequence: int
     timestamp_unix_ms: int
     type: str
-
-
-@dataclass(frozen=True, slots=True)
-class SnapshotEvent(CommandEvent):
-    """Initial `/v1/events` snapshot."""
-
-    state: ConnectionState
-    framebuffer_revision: int | None
-    clipboard_revision: int | None
-    reconnect_attempts: int
-    last_failure: WorkerFailure | None
-    rejected_commands: int
-    dropped_events: int
-    fatal_exit: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ConnectionStateEvent(CommandEvent):
-    """Connection-state transition event."""
-
-    state: ConnectionState
-
-
-@dataclass(frozen=True, slots=True)
-class FramebufferRevisionEvent(CommandEvent):
-    """Current framebuffer revision event."""
-
-    revision: int
-
-
-@dataclass(frozen=True, slots=True)
-class FramebufferInvalidatedEvent(CommandEvent):
-    """Framebuffer invalidation event."""
-
-
-@dataclass(frozen=True, slots=True)
-class ClipboardRevisionEvent(CommandEvent):
-    """Clipboard revision event; clipboard content is never included."""
-
-    revision: int
-
-
-@dataclass(frozen=True, slots=True)
-class OverloadEvent(CommandEvent):
-    """Bounded-capacity overload event."""
-
-
-@dataclass(frozen=True, slots=True)
-class ProtocolErrorEvent(CommandEvent):
-    """Sanitized VNC protocol-error event."""
-
-
-Event: TypeAlias = (
-    SnapshotEvent
-    | ConnectionStateEvent
-    | FramebufferRevisionEvent
-    | FramebufferInvalidatedEvent
-    | ClipboardRevisionEvent
-    | OverloadEvent
-    | ProtocolErrorEvent
-)
-
-
-def require_mapping(value: object, context: str) -> Mapping[str, Any]:
-    """Return ``value`` as a mapping or fail with a stable type error."""
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} must be an object")
-    return value
+    payload: Mapping[str, Any]
