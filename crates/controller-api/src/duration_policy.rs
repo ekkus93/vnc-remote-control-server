@@ -83,12 +83,18 @@ mod tests {
 
     #[test]
     fn environment_derived_poll_interval_honors_u32_microsecond_boundary() {
-        let accepted = load(&[("VRC_POLL_INTERVAL_MS", "4294967")])
-            .expect("largest whole-millisecond poll value fits");
+        let accepted = load(&[
+            ("VRC_POLL_INTERVAL_MS", "4294967"),
+            ("VRC_SHUTDOWN_TIMEOUT_MS", "4295467"),
+        ])
+        .expect("largest whole-millisecond poll value fits");
         validate_startup_durations(&accepted).expect("boundary remains valid at startup");
 
-        let error = load(&[("VRC_POLL_INTERVAL_MS", "4294968")])
-            .expect_err("one millisecond above native boundary is rejected");
+        let error = load(&[
+            ("VRC_POLL_INTERVAL_MS", "4294968"),
+            ("VRC_SHUTDOWN_TIMEOUT_MS", "4295468"),
+        ])
+        .expect_err("one millisecond above native boundary is rejected");
         assert!(matches!(error, ConfigError::Worker(_)));
     }
 
