@@ -10,18 +10,10 @@ from typing import get_args
 from vnc_remote_control.models import WorkerFailure
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_WORKER_FAILURES = [
-    "authentication",
-    "configuration",
-    "request",
-    "capacity",
-    "unavailable",
-    "rate_limited",
-    "transport",
-    "timeout",
-    "protocol",
-    "native",
-]
+EXPECTED_WORKER_FAILURES = (
+    "authentication configuration request capacity unavailable rate_limited "
+    "transport timeout protocol native"
+).split()
 
 
 class WorkerFailureContractTests(unittest.TestCase):
