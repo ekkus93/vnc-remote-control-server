@@ -1,8 +1,10 @@
 import os
 from pathlib import Path
+import signal
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 
 
@@ -56,6 +58,10 @@ class XfceStartupPolicyTests(unittest.TestCase):
                         exit_during_verify)
                             if (( is_get == 1 )); then
                                 kill -TERM "$XFCE_PID"
+                                for _ in {1..100}; do
+                                    if ! kill -0 "$XFCE_PID" 2>/dev/null; then break; fi
+                                    sleep 0.01
+                                done
                                 printf 'false\\n'
                             fi
                             exit 0
@@ -67,18 +73,40 @@ class XfceStartupPolicyTests(unittest.TestCase):
                 encoding="utf-8",
             )
             mock.chmod(0o755)
-            sleeper = subprocess.Popen(["sleep", "30"])
+
+            pid_file = directory / "xfce-pid"
+            supervisor = subprocess.Popen(
+                [
+                    "bash",
+                    "-c",
+                    'sleep 30 & child=$!; printf "%s" "$child" > "$1"; wait "$child"',
+                    "xfce-supervisor",
+                    str(pid_file),
+                ]
+            )
+            xfce_pid: int | None = None
             try:
+                for _ in range(100):
+                    if pid_file.exists():
+                        value = pid_file.read_text(encoding="utf-8")
+                        if value:
+                            xfce_pid = int(value)
+                            break
+                    time.sleep(0.01)
+                if xfce_pid is None:
+                    raise RuntimeError("supervised XFCE fixture did not publish its PID")
+
                 if not live_process:
-                    sleeper.terminate()
-                    sleeper.wait(timeout=2)
+                    os.kill(xfce_pid, signal.SIGTERM)
+                    supervisor.wait(timeout=2)
+
                 environment = os.environ.copy()
                 environment.update(
                     {
                         "PATH": f"{directory}:{environment['PATH']}",
                         "MOCK_STATE": str(state),
                         "MOCK_SCENARIO": scenario,
-                        "XFCE_PID": str(sleeper.pid),
+                        "XFCE_PID": str(xfce_pid),
                         "XFCE_SAVE_ON_EXIT_ATTEMPTS": "3",
                         "XFCE_SAVE_ON_EXIT_RETRY_DELAY_SECONDS": "0.01",
                     }
@@ -93,9 +121,14 @@ class XfceStartupPolicyTests(unittest.TestCase):
                     timeout=3,
                 )
             finally:
-                if sleeper.poll() is None:
-                    sleeper.terminate()
-                    sleeper.wait(timeout=2)
+                if xfce_pid is not None:
+                    try:
+                        os.kill(xfce_pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                if supervisor.poll() is None:
+                    supervisor.terminate()
+                supervisor.wait(timeout=2)
 
     def test_immediate_success(self) -> None:
         self.assertEqual(self.run_scenario("immediate").returncode, 0)
