@@ -1,11 +1,11 @@
 import os
-from pathlib import Path
 import signal
 import subprocess
 import tempfile
 import textwrap
 import time
 import unittest
+from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
