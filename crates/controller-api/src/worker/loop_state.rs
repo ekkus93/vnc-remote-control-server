@@ -1,5 +1,6 @@
 use super::helpers::{
-    classify_native_error, lock_unpoisoned, reconnect_delay, validate_native_frame,
+    classify_desktop_error, classify_native_error, lock_unpoisoned, reconnect_delay,
+    validate_native_frame,
 };
 use super::session::WorkerSession;
 use super::snapshot::{WorkerEvent, WorkerSnapshot};
@@ -446,8 +447,8 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 match self.connected_message(display) {
                     Ok(()) => Ok(()),
                     Err(error) if self.event_terminal_failure => Err(error),
-                    Err(_) => {
-                        self.record_failure(WorkerFailureKind::Protocol);
+                    Err(error) => {
+                        self.record_failure(classify_desktop_error(&error));
                         self.invalidate()?;
                         self.schedule_reconnect()?;
                         Ok(())
