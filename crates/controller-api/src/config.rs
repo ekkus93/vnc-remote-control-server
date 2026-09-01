@@ -26,7 +26,7 @@ const DEFAULT_COMMAND_CAPACITY: usize = 64;
 const DEFAULT_EVENT_CAPACITY: usize = 256;
 const DEFAULT_MAXIMUM_JSON_BYTES: usize = 1024 * 1024;
 const DEFAULT_COMMAND_ACK_TIMEOUT_MS: u64 = 5_000;
-const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS: u64 = 10_500;
 const DEFAULT_SCREENSHOT_CONCURRENCY: usize = 2;
 const DEFAULT_SCREENSHOT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_WEBSOCKET_EVENT_CAPACITY: usize = 256;
@@ -331,6 +331,17 @@ impl ControllerConfig {
             )?,
         };
         worker.validate().map_err(ConfigError::Worker)?;
+        let maximum_worker_blocking_wait = worker
+            .native
+            .connect_timeout
+            .max(worker.native.read_timeout)
+            .max(worker.poll_interval);
+        let minimum_shutdown_timeout = maximum_worker_blocking_wait
+            .checked_add(Duration::from_millis(MIN_PROCESS_SHUTDOWN_TIMEOUT_MS))
+            .ok_or(ConfigError::InvalidValue("VRC_SHUTDOWN_TIMEOUT_MS"))?;
+        if shutdown_timeout < minimum_shutdown_timeout {
+            return Err(ConfigError::InvalidValue("VRC_SHUTDOWN_TIMEOUT_MS"));
+        }
 
         Ok(Self {
             listen_address,
@@ -685,7 +696,7 @@ mod tests {
         assert_eq!(config.worker.native.host, "desktop");
         assert_eq!(config.worker.native.port, 5901);
         assert_eq!(config.maximum_json_bytes, 1024 * 1024);
-        assert_eq!(config.shutdown_timeout, Duration::from_secs(5));
+        assert_eq!(config.shutdown_timeout, Duration::from_millis(10_500));
 
         let debug = format!("{config:?}");
         assert!(!debug.contains("api-token"));
@@ -703,7 +714,9 @@ mod tests {
             ("VRC_VNC_PORT".to_owned(), "5999".to_owned()),
             ("VRC_COMMAND_CAPACITY".to_owned(), "8".to_owned()),
             ("VRC_EVENT_CAPACITY".to_owned(), "9".to_owned()),
-            ("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "750".to_owned()),
+            ("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "1500".to_owned()),
+            ("VRC_VNC_CONNECT_TIMEOUT_MS".to_owned(), "1000".to_owned()),
+            ("VRC_VNC_READ_TIMEOUT_MS".to_owned(), "1000".to_owned()),
             ("VRC_WEBSOCKET_EVENT_CAPACITY".to_owned(), "10".to_owned()),
             ("VRC_WEBSOCKET_MAX_CLIENTS".to_owned(), "3".to_owned()),
             (
@@ -729,7 +742,7 @@ mod tests {
         assert_eq!(config.worker.native.port, 5999);
         assert_eq!(config.worker.command_capacity, 8);
         assert_eq!(config.worker.event_capacity, 9);
-        assert_eq!(config.shutdown_timeout, Duration::from_millis(750));
+        assert_eq!(config.shutdown_timeout, Duration::from_millis(1500));
         assert_eq!(config.websocket_event_capacity, 10);
         assert_eq!(config.websocket_max_clients, 3);
         assert_eq!(config.websocket_ping_interval, Duration::from_secs(1));
@@ -802,22 +815,24 @@ mod tests {
     }
 
     #[test]
-    fn process_shutdown_timeout_floor_is_accepted_and_below_floor_is_rejected() {
-        let below = MapEnvironment(HashMap::from([(
+    fn process_shutdown_budget_covers_longest_single_worker_wait_plus_cleanup_margin() {
+        let common = [
+            ("VRC_VNC_CONNECT_TIMEOUT_MS".to_owned(), "1000".to_owned()),
+            ("VRC_VNC_READ_TIMEOUT_MS".to_owned(), "1000".to_owned()),
+            ("VRC_POLL_INTERVAL_MS".to_owned(), "1000".to_owned()),
+        ];
+        let below = MapEnvironment(HashMap::from_iter(common.clone().into_iter().chain([(
             "VRC_SHUTDOWN_TIMEOUT_MS".to_owned(),
-            (MIN_PROCESS_SHUTDOWN_TIMEOUT_MS - 1).to_string(),
-        )]));
+            "1499".to_owned(),
+        )])));
         assert!(ControllerConfig::load_from(&below, &secrets()).is_err());
 
-        let floor = MapEnvironment(HashMap::from([(
+        let floor = MapEnvironment(HashMap::from_iter(common.into_iter().chain([(
             "VRC_SHUTDOWN_TIMEOUT_MS".to_owned(),
-            MIN_PROCESS_SHUTDOWN_TIMEOUT_MS.to_string(),
-        )]));
+            "1500".to_owned(),
+        )])));
         let config = ControllerConfig::load_from(&floor, &secrets()).expect("floor is valid");
-        assert_eq!(
-            config.shutdown_timeout,
-            Duration::from_millis(MIN_PROCESS_SHUTDOWN_TIMEOUT_MS)
-        );
+        assert_eq!(config.shutdown_timeout, Duration::from_millis(1500));
     }
 
     #[test]
