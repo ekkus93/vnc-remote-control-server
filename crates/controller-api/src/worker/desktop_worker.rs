@@ -2,6 +2,7 @@ use super::WorkerSettings;
 use super::channels::WorkerChannels;
 use super::client::WorkerClient;
 use super::command::CommandEnvelope;
+use super::helpers::lock_unpoisoned;
 use super::outcome::{COMMAND_OUTCOME_CAPACITY, CommandOutcomeRegistry};
 use super::run::run_worker;
 use super::session::WorkerSession;
@@ -75,15 +76,37 @@ impl DesktopWorker {
     /// Requests out-of-band shutdown and waits no longer than `timeout` for
     /// the worker thread to report exit. A zero timeout still performs one
     /// nonblocking exit observation before deliberate detach.
+    ///
+    /// `DesktopError::Timeout` means the join handle was deliberately detached
+    /// while the worker might still be running. The shared snapshot is marked
+    /// `fatal_exit=true` before detach, and this method never fabricates a
+    /// `Stopped` state merely because ownership of the join handle was dropped.
     pub fn shutdown(mut self, timeout: Duration) -> Result<(), DesktopError> {
         self.client.request_shutdown();
         match self.wait_for_worker_exit(timeout) {
-            WorkerExitWait::Exited => self.join_worker(),
+            WorkerExitWait::Exited => {
+                let result = self.join_worker();
+                if result.is_ok() {
+                    tracing::info!(outcome = "stopped", "desktop_worker_shutdown_complete");
+                }
+                result
+            }
             WorkerExitWait::TimedOut => {
-                tracing::warn!(
-                    timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
-                    "desktop_worker_shutdown_timeout"
-                );
+                self.mark_abnormal_detach();
+                match u64::try_from(timeout.as_millis()) {
+                    Ok(timeout_ms) => tracing::warn!(
+                        timeout_ms,
+                        outcome = "timed_out_detached",
+                        "desktop_worker_shutdown_timeout"
+                    ),
+                    Err(_) => {
+                        tracing::warn!(
+                            outcome = "timed_out_detached",
+                            "desktop_worker_shutdown_timeout"
+                        );
+                        tracing::error!("desktop_worker_shutdown_timeout_value_overflow");
+                    }
+                }
                 self.detach_worker();
                 Err(DesktopError::Timeout)
             }
@@ -233,6 +256,10 @@ impl DesktopWorker {
         }
     }
 
+    fn mark_abnormal_detach(&self) {
+        lock_unpoisoned(&self.client.snapshot).fatal_exit = true;
+    }
+
     fn detach_worker(&mut self) {
         drop(self.worker_exited.take());
         drop(self.join.take());
@@ -242,7 +269,11 @@ impl DesktopWorker {
         let Some(join) = self.join.take() else {
             return Ok(());
         };
-        join_worker_handle(join)
+        let result = join_worker_handle(join);
+        if result.is_err() {
+            lock_unpoisoned(&self.client.snapshot).fatal_exit = true;
+        }
+        result
     }
 }
 
@@ -274,10 +305,20 @@ pub(super) fn cleanup_startup_worker_after_timeout(
             result
         }
         Err(RecvTimeoutError::Timeout) => {
-            tracing::warn!(
-                timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
-                "desktop_worker_startup_cleanup_timeout"
-            );
+            match u64::try_from(timeout.as_millis()) {
+                Ok(timeout_ms) => tracing::warn!(
+                    timeout_ms,
+                    outcome = "timed_out_detached",
+                    "desktop_worker_startup_cleanup_timeout"
+                ),
+                Err(_) => {
+                    tracing::warn!(
+                        outcome = "timed_out_detached",
+                        "desktop_worker_startup_cleanup_timeout"
+                    );
+                    tracing::error!("desktop_worker_startup_cleanup_timeout_value_overflow");
+                }
+            }
             drop(join);
             Err(DesktopError::Timeout)
         }
@@ -297,11 +338,21 @@ impl Drop for DesktopWorker {
                 }
             }
             WorkerExitWait::TimedOut => {
-                tracing::warn!(
-                    timeout_ms =
-                        u64::try_from(DROP_SHUTDOWN_TIMEOUT.as_millis()).unwrap_or(u64::MAX),
-                    "desktop_worker_drop_shutdown_timeout"
-                );
+                self.mark_abnormal_detach();
+                match u64::try_from(DROP_SHUTDOWN_TIMEOUT.as_millis()) {
+                    Ok(timeout_ms) => tracing::warn!(
+                        timeout_ms,
+                        outcome = "timed_out_detached",
+                        "desktop_worker_drop_shutdown_timeout"
+                    ),
+                    Err(_) => {
+                        tracing::warn!(
+                            outcome = "timed_out_detached",
+                            "desktop_worker_drop_shutdown_timeout"
+                        );
+                        tracing::error!("desktop_worker_drop_shutdown_timeout_value_overflow");
+                    }
+                }
                 self.detach_worker();
             }
         }
