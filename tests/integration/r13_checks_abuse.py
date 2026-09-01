@@ -152,7 +152,9 @@ def assert_reconnect_and_resource_bounds(harness: Harness) -> None:
             "old screenshot remained available",
         )
         saw_unavailable = True
-        harness.compose("start", "desktop")
+        # Reconcile the service to its configured running state rather than trusting
+        # `compose start` to have transitioned an existing stopped container.
+        harness.compose("up", "-d", "--no-deps", "desktop")
         harness.wait_service_health("desktop")
         harness.wait_ready()
         connected = harness.request("GET", "/v1/status").json()
