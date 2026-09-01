@@ -7,7 +7,6 @@ import time
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "desktop" / "configure-xfce-session.sh"
 
