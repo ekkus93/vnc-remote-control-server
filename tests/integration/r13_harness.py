@@ -137,32 +137,57 @@ class Harness:
             timeout=timeout,
         )
 
-    def service_id(self, service: str) -> str:
-        """Return `service`'s container id, or `""` if it is not running."""
-        return self.compose("ps", "-q", service).stdout.strip()
+    def service_id(self, service: str, *, include_stopped: bool = False) -> str:
+        """Return `service`'s container id, including stopped containers when requested."""
+        arguments = ["ps"]
+        if include_stopped:
+            arguments.append("--all")
+        arguments.extend(["-q", service])
+        container_ids = [
+            value for value in self.compose(*arguments).stdout.splitlines() if value.strip()
+        ]
+        if len(container_ids) > 1:
+            raise Failure(f"expected one {service} container, found {len(container_ids)}")
+        return container_ids[0].strip() if container_ids else ""
+
+    def service_state(self, service: str) -> dict[str, Any] | None:
+        """Return Docker state for `service`, including an exited container if present."""
+        container_id = self.service_id(service, include_stopped=True)
+        if not container_id:
+            return None
+        result = self.run(
+            ["docker", "inspect", "--format", "{{json .State}}", container_id]
+        )
+        state = json.loads(result.stdout)
+        if not isinstance(state, dict):
+            raise Failure(f"docker inspect returned invalid state for {service}")
+        return state
 
     def wait_service_health(self, service: str, deadline_seconds: float = 120) -> None:
-        """Poll `service` until Docker reports it healthy, or raise `Failure`."""
+        """Poll `service` until healthy; fail immediately on a terminal state."""
         deadline = time.monotonic() + deadline_seconds
         last = "missing"
         while time.monotonic() < deadline:
-            container_id = self.service_id(service)
-            if container_id:
-                result = self.run(
-                    [
-                        "docker",
-                        "inspect",
-                        "--format",
-                        "{{if .State.Health}}{{.State.Health.Status}}"
-                        "{{else}}{{.State.Status}}{{end}}",
-                        container_id,
-                    ]
+            state = self.service_state(service)
+            if state is not None:
+                status = str(state.get("Status", "unknown"))
+                health = state.get("Health")
+                health_status = (
+                    str(health.get("Status", "unknown"))
+                    if isinstance(health, dict)
+                    else None
                 )
-                last = result.stdout.strip()
-                if last == "healthy":
+                last = f"status={status}, health={health_status or 'none'}"
+                details = (
+                    f"{last}, exit_code={state.get('ExitCode')}, "
+                    f"oom_killed={state.get('OOMKilled')}, error={state.get('Error')!r}"
+                )
+                if health_status == "healthy":
                     return
-                if last in {"unhealthy", "exited", "dead"}:
-                    raise Failure(f"{service} became {last}")
+                if status in {"exited", "dead"}:
+                    raise Failure(f"{service} entered terminal state: {details}")
+                if health_status == "unhealthy":
+                    raise Failure(f"{service} became unhealthy: {details}")
             time.sleep(0.25)
         raise Failure(f"timed out waiting for {service} health; last={last}")
 
@@ -345,7 +370,7 @@ print(count)
             result = self.run(command, check=False)
             outputs[name] = (result.stdout or "") + (result.stderr or "")
         for service in ("desktop", "controller"):
-            container_id = self.service_id(service)
+            container_id = self.service_id(service, include_stopped=True)
             if container_id:
                 result = self.run(
                     ["docker", "inspect", "--format", "{{json .State}}", container_id],
