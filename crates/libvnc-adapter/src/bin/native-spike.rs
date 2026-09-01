@@ -1,4 +1,4 @@
-use libvnc_adapter::{NativeClient, NativeClientConfig, SecretString};
+use libvnc_adapter::{NativeClient, NativeClientConfig, NativeError, SecretString};
 use remote_desktop_core::{Coordinate, DisplayInfo, KeyboardKey, checked_rgba_len};
 use std::env;
 use std::error::Error;
@@ -57,50 +57,52 @@ fn run() -> Result<(), Box<dyn Error>> {
     loop {
         client.poll(POLL_INTERVAL)?;
 
-        if let Ok(display) = client.display_info()
-            && display.complete
-        {
-            if display.width != EXPECTED_WIDTH || display.height != EXPECTED_HEIGHT {
-                return Err(io::Error::other("unexpected VNC framebuffer dimensions").into());
-            }
-            let framebuffer = client.framebuffer()?;
-            let expected_length = checked_rgba_len(framebuffer.width, framebuffer.height)?;
-            if framebuffer.bytes.len() != expected_length {
-                return Err(io::Error::other("unexpected VNC framebuffer byte length").into());
-            }
+        match client.display_info() {
+            Ok(display) if display.complete => {
+                if display.width != EXPECTED_WIDTH || display.height != EXPECTED_HEIGHT {
+                    return Err(io::Error::other("unexpected VNC framebuffer dimensions").into());
+                }
+                let framebuffer = client.framebuffer()?;
+                let expected_length = checked_rgba_len(framebuffer.width, framebuffer.height)?;
+                if framebuffer.bytes.len() != expected_length {
+                    return Err(io::Error::other("unexpected VNC framebuffer byte length").into());
+                }
 
-            let domain_display = DisplayInfo::new(
-                framebuffer.width,
-                framebuffer.height,
-                24,
-                framebuffer.revision,
-                true,
-            )?;
-            let coordinate = Coordinate::new(POINTER_X, POINTER_Y, domain_display)?;
-            client.send_pointer(coordinate, 0)?;
-            client.send_key(KeyboardKey::F5, true)?;
-            client.send_key(KeyboardKey::F5, false)?;
-            client.send_clipboard(CLIPBOARD_PROOF)?;
-            for _ in 0..4 {
-                client.poll(POLL_INTERVAL)?;
-            }
+                let domain_display = DisplayInfo::new(
+                    framebuffer.width,
+                    framebuffer.height,
+                    24,
+                    framebuffer.revision,
+                    true,
+                )?;
+                let coordinate = Coordinate::new(POINTER_X, POINTER_Y, domain_display)?;
+                client.send_pointer(coordinate, 0)?;
+                client.send_key(KeyboardKey::F5, true)?;
+                client.send_key(KeyboardKey::F5, false)?;
+                client.send_clipboard(CLIPBOARD_PROOF)?;
+                for _ in 0..4 {
+                    client.poll(POLL_INTERVAL)?;
+                }
 
-            println!(
-                "proof_ready=1 libvncclient_version={} protocol_major={} dimensions={}x{} revision={} bytes={}",
-                NativeClient::library_version(),
-                client.protocol_major(),
-                framebuffer.width,
-                framebuffer.height,
-                framebuffer.revision,
-                framebuffer.bytes.len()
-            );
-            io::stdout().flush()?;
+                println!(
+                    "proof_ready=1 libvncclient_version={} protocol_major={} dimensions={}x{} revision={} bytes={}",
+                    NativeClient::library_version(),
+                    client.protocol_major(),
+                    framebuffer.width,
+                    framebuffer.height,
+                    framebuffer.revision,
+                    framebuffer.bytes.len()
+                );
+                io::stdout().flush()?;
 
-            let hold_deadline = Instant::now() + Duration::from_secs(proof_hold_seconds);
-            while Instant::now() < hold_deadline {
-                client.poll(POLL_INTERVAL)?;
+                let hold_deadline = Instant::now() + Duration::from_secs(proof_hold_seconds);
+                while Instant::now() < hold_deadline {
+                    client.poll(POLL_INTERVAL)?;
+                }
+                return Ok(());
             }
-            return Ok(());
+            Ok(_) | Err(NativeError::FramebufferUnavailable) => {}
+            Err(error) => return Err(error.into()),
         }
 
         if Instant::now() >= deadline {
