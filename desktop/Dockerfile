@@ -43,12 +43,14 @@ RUN apt-get update \
 COPY --chown=root:root entrypoint.sh /usr/local/bin/desktop-entrypoint
 COPY --chown=root:root healthcheck.sh /usr/local/bin/desktop-healthcheck
 COPY --chown=root:root xstartup /usr/local/bin/xstartup
+COPY --chown=root:root configure-xfce-session.sh /opt/vnc-test-app/configure-xfce-session.sh
 COPY --chown=desktop:desktop test-app/test_app.py /opt/vnc-test-app/test_app.py
 
 RUN chmod 0755 \
         /usr/local/bin/desktop-entrypoint \
         /usr/local/bin/desktop-healthcheck \
         /usr/local/bin/xstartup \
+        /opt/vnc-test-app/configure-xfce-session.sh \
         /opt/vnc-test-app/test_app.py
 
 USER desktop:desktop

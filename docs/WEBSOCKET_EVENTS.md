@@ -64,6 +64,10 @@ The first text frame after a successful upgrade is always a `snapshot`:
 
 - `authentication`
 - `configuration`
+- `request`
+- `capacity`
+- `unavailable`
+- `rate_limited`
 - `transport`
 - `timeout`
 - `protocol`
@@ -154,6 +158,12 @@ Clients should treat events as invalidation and state-change signals:
 - after `framebuffer_invalidated`, stop treating the previous screenshot as current;
 - after reconnecting the WebSocket, replace local state with the new snapshot.
 
+## Client-to-server traffic bounds
+
+`/v1/events` is server-to-client for application data. The controller configures both the inbound WebSocket frame limit and inbound message limit to **4096 bytes**. Ping, Pong, and Close control frames remain supported. Client Text or Binary application data is never accepted as an event command: ordinary application data is rejected with close code `1003`, while application data above the 4096-byte bound is rejected with `1009`. Rejected Text/Binary data does not refresh heartbeat activity.
+
+These small limits bound memory spent on traffic the event protocol does not use while remaining comfortably above the WebSocket control-frame payload maximum.
+
 ## Heartbeats and close behavior
 
 The server sends WebSocket ping frames at the configured interval. Clients must respond to ping frames and remain active within the configured idle timeout.
@@ -164,6 +174,8 @@ The controller uses these close codes and reasons:
 |---:|---|---|
 | `1001` | `client heartbeat timeout` | Client remained inactive beyond the bounded idle timeout. |
 | `1001` | `event source stopped` | Worker event source stopped during controller shutdown or failure. |
+| `1003` | `client application data is not supported` | Client sent Text/Binary application data to the server-to-client event stream. |
+| `1009` | `client application message is too large` | Client application data exceeded the 4096-byte inbound bound. |
 | `1011` | `event sequence exhausted` | The process-local sequence cannot allocate another unique event ID. |
 | `1013` | `client event buffer exhausted` | Client was too slow and lagged beyond its bounded event buffer. |
 

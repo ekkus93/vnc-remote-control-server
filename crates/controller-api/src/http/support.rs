@@ -255,6 +255,10 @@ pub(super) const fn worker_failure_name(failure: WorkerFailureKind) -> &'static 
     match failure {
         WorkerFailureKind::Authentication => "authentication",
         WorkerFailureKind::Configuration => "configuration",
+        WorkerFailureKind::Request => "request",
+        WorkerFailureKind::Capacity => "capacity",
+        WorkerFailureKind::Unavailable => "unavailable",
+        WorkerFailureKind::RateLimited => "rate_limited",
         WorkerFailureKind::Transport => "transport",
         WorkerFailureKind::Timeout => "timeout",
         WorkerFailureKind::Protocol => "protocol",

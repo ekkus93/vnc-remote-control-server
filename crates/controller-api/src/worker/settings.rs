@@ -180,9 +180,17 @@ pub enum WorkerFailureKind {
     Authentication,
     /// Static configuration is invalid and must not be retried.
     Configuration,
+    /// A caller-supplied command or payload violated the public request contract.
+    Request,
+    /// A bounded queue, retained-outcome registry, or process-local identifier exhausted capacity.
+    Capacity,
+    /// Required worker, display, framebuffer, or clipboard state is not currently available.
+    Unavailable,
+    /// A manual reconnect request was rejected by the configured rate limit.
+    RateLimited,
     /// The TCP transport failed or disconnected.
     Transport,
-    /// A refresh probe exceeded its deadline.
+    /// A refresh probe or other bounded operation exceeded its deadline.
     Timeout,
     /// The remote framebuffer or protocol contract failed.
     Protocol,

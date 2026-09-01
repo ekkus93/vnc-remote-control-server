@@ -23,6 +23,10 @@ ConnectionState: TypeAlias = Literal[
 WorkerFailure: TypeAlias = Literal[
     "authentication",
     "configuration",
+    "request",
+    "capacity",
+    "unavailable",
+    "rate_limited",
     "transport",
     "timeout",
     "protocol",
