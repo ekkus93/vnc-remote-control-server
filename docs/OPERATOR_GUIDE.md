@@ -313,7 +313,7 @@ curl --fail-with-body \
 curl --fail-with-body --header "$AUTH_HEADER" "$BASE_URL/v1/clipboard"
 ```
 
-The API accepts UTF-8 clipboard strings up to 1 MiB and rejects embedded NUL bytes. RFB clipboard transport is a byte-oriented legacy channel; inbound bytes must form valid UTF-8 or the adapter rejects the update. Applications and desktop toolkits may normalize line endings or provide clipboard updates only after an explicit copy operation.
+The API accepts UTF-8 clipboard strings up to 1 MiB and rejects embedded NUL bytes. RFB clipboard transport is a byte-oriented legacy channel; inbound bytes must form valid UTF-8 or the adapter rejects the update. If a newer inbound clipboard update is rejected, the controller invalidates the prior cached clipboard and drops the affected VNC session rather than serving the old value as current; `GET /v1/clipboard` returns `clipboard_unavailable` until a later valid update on the replacement session becomes authoritative. Applications and desktop toolkits may normalize line endings or provide clipboard updates only after an explicit copy operation.
 
 The native shim scrubs its project-owned stored clipboard allocation before replacement or destruction and scrubs its temporary outbound send copy before free. This does not prove that Rust request or response values, LibVNCClient, the VNC server, desktop applications, toolkit or OS clipboard managers, clients, allocators, swap, or crash dumps have no residual copies.
 
@@ -369,7 +369,7 @@ websocat \
   "ws://127.0.0.1:8080/v1/events"
 ```
 
-The first text frame is a `snapshot`. Later payload-free events report connection-state transitions, framebuffer revisions or invalidation, clipboard revisions, overload, and protocol errors. The server sends WebSocket ping frames; clients must remain responsive. Slow or idle clients are disconnected within configured bounds.
+The first text frame is a `snapshot`. Later payload-free events report connection-state transitions, framebuffer revisions or invalidation, clipboard revisions, overload, and protocol errors. The endpoint is server-to-client for application data: inbound WebSocket Text and Binary messages are rejected, while Ping/Pong/Close control frames remain supported. Both inbound frame and message limits are 4096 bytes; unsupported application data closes with code `1003`, and application data exceeding the bound closes with `1009`. Rejected application data does not count as heartbeat activity. The server sends WebSocket ping frames; clients must remain responsive. Slow or idle clients are disconnected within configured bounds.
 
 Event sequences never wrap, reset, saturate silently, or reuse an earlier value. If sequence allocation is exhausted before the initial snapshot, the controller releases the client slot and returns `503 event_sequence_exhausted` before upgrade. If sequence exhaustion becomes terminal after upgrade, an internal notification wakes established event loops promptly; clients close with WebSocket code `1011` and reason `event sequence exhausted` without waiting for the next heartbeat.
 
@@ -390,7 +390,9 @@ The controller handles SIGTERM by:
 7. observing an already-completed bridge exit even when no budget remains, or deliberately detaching a still-active bridge with a payload-free diagnostic;
 8. exiting before the Compose stop grace period expires under the documented defaults.
 
-The default process-cleanup budget is 5000 ms. Configuration below `max(500 ms, 8 × 50 ms)` is rejected; with the current event-bridge poll interval, the derived minimum is 500 ms. Direct bridge wake-up is deliberately deferred: the current dependency-free stop flag and bounded poll remain authoritative for stopping the worker-event bridge itself.
+If the native worker itself does not report exit before its bounded shutdown deadline, the owner deliberately drops the join handle instead of blocking indefinitely. That timeout/detach path marks the shared snapshot `fatal_exit=true`, emits `outcome="timed_out_detached"`, returns a timeout to the caller, and does **not** fabricate `state=stopped`. `Stopped` therefore means an actually observed orderly worker exit, not merely loss of the join handle.
+
+The default process-cleanup budget is 10500 ms. In addition to the process-wide 1 ms–24 h duration bound, configuration must provide at least the longest configured native connect/read/poll wait plus a 500 ms cleanup margin. Direct bridge wake-up is deliberately deferred: the current dependency-free stop flag and bounded poll remain authoritative for stopping the worker-event bridge itself.
 
 Use:
 
@@ -435,7 +437,10 @@ Important controller defaults:
 | HTTP body read | `VRC_HTTP_BODY_TIMEOUT_MS` | 5000 ms | maximum 300000 ms |
 | HTTP shutdown drain | `VRC_SHUTDOWN_GRACE_MS` | 10000 ms | maximum 300000 ms |
 | Complete worker startup | `VRC_STARTUP_TIMEOUT_MS` | 10000 ms | one total acknowledgement-and-cleanup budget |
-| Process cleanup | `VRC_SHUTDOWN_TIMEOUT_MS` | 5000 ms | minimum `max(500 ms, 8 × event-bridge poll interval)` |
+| Process cleanup | `VRC_SHUTDOWN_TIMEOUT_MS` | 10500 ms | 1 ms–24 h generally, and must be at least `max(VNC connect, VNC read, poll) + 500 ms` |
+| Native VNC connect | `VRC_VNC_CONNECT_TIMEOUT_MS` | 10000 ms | 1000 ms–24 h; must be an exact multiple of 1000 ms |
+| Native VNC read | `VRC_VNC_READ_TIMEOUT_MS` | 10000 ms | 1000 ms–24 h; must be an exact multiple of 1000 ms |
+| Native poll | `VRC_POLL_INTERVAL_MS` | 10 ms | 1 ms–4294967 ms; must fit the native `u32` microsecond wait field |
 | Worker command queue | `VRC_COMMAND_CAPACITY` | 64 | bounded, nonzero |
 | Worker event queue | `VRC_EVENT_CAPACITY` | 256 | bounded, nonzero |
 | Command acknowledgement | `VRC_COMMAND_ACK_TIMEOUT_MS` | 5000 ms | nonzero |
@@ -452,7 +457,7 @@ Important controller defaults:
 | Stall probe | `VRC_STALL_PROBE_AFTER_MS` | 30000 ms | nonzero |
 | Stall confirmation | `VRC_STALL_CONFIRM_AFTER_MS` | 10000 ms | nonzero |
 
-Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.
+Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. Controller-owned millisecond durations are bounded to 1 ms through 24 hours unless a narrower downstream representation applies. The native connect/read settings keep their historical `_MS` environment names but LibVNCClient represents them as whole seconds, so values such as 1500 ms are rejected rather than rounded. The poll interval is converted to a native `u32` microsecond field and is rejected above 4,294,967 ms. `VRC_SHUTDOWN_TIMEOUT_MS` must also cover the longest configured connect/read/poll blocking window plus a 500 ms cleanup margin. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.
 
 ## 15. Troubleshooting
 
