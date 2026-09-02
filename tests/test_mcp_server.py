@@ -14,6 +14,7 @@ from typing import Any
 from unittest import mock
 
 from vnc_remote_control import mcp_server
+from vnc_remote_control.mcp_config import McpConfig, McpConfigError
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
@@ -88,7 +89,7 @@ class McpServerScaffoldTests(unittest.TestCase):
         stderr = io.StringIO()
         config = SimpleNamespace(transport="stdio")
         with (
-            mock.patch.object(mcp_server.McpConfig, "load", return_value=config),
+            mock.patch.object(McpConfig, "load", return_value=config),
             mock.patch.object(
                 mcp_server,
                 "create_mcp_server",
@@ -106,9 +107,9 @@ class McpServerScaffoldTests(unittest.TestCase):
         stderr = io.StringIO()
         with (
             mock.patch.object(
-                mcp_server.McpConfig,
+                McpConfig,
                 "load",
-                side_effect=mcp_server.McpConfigError("invalid MCP config"),
+                side_effect=McpConfigError("invalid MCP config"),
             ),
             mock.patch.object(mcp_server, "create_mcp_server") as create_server,
             redirect_stderr(stderr),
@@ -124,7 +125,7 @@ class McpServerScaffoldTests(unittest.TestCase):
         stderr = io.StringIO()
         config = SimpleNamespace(transport="streamable-http")
         with (
-            mock.patch.object(mcp_server.McpConfig, "load", return_value=config),
+            mock.patch.object(McpConfig, "load", return_value=config),
             mock.patch.object(mcp_server, "create_mcp_server") as create_server,
             redirect_stderr(stderr),
             self.assertRaises(SystemExit) as context,
@@ -139,7 +140,7 @@ class McpServerScaffoldTests(unittest.TestCase):
         server = mock.Mock()
         config = SimpleNamespace(transport="stdio")
         with (
-            mock.patch.object(mcp_server.McpConfig, "load", return_value=config),
+            mock.patch.object(McpConfig, "load", return_value=config),
             mock.patch.object(mcp_server, "create_mcp_server", return_value=server),
         ):
             mcp_server.main()

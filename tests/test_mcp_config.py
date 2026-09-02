@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,9 +16,9 @@ class McpConfigTests(unittest.TestCase):
     """Verify MCP configuration never falls back through invalid input."""
 
     def setUp(self) -> None:
-        self.tempdir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tempdir.cleanup)
-        self.root = Path(self.tempdir.name)
+        """Create one private token-file fixture for each test."""
+        self.root = Path(tempfile.mkdtemp(prefix="vrc-mcp-config-test-"))
+        self.addCleanup(shutil.rmtree, self.root)
         self.token_path = self.root / "controller-token"
         self._write_secret(b"controller-secret\n")
 
@@ -32,6 +33,7 @@ class McpConfigTests(unittest.TestCase):
         return environment
 
     def test_defaults_are_bounded_loopback_and_read_only(self) -> None:
+        """Verify defaults are bounded loopback and read only."""
         config = McpConfig.load(self._environment())
         self.assertEqual(config.controller_url, "http://127.0.0.1:8080")
         self.assertEqual(config.controller_timeout_seconds, 5.0)
@@ -45,17 +47,20 @@ class McpConfigTests(unittest.TestCase):
         self.assertNotIn("controller-secret", repr(config.build_client()))
 
     def test_secret_reader_accepts_trailing_crlf_only(self) -> None:
+        """Verify secret reader accepts trailing crlf only."""
         self._write_secret(b"secret-value\r\n\n")
         config = McpConfig.load(self._environment())
         self.assertTrue(config.token_set)
 
     def test_raw_token_environment_value_is_never_a_token_source(self) -> None:
+        """Verify raw token environment value is never a token source."""
         with self.assertRaises(McpConfigError) as context:
             McpConfig.load({"VRC_MCP_CONTROLLER_TOKEN": "raw-secret"})
         self.assertIn("VRC_MCP_CONTROLLER_TOKEN_FILE", str(context.exception))
         self.assertNotIn("raw-secret", str(context.exception))
 
     def test_missing_empty_and_nonregular_token_files_fail(self) -> None:
+        """Verify missing empty and nonregular token files fail."""
         missing = self.root / "missing"
         cases = (
             {"VRC_MCP_CONTROLLER_TOKEN_FILE": ""},
@@ -72,6 +77,7 @@ class McpConfigTests(unittest.TestCase):
             McpConfig.load(self._environment())
 
     def test_secret_file_size_bound_is_exact(self) -> None:
+        """Verify secret file size bound is exact."""
         self._write_secret(b"a" * mcp_config.MAX_SECRET_BYTES)
         config = McpConfig.load(self._environment())
         self.assertTrue(config.token_set)
@@ -82,6 +88,7 @@ class McpConfigTests(unittest.TestCase):
         self.assertIn("size is outside the accepted bound", str(context.exception))
 
     def test_secret_file_rejects_invalid_utf8_nul_and_embedded_newline(self) -> None:
+        """Verify secret file rejects invalid utf8 nul and embedded newline."""
         for payload in (b"\xff", b"token\x00sentinel", b"token\nvalue"):
             with self.subTest(payload=payload):
                 self._write_secret(payload)
@@ -92,6 +99,7 @@ class McpConfigTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "Unix permission policy")
     def test_secret_file_permissions_match_controller_policy(self) -> None:
+        """Verify secret file permissions match controller policy."""
         for mode in (0o620, 0o602, 0o700, 0o610):
             with self.subTest(mode=oct(mode)):
                 self._write_secret(b"controller-secret", mode=mode)
@@ -105,6 +113,7 @@ class McpConfigTests(unittest.TestCase):
                 self.assertTrue(McpConfig.load(self._environment()).token_set)
 
     def test_controller_url_reuses_typed_client_validation(self) -> None:
+        """Verify controller url reuses typed client validation."""
         invalid_urls = (
             "ftp://controller",
             "http://user:password@controller",
@@ -119,6 +128,7 @@ class McpConfigTests(unittest.TestCase):
                 self.assertNotIn(url, str(context.exception))
 
     def test_timeout_rejects_malformed_nonfinite_and_out_of_range_values(self) -> None:
+        """Verify timeout rejects malformed nonfinite and out of range values."""
         invalid_values = (
             "",
             " 5",
@@ -146,6 +156,7 @@ class McpConfigTests(unittest.TestCase):
                 self.assertLessEqual(config.controller_timeout_seconds, 60.0)
 
     def test_mutation_boolean_has_only_explicit_spellings(self) -> None:
+        """Verify mutation boolean has only explicit spellings."""
         expected = {"0": False, "false": False, "1": True, "true": True}
         for value, result in expected.items():
             with self.subTest(value=value):
@@ -161,6 +172,7 @@ class McpConfigTests(unittest.TestCase):
                     McpConfig.load(self._environment(VRC_MCP_ALLOW_MUTATIONS=value))
 
     def test_concurrency_and_port_bounds_are_strict_ascii_integers(self) -> None:
+        """Verify concurrency and port bounds are strict ascii integers."""
         cases = (
             (
                 "VRC_MCP_MAX_CONCURRENT_CALLS",
@@ -183,6 +195,7 @@ class McpConfigTests(unittest.TestCase):
                         McpConfig.load(self._environment(**{name: value}))
 
     def test_transport_is_closed_vocabulary(self) -> None:
+        """Verify transport is closed vocabulary."""
         for value in ("stdio", "streamable-http"):
             with self.subTest(value=value):
                 config = McpConfig.load(self._environment(VRC_MCP_TRANSPORT=value))
@@ -193,6 +206,7 @@ class McpConfigTests(unittest.TestCase):
                     McpConfig.load(self._environment(VRC_MCP_TRANSPORT=value))
 
     def test_http_host_is_loopback_only(self) -> None:
+        """Verify http host is loopback only."""
         for value in ("127.0.0.1", "127.42.7.9", "::1", "localhost"):
             with self.subTest(value=value):
                 config = McpConfig.load(self._environment(VRC_MCP_HTTP_HOST=value))
@@ -212,12 +226,14 @@ class McpConfigTests(unittest.TestCase):
                     McpConfig.load(self._environment(VRC_MCP_HTTP_HOST=value))
 
     def test_non_unicode_environment_surrogate_fails_closed(self) -> None:
+        """Verify non unicode environment surrogate fails closed."""
         environment = self._environment()
         environment["VRC_MCP_CONTROLLER_URL"] = "http://controller\udcff"
         with self.assertRaises(McpConfigError):
             McpConfig.load(environment)
 
     def test_config_errors_and_repr_never_expose_token_contents(self) -> None:
+        """Verify config errors and repr never expose token contents."""
         sentinel = "TOP-SECRET-MCP-TOKEN"
         self._write_secret((sentinel + "\ninside").encode())
         with self.assertRaises(McpConfigError) as context:

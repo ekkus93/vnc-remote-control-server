@@ -9,61 +9,67 @@ This TODO is evidence-driven. A checkbox closes only when source, tests, workflo
 
 ## MCP-001 — Establish the MCP package and executable
 
-- [ ] Add an optional Python dependency group for MCP using reviewed pin `mcp==2.1.1`.
-- [ ] Preserve zero third-party runtime dependencies for users installing the core Python client without the MCP extra.
-- [ ] Add console entry point `vnc-remote-control-mcp`.
-- [ ] Add the minimal importable MCP server module without starting network/process activity at import time.
-- [ ] Expose a deterministic server-construction function for tests.
-- [ ] Verify missing MCP optional dependency produces an explicit actionable startup/import error, not a silent feature downgrade.
-- [ ] Add package/entry-point contract tests.
-- [ ] Update `python/README.md` with the optional install form after the executable exists.
+**Validated:** exact `master` SHA `56a63f958c55bc8830b452549a46cccb4afb22df`; CI `33672189649` and Release Gates `33672189614` both passed.
+
+- [x] Add an optional Python dependency group for MCP using reviewed pin `mcp==2.1.1`.
+- [x] Preserve zero third-party runtime dependencies for users installing the core Python client without the MCP extra.
+- [x] Add console entry point `vnc-remote-control-mcp`.
+- [x] Add the minimal importable MCP server module without starting network/process activity at import time.
+- [x] Expose a deterministic server-construction function for tests.
+- [x] Verify missing MCP optional dependency produces an explicit actionable startup/import error, not a silent feature downgrade.
+- [x] Add package/entry-point contract tests.
+- [x] Update `python/README.md` with the optional install form after the executable exists.
 
 ## MCP-002 — Implement fail-closed MCP configuration and secret loading
 
+**Implementation reconciled; replacement permanent-CI validation pending.** On exact SHA `d71c408880f1c8d0a7eb4f550d5116ed20abac37`, Release Gates `33673848724` passed while CI `33673848703` failed only at Pylint in the new MCP configuration tranche. The redundant re-raise, temporary-directory lifecycle, and test-docstring findings are corrected in the current candidate.
+
 ### Controller configuration
 
-- [ ] Implement `VRC_MCP_CONTROLLER_URL`, default `http://127.0.0.1:8080`.
-- [ ] Reuse `VncRemoteControlClient` URL validation; reject credentials/query/fragment.
-- [ ] Implement required `VRC_MCP_CONTROLLER_TOKEN_FILE`.
-- [ ] Do not accept a raw controller token through an env var, CLI argument, URL, source constant, or config fallback.
-- [ ] Implement `VRC_MCP_CONTROLLER_TIMEOUT_SECONDS`, default `5`, range `0.1..=60`.
-- [ ] Reject malformed, non-finite, zero, negative, or out-of-range timeout values.
+- [x] Implement `VRC_MCP_CONTROLLER_URL`, default `http://127.0.0.1:8080`.
+- [x] Reuse `VncRemoteControlClient` URL validation; reject credentials/query/fragment.
+- [x] Implement required `VRC_MCP_CONTROLLER_TOKEN_FILE`.
+- [x] Do not accept a raw controller token through an env var, CLI argument, URL, source constant, or config fallback.
+- [x] Implement `VRC_MCP_CONTROLLER_TIMEOUT_SECONDS`, default `5`, range `0.1..=60`.
+- [x] Reject malformed, non-finite, zero, negative, or out-of-range timeout values.
 
 ### Secret-file policy
 
-- [ ] Reject unreadable metadata.
-- [ ] Reject non-regular files.
-- [ ] Reject empty or oversized files using an explicit bounded maximum.
-- [ ] On Unix reject group/other write or execute permission bits, matching controller policy.
-- [ ] Reject invalid UTF-8.
-- [ ] Trim trailing CR/LF only.
-- [ ] Reject empty-after-trim and embedded NUL.
-- [ ] Ensure secret-file errors contain no secret bytes.
-- [ ] Ensure config/repr/log output reports only `token_set`/path metadata, never the token value.
-- [ ] Document that Python cannot provide the Rust `SecretString` volatile-zeroization guarantee.
+- [x] Reject unreadable metadata.
+- [x] Reject non-regular files.
+- [x] Reject empty or oversized files using an explicit bounded maximum.
+- [x] On Unix reject group/other write or execute permission bits, matching controller policy.
+- [x] Reject invalid UTF-8.
+- [x] Trim trailing CR/LF only.
+- [x] Reject empty-after-trim and embedded NUL.
+- [x] Ensure secret-file errors contain no secret bytes.
+- [x] Ensure config/repr/log output reports only `token_set`/path metadata, never the token value.
+- [x] Document that Python cannot provide the Rust `SecretString` volatile-zeroization guarantee.
 
 ### Capability/bounds configuration
 
-- [ ] Implement `VRC_MCP_ALLOW_MUTATIONS`, default false.
-- [ ] Reject ambiguous/malformed boolean spellings instead of truthy fallback parsing.
-- [ ] Implement `VRC_MCP_MAX_CONCURRENT_CALLS`, default `8`, range `1..=64`.
-- [ ] Implement `VRC_MCP_TRANSPORT`, default `stdio`, accepted `stdio|streamable-http` only.
-- [ ] Implement `VRC_MCP_HTTP_HOST`, default `127.0.0.1`.
-- [ ] Reject non-loopback Streamable HTTP binds in the initial release.
-- [ ] Implement `VRC_MCP_HTTP_PORT`, default `8765`, range `1..=65535`.
-- [ ] Add deterministic config parser tests including non-Unicode environment-value failures if the platform/API exposes them.
+- [x] Implement `VRC_MCP_ALLOW_MUTATIONS`, default false.
+- [x] Reject ambiguous/malformed boolean spellings instead of truthy fallback parsing.
+- [x] Implement `VRC_MCP_MAX_CONCURRENT_CALLS`, default `8`, range `1..=64`.
+- [x] Implement `VRC_MCP_TRANSPORT`, default `stdio`, accepted `stdio|streamable-http` only.
+- [x] Implement `VRC_MCP_HTTP_HOST`, default `127.0.0.1`.
+- [x] Reject non-loopback Streamable HTTP binds in the initial release.
+- [x] Implement `VRC_MCP_HTTP_PORT`, default `8765`, range `1..=65535`.
+- [x] Add deterministic config parser tests including non-Unicode environment-value failures if the platform/API exposes them.
 
 ## MCP-003 — Build common bounded controller-call execution
 
-- [ ] Create one adapter-owned bounded concurrency limiter for all controller calls.
-- [ ] Execute synchronous `VncRemoteControlClient` calls outside the MCP event loop.
-- [ ] Ensure waiting work is bounded; do not submit unbounded worker-thread jobs ahead of the limiter.
-- [ ] Ensure cancellation releases limiter capacity.
-- [ ] Ensure clean/error/unwind paths release limiter capacity.
-- [ ] Do not add an adapter retry loop.
-- [ ] Add saturation tests proving at most the configured number of controller calls execute concurrently.
-- [ ] Add recovery test proving capacity returns after a call exits/fails.
-- [ ] Add shutdown test proving no adapter-owned worker work is orphaned indefinitely.
+**Implemented locally; permanent-CI validation pending.** The executor uses fail-fast admission before thread-pool submission, shields cancellation from the underlying worker future, releases capacity only from the worker wrapper, performs no retry, and owns bounded shutdown. The uploaded exact-`master` snapshot plus this tranche passed `157/157` Python tests, `compileall`, and `git diff --check`.
+
+- [x] Create one adapter-owned bounded concurrency limiter for all controller calls.
+- [x] Execute synchronous `VncRemoteControlClient` calls outside the MCP event loop.
+- [x] Ensure waiting work is bounded; do not submit unbounded worker-thread jobs ahead of the limiter.
+- [x] Ensure cancellation releases limiter capacity.
+- [x] Ensure clean/error/unwind paths release limiter capacity.
+- [x] Do not add an adapter retry loop.
+- [x] Add saturation tests proving at most the configured number of controller calls execute concurrently.
+- [x] Add recovery test proving capacity returns after a call exits/fails.
+- [x] Add shutdown test proving no adapter-owned worker work is orphaned indefinitely.
 
 ## MCP-004 — Implement read-only MCP tool surface
 
