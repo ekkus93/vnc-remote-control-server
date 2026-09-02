@@ -81,14 +81,14 @@ impl WorkerSession for PlannedFailureSession {
     }
 }
 
-fn spawn_planned_failure_worker(
-    first_generation_fail_calls: &[usize],
-) -> (
+type PlannedFailureWorker = (
     DesktopWorker,
     WorkerClient,
     Arc<Mutex<Vec<(usize, InputEvent)>>>,
     Arc<AtomicUsize>,
-) {
+);
+
+fn spawn_planned_failure_worker(first_generation_fail_calls: &[usize]) -> PlannedFailureWorker {
     let events = Arc::new(Mutex::new(Vec::new()));
     let generations = Arc::new(AtomicUsize::new(0));
     let factory_events = Arc::clone(&events);
