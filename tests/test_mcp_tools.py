@@ -122,6 +122,13 @@ def _fake_call_tool_result_factory(**kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(**kwargs)
 
 
+def _named_screenshot_mock(response: ScreenshotResponse) -> mock.Mock:
+    """Return a patched screenshot method that preserves its exact callable name."""
+    operation = mock.Mock(return_value=response)
+    operation.configure_mock(__name__="get_screenshot")
+    return operation
+
+
 class RecordingExecutor:
     """Execute immediately while recording the exact client call boundary."""
 
@@ -324,7 +331,11 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             call_tool_result_factory=_fake_call_tool_result_factory,
         )
         with (
-            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            mock.patch.object(
+                self.client,
+                "get_screenshot",
+                new=_named_screenshot_mock(response),
+            ),
             self.assertRaisesRegex(ProtocolError, "contained no PNG data"),
         ):
             await tools["vnc_get_screenshot"][0]()
@@ -357,7 +368,11 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
         for label, response in cases:
             with (
                 self.subTest(label=label),
-                mock.patch.object(self.client, "get_screenshot", return_value=response),
+                mock.patch.object(
+                    self.client,
+                    "get_screenshot",
+                    new=_named_screenshot_mock(response),
+                ),
                 self.assertRaises(ProtocolError),
             ):
                 await self.tools["vnc_get_screenshot"][0]()
@@ -374,7 +389,11 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             not_modified=False,
         )
         with (
-            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            mock.patch.object(
+                self.client,
+                "get_screenshot",
+                new=_named_screenshot_mock(response),
+            ),
             self.assertRaises(ProtocolError) as captured,
         ):
             await self.tools["vnc_get_screenshot"][0]()
@@ -392,7 +411,11 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             not_modified=False,
         )
         with (
-            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            mock.patch.object(
+                self.client,
+                "get_screenshot",
+                new=_named_screenshot_mock(response),
+            ),
             self.assertRaisesRegex(ProtocolError, "framebuffer limit"),
         ):
             await self.tools["vnc_get_screenshot"][0]()
@@ -408,7 +431,11 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             not_modified=False,
         )
         with (
-            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            mock.patch.object(
+                self.client,
+                "get_screenshot",
+                new=_named_screenshot_mock(response),
+            ),
             mock.patch.object(mcp_tools, "_MAX_MCP_SCREENSHOT_PNG_BYTES", len(png) - 1),
             self.assertRaisesRegex(ProtocolError, "PNG byte limit"),
         ):
