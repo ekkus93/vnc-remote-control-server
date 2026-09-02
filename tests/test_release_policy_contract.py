@@ -101,6 +101,7 @@ class ReleasePolicyContractTests(unittest.TestCase):
         self.assertNotIn("except Exception", text)
 
     def test_all_third_party_actions_are_immutably_pinned(self) -> None:
+        """Every permanent third-party workflow action must use a full commit SHA."""
         action_ref = re.compile(r"^[^/\s]+/[^@\s]+@[0-9a-fA-F]{40}$")
         workflow_dir = ROOT / ".github" / "workflows"
         workflow_paths = sorted(
