@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-import importlib.util
+import importlib
 import io
 import tomllib
 import unittest
@@ -17,7 +17,6 @@ from vnc_remote_control import mcp_server
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
-SRC_ROOT = PYTHON_ROOT / "src"
 
 
 def _fake_server_factory(name: str) -> mock.Mock:
@@ -42,11 +41,6 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_import_does_not_require_or_start_mcp_runtime(self) -> None:
         """Importing the adapter never touches the optional MCP SDK."""
-        module_path = SRC_ROOT / "vnc_remote_control" / "mcp_server.py"
-        spec = importlib.util.spec_from_file_location("_isolated_vrc_mcp_server", module_path)
-        self.assertIsNotNone(spec)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
         original_import = builtins.__import__
 
         def guarded_import(name: str, *args: Any, **kwargs: Any) -> Any:
@@ -55,14 +49,22 @@ class McpServerScaffoldTests(unittest.TestCase):
             return original_import(name, *args, **kwargs)
 
         with mock.patch("builtins.__import__", side_effect=guarded_import):
-            spec.loader.exec_module(module)
-        self.assertEqual(module.MCP_EXTRA_REQUIREMENT, "mcp==2.1.1")
+            reloaded = importlib.reload(mcp_server)
+        self.assertEqual(reloaded.MCP_EXTRA_REQUIREMENT, "mcp==2.1.1")
 
     def test_create_mcp_server_uses_injected_factory_without_starting_it(self) -> None:
         """Construction is injectable and never starts a transport implicitly."""
         server = mcp_server.create_mcp_server(factory=_fake_server_factory)
         self.assertEqual(server.name, "VNC Remote Control Server")
         server.run.assert_not_called()
+
+    def test_sdk_loader_uses_exact_v2_module_and_symbol(self) -> None:
+        """The reviewed v2 SDK path is explicit rather than compatibility-probed."""
+        module = SimpleNamespace(MCPServer=_fake_server_factory)
+        with mock.patch.object(mcp_server, "import_module", return_value=module) as loader:
+            server = mcp_server.create_mcp_server()
+        loader.assert_called_once_with("mcp.server.mcpserver")
+        self.assertEqual(server.name, "VNC Remote Control Server")
 
     def test_missing_optional_dependency_fails_explicitly(self) -> None:
         """Requesting MCP without the extra gives an actionable hard failure."""
@@ -84,21 +86,62 @@ class McpServerScaffoldTests(unittest.TestCase):
     def test_main_reports_missing_dependency_on_stderr_and_exits_nonzero(self) -> None:
         """The executable never converts a missing SDK into apparent success."""
         stderr = io.StringIO()
-        with mock.patch.object(
-            mcp_server,
-            "create_mcp_server",
-            side_effect=mcp_server.McpDependencyError("missing MCP SDK"),
+        config = SimpleNamespace(transport="stdio")
+        with (
+            mock.patch.object(mcp_server.McpConfig, "load", return_value=config),
+            mock.patch.object(
+                mcp_server,
+                "create_mcp_server",
+                side_effect=mcp_server.McpDependencyError("missing MCP SDK"),
+            ),
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as context,
         ):
-            with redirect_stderr(stderr):
-                with self.assertRaises(SystemExit) as context:
-                    mcp_server.main()
+            mcp_server.main()
         self.assertEqual(context.exception.code, 2)
         self.assertIn("missing MCP SDK", stderr.getvalue())
 
+    def test_main_reports_invalid_config_before_server_construction(self) -> None:
+        """Invalid configuration fails closed before any MCP transport can start."""
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                mcp_server.McpConfig,
+                "load",
+                side_effect=mcp_server.McpConfigError("invalid MCP config"),
+            ),
+            mock.patch.object(mcp_server, "create_mcp_server") as create_server,
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as context,
+        ):
+            mcp_server.main()
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn("invalid MCP config", stderr.getvalue())
+        create_server.assert_not_called()
+
+    def test_main_rejects_http_transport_until_mcp_009(self) -> None:
+        """HTTP configuration cannot accidentally create an unreviewed listener."""
+        stderr = io.StringIO()
+        config = SimpleNamespace(transport="streamable-http")
+        with (
+            mock.patch.object(mcp_server.McpConfig, "load", return_value=config),
+            mock.patch.object(mcp_server, "create_mcp_server") as create_server,
+            redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as context,
+        ):
+            mcp_server.main()
+        self.assertEqual(context.exception.code, 2)
+        self.assertIn("not implemented until MCP-009", stderr.getvalue())
+        create_server.assert_not_called()
+
     def test_main_runs_stdio_once(self) -> None:
-        """The initial executable has one explicit non-network transport."""
+        """Validated stdio startup has one explicit non-network transport."""
         server = mock.Mock()
-        with mock.patch.object(mcp_server, "create_mcp_server", return_value=server):
+        config = SimpleNamespace(transport="stdio")
+        with (
+            mock.patch.object(mcp_server.McpConfig, "load", return_value=config),
+            mock.patch.object(mcp_server, "create_mcp_server", return_value=server),
+        ):
             mcp_server.main()
         server.run.assert_called_once_with(transport="stdio")
 
