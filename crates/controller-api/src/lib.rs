@@ -8,6 +8,7 @@ pub mod events;
 pub mod framebuffer;
 pub mod http;
 pub mod input;
+mod input_compat;
 pub mod observability;
 pub mod runtime;
 pub mod screenshot;
