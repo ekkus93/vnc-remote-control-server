@@ -376,18 +376,13 @@ impl WorkerSession for QueuedFailureSession {
     }
 
     fn send_key(&mut self, key: KeyboardKey, pressed: bool) -> Result<(), NativeError> {
-        lock_unpoisoned(&self.events).push((
-            self.generation,
-            InputEvent::Key(key, pressed),
-        ));
+        lock_unpoisoned(&self.events).push((self.generation, InputEvent::Key(key, pressed)));
         Ok(())
     }
 
     fn send_clipboard(&mut self, text: &str) -> Result<(), NativeError> {
-        lock_unpoisoned(&self.events).push((
-            self.generation,
-            InputEvent::Clipboard(text.to_owned()),
-        ));
+        lock_unpoisoned(&self.events)
+            .push((self.generation, InputEvent::Clipboard(text.to_owned())));
         Ok(())
     }
 }
@@ -443,7 +438,10 @@ fn queued_next_mutation_never_executes_on_tainted_generation() {
     if queued_result.is_ok() {
         wait_for_generation(&client, &generations, 2);
     } else {
-        assert!(matches!(queued_result, Err(DesktopError::WorkerUnavailable)));
+        assert!(matches!(
+            queued_result,
+            Err(DesktopError::WorkerUnavailable)
+        ));
     }
 
     assert!(
@@ -551,7 +549,10 @@ fn framebuffer_revision_exhaustion_invalidates_before_replacement_connects() {
     let client = worker.client();
     wait_for_state(&client, ConnectionState::Connected);
     assert_eq!(
-        client.framebuffer_snapshot().expect("initial frame").revision(),
+        client
+            .framebuffer_snapshot()
+            .expect("initial frame")
+            .revision(),
         1
     );
 
