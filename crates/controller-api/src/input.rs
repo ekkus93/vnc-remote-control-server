@@ -2,8 +2,9 @@
 //!
 //! Every compound command is fully validated before the first native event.
 //! The controller maintains the complete RFB button mask and locally pressed
-//! key order. Partial failures trigger best-effort releases while preserving
-//! unresolved local state so disconnect cleanup can retry releases.
+//! key order. A failed native input send has an ambiguous remote effect unless
+//! the transport proves otherwise, so any such failure taints the current
+//! session until the worker discards it.
 
 use libvnc_adapter::NativeError;
 use remote_desktop_core::{
@@ -54,9 +55,9 @@ impl InputReleaseReport {
     }
 }
 
-/// Whether the remote pointer state is still authoritative.
+/// Whether locally tracked input state is authoritative for this VNC session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum PointerState {
+enum InputState {
     #[default]
     Known,
     Uncertain,
@@ -68,7 +69,7 @@ pub(crate) struct InputController {
     button_mask: u8,
     last_coordinate: Option<Coordinate>,
     pressed_keys: Vec<KeyboardKey>,
-    pointer_state: PointerState,
+    input_state: InputState,
 }
 
 impl InputController {
@@ -80,8 +81,8 @@ impl InputController {
         display: DisplayInfo,
     ) -> Result<(), DesktopError> {
         let coordinate = validate_coordinate(requested, display)?;
-        sink.send_pointer(coordinate, self.button_mask)?;
         self.last_coordinate = Some(coordinate);
+        self.send_pointer(sink, coordinate, self.button_mask)?;
         Ok(())
     }
 
@@ -96,15 +97,26 @@ impl InputController {
     ) -> Result<(), DesktopError> {
         let coordinate = validate_coordinate(requested, display)?;
         let bit = button.rfb_mask();
+        let previous_mask = self.button_mask;
         let next_mask = if pressed {
-            self.button_mask | bit
+            previous_mask | bit
         } else {
-            self.button_mask & !bit
+            previous_mask & !bit
         };
-        sink.send_pointer(coordinate, next_mask)?;
-        self.button_mask = next_mask;
         self.last_coordinate = Some(coordinate);
-        Ok(())
+        match self.send_pointer(sink, coordinate, next_mask) {
+            Ok(()) => {
+                self.button_mask = next_mask;
+                Ok(())
+            }
+            Err(error) => {
+                // A failed press may already have reached the remote side, so
+                // track the pressed bit for neutralizing cleanup. A failed
+                // release keeps the previous pressed state tracked.
+                self.button_mask = if pressed { next_mask } else { previous_mask };
+                Err(error.into())
+            }
+        }
     }
 
     /// Sends one move/down/up click sequence without command interleaving.
@@ -123,20 +135,27 @@ impl InputController {
             ));
         }
 
-        sink.send_pointer(coordinate, self.button_mask)?;
         self.last_coordinate = Some(coordinate);
+        self.send_pointer(sink, coordinate, self.button_mask)?;
         let base_mask = self.button_mask;
         let pressed_mask = base_mask | bit;
-        sink.send_pointer(coordinate, pressed_mask)?;
+        if let Err(error) = self.send_pointer(sink, coordinate, pressed_mask) {
+            // The failed press may have reached the remote endpoint.
+            self.button_mask = pressed_mask;
+            return Err(error.into());
+        }
         self.button_mask = pressed_mask;
 
-        match sink.send_pointer(coordinate, base_mask) {
+        match self.send_pointer(sink, coordinate, base_mask) {
             Ok(()) => {
                 self.button_mask = base_mask;
                 Ok(())
             }
             Err(error) => {
-                if sink.send_pointer(coordinate, base_mask).is_ok() {
+                // One bounded neutralizing retry is safe: release is
+                // idempotent, but the original failure still taints the
+                // session and remains the command result.
+                if self.send_pointer(sink, coordinate, base_mask).is_ok() {
                     self.button_mask = base_mask;
                 }
                 Err(error.into())
@@ -179,8 +198,8 @@ impl InputController {
             ));
         }
         let coordinate = validate_coordinate(requested, display)?;
-        sink.send_pointer(coordinate, self.button_mask)?;
         self.last_coordinate = Some(coordinate);
+        self.send_pointer(sink, coordinate, self.button_mask)?;
 
         let wheel_mask = if delta_y >= 0 {
             WHEEL_UP_MASK
@@ -188,11 +207,11 @@ impl InputController {
             WHEEL_DOWN_MASK
         };
         for _ in 0..delta_y.unsigned_abs() {
-            sink.send_pointer(coordinate, self.button_mask | wheel_mask)?;
-            if let Err(error) = sink.send_pointer(coordinate, self.button_mask) {
-                if sink.send_pointer(coordinate, self.button_mask).is_err() {
-                    self.pointer_state = PointerState::Uncertain;
-                }
+            self.send_pointer(sink, coordinate, self.button_mask | wheel_mask)?;
+            if let Err(error) = self.send_pointer(sink, coordinate, self.button_mask) {
+                // One bounded idempotent release retry is permitted, but the
+                // failed first send has already tainted this session.
+                let _cleanup_result = self.send_pointer(sink, coordinate, self.button_mask);
                 return Err(error.into());
             }
         }
@@ -209,15 +228,18 @@ impl InputController {
         if pressed && self.pressed_keys.contains(&key) {
             return Ok(());
         }
-        sink.send_key(key, pressed)?;
         if pressed {
+            // Track before sending because a failed key-down may have reached
+            // the remote endpoint and must be neutralized during cleanup.
             self.pressed_keys.push(key);
-        } else if let Some(index) = self
-            .pressed_keys
-            .iter()
-            .position(|candidate| *candidate == key)
-        {
-            self.pressed_keys.remove(index);
+            if let Err(error) = self.send_key(sink, key, true) {
+                return Err(error.into());
+            }
+        } else if let Err(error) = self.send_key(sink, key, false) {
+            // Keep the key tracked because remote release is not proven.
+            return Err(error.into());
+        } else {
+            self.remove_pressed_key(key);
         }
         Ok(())
     }
@@ -249,18 +271,18 @@ impl InputController {
             if self.pressed_keys.contains(key) {
                 continue;
             }
-            if let Err(error) = sink.send_key(*key, true) {
+            self.pressed_keys.push(*key);
+            newly_pressed.push(*key);
+            if let Err(error) = self.send_key(sink, *key, true) {
                 self.release_new_keys(sink, &newly_pressed);
                 return Err(error.into());
             }
-            self.pressed_keys.push(*key);
-            newly_pressed.push(*key);
             thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
         }
 
         let mut first_error = None;
         for key in newly_pressed.iter().rev() {
-            match sink.send_key(*key, false) {
+            match self.send_key(sink, *key, false) {
                 Ok(()) => self.remove_pressed_key(*key),
                 Err(error) if first_error.is_none() => first_error = Some(error),
                 Err(_) => {}
@@ -287,39 +309,44 @@ impl InputController {
         for key in keys {
             self.set_key(sink, key, true)?;
             if let Err(error) = self.set_key(sink, key, false) {
-                // Best-effort retry: if this also fails, the generated key remains
-                // tracked so release_all() can retry during later cleanup.
-                let _ = self.set_key(sink, key, false);
+                // One bounded idempotent key-up retry may neutralize the remote
+                // state. The first failure still taints the session and remains
+                // the caller-visible operation failure.
+                let _cleanup_result = self.set_key(sink, key, false);
                 return Err(error);
             }
         }
         Ok(character_count)
     }
 
-    /// Returns whether a transient pointer transition left the remote state uncertain.
-    pub(crate) const fn pointer_state_uncertain(&self) -> bool {
-        matches!(self.pointer_state, PointerState::Uncertain)
+    /// Returns whether any native input failure left this session untrustworthy.
+    pub(crate) const fn input_state_uncertain(&self) -> bool {
+        matches!(self.input_state, InputState::Uncertain)
     }
 
     /// Best-effort releases every locally tracked input.
     ///
     /// Successfully released state is removed immediately. Failed state remains
     /// tracked until the caller explicitly abandons the irrecoverable session.
+    /// Cleanup success does not make a tainted session reusable; only dropping
+    /// the session and clearing state for a replacement does that.
     pub(crate) fn release_all<S: InputSink>(&mut self, sink: &mut S) -> InputReleaseReport {
         let mut report = InputReleaseReport::default();
-        if self.button_mask != 0 || self.pointer_state_uncertain() {
+        if self.button_mask != 0
+            || (self.input_state_uncertain() && self.last_coordinate.is_some())
+        {
             match self.last_coordinate {
-                Some(coordinate) if sink.send_pointer(coordinate, 0).is_ok() => {
+                Some(coordinate) if self.send_pointer(sink, coordinate, 0).is_ok() => {
                     self.button_mask = 0;
-                    self.pointer_state = PointerState::Known;
                 }
-                Some(_) | None => report.pointer_release_failed = true,
+                Some(_) => report.pointer_release_failed = true,
+                None => {}
             }
         }
 
         let keys = self.pressed_keys.clone();
         for key in keys.iter().rev() {
-            if sink.send_key(*key, false).is_ok() {
+            if self.send_key(sink, *key, false).is_ok() {
                 self.remove_pressed_key(*key);
             } else {
                 report.key_release_failures = report.key_release_failures.saturating_add(1);
@@ -334,7 +361,7 @@ impl InputController {
     /// Explicitly abandons unresolved input state after a session is dropped.
     pub(crate) fn abandon(&mut self) -> InputReleaseReport {
         let report = InputReleaseReport {
-            pointer_release_failed: self.button_mask != 0 || self.pointer_state_uncertain(),
+            pointer_release_failed: self.button_mask != 0,
             key_release_failures: self.pressed_keys.len(),
         };
         self.clear();
@@ -346,12 +373,42 @@ impl InputController {
         self.button_mask = 0;
         self.last_coordinate = None;
         self.pressed_keys.clear();
-        self.pointer_state = PointerState::Known;
+        self.input_state = InputState::Known;
+    }
+
+    fn send_pointer<S: InputSink>(
+        &mut self,
+        sink: &mut S,
+        coordinate: Coordinate,
+        button_mask: u8,
+    ) -> Result<(), NativeError> {
+        match sink.send_pointer(coordinate, button_mask) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.input_state = InputState::Uncertain;
+                Err(error)
+            }
+        }
+    }
+
+    fn send_key<S: InputSink>(
+        &mut self,
+        sink: &mut S,
+        key: KeyboardKey,
+        pressed: bool,
+    ) -> Result<(), NativeError> {
+        match sink.send_key(key, pressed) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.input_state = InputState::Uncertain;
+                Err(error)
+            }
+        }
     }
 
     fn release_new_keys<S: InputSink>(&mut self, sink: &mut S, keys: &[KeyboardKey]) {
         for key in keys.iter().rev() {
-            if sink.send_key(*key, false).is_ok() {
+            if self.send_key(sink, *key, false).is_ok() {
                 self.remove_pressed_key(*key);
             }
             thread::sleep(CHORD_EVENT_SETTLE_INTERVAL);
@@ -503,6 +560,18 @@ mod tests {
     }
 
     #[test]
+    fn failed_pointer_send_taints_session() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on(1);
+        assert!(
+            controller
+                .move_pointer(&mut sink, coordinate(1, 1), display())
+                .is_err()
+        );
+        assert!(controller.input_state_uncertain());
+    }
+
+    #[test]
     fn explicit_buttons_preserve_full_mask() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::default();
@@ -524,6 +593,20 @@ mod tests {
                 Event::Pointer(point, 4),
             ]
         );
+    }
+
+    #[test]
+    fn failed_button_press_is_tracked_and_taints_session() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on(1);
+        let point = coordinate(1, 1);
+        assert!(
+            controller
+                .set_button(&mut sink, point, display(), MouseButton::Left, true)
+                .is_err()
+        );
+        assert!(controller.input_state_uncertain());
+        assert_eq!(controller.button_mask, MouseButton::Left.rfb_mask());
     }
 
     #[test]
@@ -555,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_click_release_is_retried() {
+    fn failed_click_release_is_retried_but_session_remains_tainted() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on(3);
         let point = coordinate(1, 1);
@@ -564,6 +647,7 @@ mod tests {
                 .click(&mut sink, point, display(), MouseButton::Left)
                 .is_err()
         );
+        assert!(controller.input_state_uncertain());
         assert_eq!(
             sink.events,
             vec![
@@ -658,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_release_failure_retry_success_keeps_pointer_state_known() {
+    fn scroll_release_failure_retry_success_still_taints_session() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on(3);
         let point = coordinate(1, 1);
@@ -668,7 +752,7 @@ mod tests {
                 .scroll(&mut sink, point, display(), 0, 1)
                 .is_err()
         );
-        assert!(!controller.pointer_state_uncertain());
+        assert!(controller.input_state_uncertain());
         assert_eq!(
             sink.events,
             vec![
@@ -677,14 +761,10 @@ mod tests {
                 Event::Pointer(point, 0),
             ]
         );
-
-        controller
-            .move_pointer(&mut sink, coordinate(2, 1), display())
-            .expect("recovered release keeps the session usable");
     }
 
     #[test]
-    fn scroll_double_release_failure_marks_pointer_state_uncertain_and_cleanup_recovers() {
+    fn scroll_double_release_failure_cleanup_cannot_make_session_reusable() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on_calls(&[3, 4]);
         let point = coordinate(1, 1);
@@ -694,7 +774,7 @@ mod tests {
                 .scroll(&mut sink, point, display(), 0, 1)
                 .is_err()
         );
-        assert!(controller.pointer_state_uncertain());
+        assert!(controller.input_state_uncertain());
         assert_eq!(
             sink.events,
             vec![
@@ -706,8 +786,10 @@ mod tests {
         sink.fail_on_calls.clear();
         let report = controller.release_all(&mut sink);
         assert!(report.is_complete());
-        assert!(!controller.pointer_state_uncertain());
+        assert!(controller.input_state_uncertain());
         assert_eq!(sink.events.last(), Some(&Event::Pointer(point, 0)));
+        controller.abandon();
+        assert!(!controller.input_state_uncertain());
     }
 
     #[test]
@@ -751,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_chord_failure_releases_prior_keys() {
+    fn partial_chord_failure_releases_prior_keys_but_taints_session() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on(2);
         assert!(
@@ -759,6 +841,7 @@ mod tests {
                 .chord(&mut sink, &[KeyboardKey::CtrlLeft, KeyboardKey::AltLeft],)
                 .is_err()
         );
+        assert!(controller.input_state_uncertain());
         assert_eq!(
             sink.events,
             vec![
@@ -766,6 +849,19 @@ mod tests {
                 Event::Key(KeyboardKey::CtrlLeft, false),
             ]
         );
+    }
+
+    #[test]
+    fn failed_key_down_is_tracked_for_cleanup_and_taints_session() {
+        let mut controller = InputController::default();
+        let mut sink = RecordingSink::fail_on(1);
+        let key = KeyboardKey::CtrlLeft;
+        assert!(controller.set_key(&mut sink, key, true).is_err());
+        assert!(controller.input_state_uncertain());
+        assert_eq!(controller.pressed_keys, vec![key]);
+        sink.fail_on_call = None;
+        assert!(controller.release_all(&mut sink).is_complete());
+        assert!(controller.input_state_uncertain());
     }
 
     #[test]
@@ -861,10 +957,11 @@ mod tests {
     }
 
     #[test]
-    fn text_release_failure_is_retried_and_reported() {
+    fn text_release_failure_is_retried_reported_and_taints_session() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on(2);
         assert!(controller.type_text(&mut sink, "A").is_err());
+        assert!(controller.input_state_uncertain());
         assert_eq!(
             sink.events,
             vec![
@@ -875,12 +972,13 @@ mod tests {
     }
 
     #[test]
-    fn text_release_double_failure_remains_tracked_for_cleanup() {
+    fn text_release_double_failure_remains_tracked_until_session_abandon() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on_calls(&[2, 3]);
         let key = KeyboardKey::Printable('A');
 
         assert!(controller.type_text(&mut sink, "A").is_err());
+        assert!(controller.input_state_uncertain());
         assert_eq!(sink.events, vec![Event::Key(key, true)]);
         assert_eq!(controller.pressed_keys, vec![key]);
 
@@ -891,6 +989,9 @@ mod tests {
             vec![Event::Key(key, true), Event::Key(key, false)]
         );
         assert!(controller.pressed_keys.is_empty());
+        assert!(controller.input_state_uncertain());
+        controller.abandon();
+        assert!(!controller.input_state_uncertain());
     }
 
     #[test]
@@ -909,6 +1010,7 @@ mod tests {
         assert_eq!(report.key_release_failures(), 0);
         assert_eq!(controller.button_mask, MouseButton::Left.rfb_mask());
         assert_eq!(controller.last_coordinate, Some(point));
+        assert!(controller.input_state_uncertain());
         let abandoned = controller.abandon();
         assert!(abandoned.pointer_release_failed());
         assert_eq!(controller.button_mask, 0);
@@ -931,6 +1033,7 @@ mod tests {
         assert!(!report.pointer_release_failed());
         assert_eq!(report.key_release_failures(), 1);
         assert_eq!(controller.pressed_keys, vec![KeyboardKey::AltLeft]);
+        assert!(controller.input_state_uncertain());
         let abandoned = controller.abandon();
         assert_eq!(abandoned.key_release_failures(), 1);
         assert!(controller.pressed_keys.is_empty());
@@ -960,6 +1063,7 @@ mod tests {
                 Event::Key(KeyboardKey::CtrlLeft, false),
             ]
         );
+        assert!(!controller.input_state_uncertain());
         sink.events.clear();
         assert!(controller.release_all(&mut sink).is_complete());
         assert!(sink.events.is_empty());
