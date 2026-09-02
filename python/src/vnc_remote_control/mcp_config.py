@@ -8,7 +8,7 @@ import os
 import stat
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from .client import VncRemoteControlClient
 
@@ -118,7 +118,7 @@ class McpConfig:
         transport_value = _value_or(source, "VRC_MCP_TRANSPORT", DEFAULT_TRANSPORT)
         if transport_value not in {"stdio", "streamable-http"}:
             raise McpConfigError("invalid VRC_MCP_TRANSPORT")
-        transport: McpTransport = transport_value  # type: ignore[assignment]
+        transport = cast(McpTransport, transport_value)
 
         http_host = _value_or(source, "VRC_MCP_HTTP_HOST", DEFAULT_HTTP_HOST)
         _require_loopback_host(http_host)
