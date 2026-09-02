@@ -122,7 +122,8 @@ def create_mcp_server(
             "VNC Remote Control Server",
             lifespan=_runtime_lifespan(runtime),
         )
-        if not callable(getattr(server, "tool", None)):
+        tool_registrar = getattr(server, "tool", None)
+        if not callable(tool_registrar):
             raise McpDependencyError(
                 f"installed MCP SDK does not provide the expected tool registration API for "
                 f"{MCP_EXTRA_REQUIREMENT}"
@@ -141,7 +142,7 @@ def create_mcp_server(
             ) from exc
 
         register_read_only_tools(
-            server,
+            tool_registrar,
             runtime,
             annotations_factory=sdk.annotations_factory,
             positive_command_id_metadata=positive_command_id_metadata,
