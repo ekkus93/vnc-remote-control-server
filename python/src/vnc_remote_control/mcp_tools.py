@@ -170,7 +170,7 @@ def _validate_decoded_png_bytes(
     scanline_bytes: int,
     expected_decoded_bytes: int,
 ) -> int:
-    """Validate decoded length and each PNG scanline filter byte without retaining output."""
+    """Validate decoded length and scanline filters without retaining output."""
     decoded_after = decoded_before + len(decoded)
     if decoded_after > expected_decoded_bytes:
         raise _png_error()
@@ -248,7 +248,7 @@ def _finish_idat(
 
 
 def _validate_png(data: bytes) -> None:
-    """Validate the bounded PNG structure and compressed scanlines from the controller."""
+    """Validate the exact bounded PNG stream emitted by the controller."""
     if len(data) > _MAX_MCP_SCREENSHOT_PNG_BYTES:
         raise ProtocolError("screenshot response exceeded the MCP PNG byte limit")
     if len(data) < 33 or not data.startswith(_PNG_SIGNATURE):
@@ -259,14 +259,9 @@ def _validate_png(data: bytes) -> None:
     decompressor = zlib.decompressobj()
     decoded_count = 0
     saw_idat = False
-    idat_closed = False
     while offset < len(data):
         chunk_type, chunk_data, next_offset = _parse_png_chunk(data, offset)
-        if chunk_type == _PNG_IHDR:
-            raise _png_error()
         if chunk_type == _PNG_IDAT:
-            if idat_closed:
-                raise _png_error()
             saw_idat = True
             decoded_count = _consume_idat(
                 decompressor,
@@ -275,19 +270,17 @@ def _validate_png(data: bytes) -> None:
                 scanline_bytes=scanline_bytes,
                 expected_decoded_bytes=expected_decoded_bytes,
             )
-        elif saw_idat and chunk_type != _PNG_IEND:
-            idat_closed = True
-        if chunk_type == _PNG_IEND:
-            if chunk_data or not saw_idat or next_offset != len(data):
-                raise _png_error()
-            _finish_idat(
-                decompressor,
-                decoded_before=decoded_count,
-                scanline_bytes=scanline_bytes,
-                expected_decoded_bytes=expected_decoded_bytes,
-            )
-            return
-        offset = next_offset
+            offset = next_offset
+            continue
+        if chunk_type != _PNG_IEND or chunk_data or not saw_idat or next_offset != len(data):
+            raise _png_error()
+        _finish_idat(
+            decompressor,
+            decoded_before=decoded_count,
+            scanline_bytes=scanline_bytes,
+            expected_decoded_bytes=expected_decoded_bytes,
+        )
+        return
     raise _png_error()
 
 
