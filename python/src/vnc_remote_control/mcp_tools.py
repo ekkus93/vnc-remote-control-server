@@ -31,24 +31,29 @@ class McpReadRuntime:
 
 
 async def _get_status(runtime: McpReadRuntime) -> StatusResponse:
+    """Fetch status through the shared bounded executor."""
     return await runtime.executor.call(runtime.client.get_status)
 
 
 async def _get_display(runtime: McpReadRuntime) -> DisplayResponse:
+    """Fetch display metadata through the shared bounded executor."""
     return await runtime.executor.call(runtime.client.get_display)
 
 
 async def _get_clipboard(runtime: McpReadRuntime) -> ClipboardResponse:
+    """Fetch clipboard state through the shared bounded executor."""
     return await runtime.executor.call(runtime.client.get_clipboard)
 
 
 async def _get_command_status(
     runtime: McpReadRuntime, command_id: int
 ) -> CommandStatusResponse:
+    """Fetch one command status through the shared bounded executor."""
     return await runtime.executor.call(runtime.client.get_command_status, command_id)
 
 
 async def _get_metrics(runtime: McpReadRuntime) -> str:
+    """Fetch bounded metrics text through the shared bounded executor."""
     return await runtime.executor.call(runtime.client.get_metrics)
 
 
@@ -85,6 +90,7 @@ def register_read_only_tools(
         structured_output=True,
     )
     async def vnc_get_status() -> StatusResponse:
+        """Return controller status without mutating the desktop."""
         return await _get_status(runtime)
 
     @server.tool(
@@ -94,6 +100,7 @@ def register_read_only_tools(
         structured_output=True,
     )
     async def vnc_get_display() -> DisplayResponse:
+        """Return current display metadata without capturing image bytes."""
         return await _get_display(runtime)
 
     @server.tool(
@@ -103,6 +110,7 @@ def register_read_only_tools(
         structured_output=True,
     )
     async def vnc_get_clipboard() -> ClipboardResponse:
+        """Return clipboard state without logging its text payload."""
         return await _get_clipboard(runtime)
 
     async def vnc_get_command_status(command_id: int) -> CommandStatusResponse:
@@ -129,4 +137,5 @@ def register_read_only_tools(
         structured_output=True,
     )
     async def vnc_get_metrics() -> str:
+        """Return bounded controller metrics text without modification."""
         return await _get_metrics(runtime)
