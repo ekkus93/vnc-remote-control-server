@@ -257,8 +257,6 @@ def _read_secret_file(path: Path) -> str:
             opened_stat = os.fstat(handle.fileno())
             _validate_secret_stat(path, opened_stat)
             raw = handle.read(MAX_SECRET_BYTES + 1)
-    except McpConfigError:
-        raise
     except OSError as exc:
         raise _secret_error(path, "cannot read contents") from exc
 
