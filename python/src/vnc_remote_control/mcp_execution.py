@@ -36,10 +36,10 @@ class BoundedControllerExecutor:
     """Run synchronous controller calls off-loop with fail-fast bounded admission.
 
     The executor owns exactly ``max_concurrent_calls`` worker threads and the
-    same number of admission permits. A permit is acquired before submission,
-    so no controller call can accumulate in ``ThreadPoolExecutor``'s otherwise
+    same number of admission slots. A slot is reserved before submission, so no
+    controller call can accumulate in ``ThreadPoolExecutor``'s otherwise
     unbounded internal queue. The worker wrapper, rather than the awaiting
-    coroutine, releases the permit; therefore caller cancellation cannot make
+    coroutine, releases the slot; therefore caller cancellation cannot make
     capacity appear free while the underlying synchronous call is still active.
     """
 
@@ -47,7 +47,7 @@ class BoundedControllerExecutor:
         if max_concurrent_calls < 1:
             raise ValueError("max_concurrent_calls must be at least one")
         self._max_concurrent_calls = max_concurrent_calls
-        self._permits = threading.BoundedSemaphore(max_concurrent_calls)
+        self._available_slots = max_concurrent_calls
         self._state_lock = threading.Lock()
         self._closed = False
         self._shutdown_complete = threading.Event()
@@ -67,18 +67,25 @@ class BoundedControllerExecutor:
         with self._state_lock:
             return self._closed
 
-    def _acquire_permit(self) -> None:
+    def _acquire_slot(self) -> None:
         with self._state_lock:
             if self._closed:
                 raise McpExecutorClosedError("controller executor is closed")
-            if not self._permits.acquire(blocking=False):
+            if self._available_slots == 0:
                 raise McpCallCapacityError("controller call capacity is exhausted")
+            self._available_slots -= 1
 
-    def _run_with_permit(self, operation: Callable[[], R]) -> R:
+    def _release_slot(self) -> None:
+        with self._state_lock:
+            if self._available_slots >= self._max_concurrent_calls:
+                raise RuntimeError("controller call capacity accounting overflow")
+            self._available_slots += 1
+
+    def _run_with_slot(self, operation: Callable[[], R]) -> R:
         try:
             return operation()
         finally:
-            self._permits.release()
+            self._release_slot()
 
     async def call(
         self,
@@ -88,19 +95,19 @@ class BoundedControllerExecutor:
         **kwargs: P.kwargs,
     ) -> R:
         """Execute one synchronous controller call exactly once off the event loop."""
-        self._acquire_permit()
+        self._acquire_slot()
         job = partial(operation, *args, **kwargs)
         try:
-            concurrent_future = self._executor.submit(self._run_with_permit, job)
+            concurrent_future = self._executor.submit(self._run_with_slot, job)
         except RuntimeError as exc:
-            self._permits.release()
+            self._release_slot()
             raise McpExecutorClosedError(
                 "controller executor closed before call submission"
             ) from exc
 
         # Shield prevents coroutine cancellation from cancelling a queued
         # concurrent Future before its worker wrapper runs and releases the
-        # already-reserved permit. The caller still receives CancelledError.
+        # already-reserved slot. The caller still receives CancelledError.
         return await asyncio.shield(asyncio.wrap_future(concurrent_future))
 
     def close(self) -> None:
