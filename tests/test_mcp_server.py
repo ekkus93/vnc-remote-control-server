@@ -61,12 +61,9 @@ def _components() -> mcp_server.McpSdkComponents:
     )
 
 
-def _executor_mock() -> BoundedControllerExecutor:
+def _executor_mock() -> Any:
     """Return an autospecced executor without allocating worker threads."""
-    return cast(
-        BoundedControllerExecutor,
-        mock.create_autospec(BoundedControllerExecutor, instance=True),
-    )
+    return mock.create_autospec(BoundedControllerExecutor, instance=True)
 
 
 class McpServerScaffoldTests(unittest.TestCase):
@@ -113,7 +110,7 @@ class McpServerScaffoldTests(unittest.TestCase):
         self.assertEqual(server.name, "VNC Remote Control Server")
         server.run.assert_not_called()
         self.assertIsNotNone(server.lifespan)
-        executor.close.assert_not_called()  # type: ignore[attr-defined]
+        executor.close.assert_not_called()
 
     def test_construction_failure_closes_executor_before_lifespan_ownership(self) -> None:
         """Tool-registration failure cannot leak adapter-owned worker capacity."""
@@ -135,7 +132,7 @@ class McpServerScaffoldTests(unittest.TestCase):
                 client=mock.create_autospec(VncRemoteControlClient, instance=True),
                 executor=executor,
             )
-        executor.close.assert_called_once_with()  # type: ignore[attr-defined]
+        executor.close.assert_called_once_with()
 
     def test_sdk_loader_uses_exact_v2_modules_and_symbols(self) -> None:
         """The reviewed SDK paths are explicit rather than compatibility-probed."""
@@ -204,7 +201,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             strict=True,
             description="Positive process-local controller command identifier.",
         )
-        executor.close.assert_not_called()  # type: ignore[attr-defined]
+        executor.close.assert_not_called()
 
     def test_main_reports_missing_dependency_on_stderr_and_exits_nonzero(self) -> None:
         """The executable never converts a missing SDK into apparent success."""
@@ -285,9 +282,9 @@ class McpServerLifespanTests(unittest.IsolatedAsyncioTestCase):
             executor=executor,
         )
         async with server.lifespan(server):
-            executor.aclose.assert_not_awaited()  # type: ignore[attr-defined]
-        executor.aclose.assert_awaited_once_with()  # type: ignore[attr-defined]
-        executor.close.assert_not_called()  # type: ignore[attr-defined]
+            executor.aclose.assert_not_awaited()
+        executor.aclose.assert_awaited_once_with()
+        executor.close.assert_not_called()
 
 
 if __name__ == "__main__":
