@@ -25,6 +25,8 @@ from vnc_remote_control.models import CommandResponse, KeyAction, MouseButton
 
 P = ParamSpec("P")
 R = TypeVar("R")
+ToolInvocation = tuple[str, tuple[Any, ...], dict[str, Any]]
+InvalidToolInvocation = tuple[str, tuple[Any, ...]]
 
 
 class RecordingExecutor:
@@ -324,7 +326,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_every_handler_maps_to_exactly_one_typed_client_call(self) -> None:
         """All ten mutation handlers forward exact fields once through the executor."""
-        invocations = (
+        invocations: tuple[ToolInvocation, ...] = (
             ("vnc_move_pointer", (10, 11), {}),
             ("vnc_set_pointer_button", (12, 13, "left", True), {}),
             ("vnc_click_pointer", (14, 15, "middle"), {}),
@@ -363,7 +365,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_inputs_fail_before_executor_or_controller_call(self) -> None:
         """Direct handler calls cannot bypass mutation preflight or reach the client."""
-        invalid_invocations = (
+        invalid_invocations: tuple[InvalidToolInvocation, ...] = (
             ("vnc_move_pointer", (-1, 0)),
             ("vnc_move_pointer", (4_294_967_296, 0)),
             ("vnc_set_pointer_button", (1, 2, "left", 1)),
