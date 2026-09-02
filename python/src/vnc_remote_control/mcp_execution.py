@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from functools import partial
 from typing import ParamSpec, TypeVar
 
@@ -20,6 +20,16 @@ class McpCallCapacityError(RuntimeError):
 
 class McpExecutorClosedError(RuntimeError):
     """Raised when a controller call is submitted after executor shutdown starts."""
+
+
+@contextmanager
+def _managed_thread_pool(max_workers: int) -> Iterator[ThreadPoolExecutor]:
+    """Yield the adapter-owned pool and guarantee blocking shutdown on close."""
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="vrc-mcp-controller",
+    ) as executor:
+        yield executor
 
 
 class BoundedControllerExecutor:
@@ -43,10 +53,7 @@ class BoundedControllerExecutor:
         self._shutdown_complete = threading.Event()
         self._resources = ExitStack()
         self._executor = self._resources.enter_context(
-            ThreadPoolExecutor(
-                max_workers=max_concurrent_calls,
-                thread_name_prefix="vrc-mcp-controller",
-            )
+            _managed_thread_pool(max_concurrent_calls)
         )
 
     @property
