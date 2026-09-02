@@ -7,6 +7,7 @@ import math
 import os
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
@@ -33,43 +34,19 @@ class McpConfigError(ValueError):
     """Raised when MCP configuration fails validation."""
 
 
+@dataclass(frozen=True, slots=True, repr=False)
 class McpConfig:
     """Validated MCP process configuration with a redacted controller token."""
 
-    __slots__ = (
-        "_controller_token",
-        "allow_mutations",
-        "controller_timeout_seconds",
-        "controller_token_file",
-        "controller_url",
-        "http_host",
-        "http_port",
-        "max_concurrent_calls",
-        "transport",
-    )
-
-    def __init__(
-        self,
-        *,
-        controller_url: str,
-        controller_token_file: Path,
-        controller_token: str,
-        controller_timeout_seconds: float,
-        allow_mutations: bool,
-        max_concurrent_calls: int,
-        transport: McpTransport,
-        http_host: str,
-        http_port: int,
-    ) -> None:
-        self.controller_url = controller_url
-        self.controller_token_file = controller_token_file
-        self._controller_token = controller_token
-        self.controller_timeout_seconds = controller_timeout_seconds
-        self.allow_mutations = allow_mutations
-        self.max_concurrent_calls = max_concurrent_calls
-        self.transport = transport
-        self.http_host = http_host
-        self.http_port = http_port
+    controller_url: str
+    controller_token_file: Path
+    _controller_token: str = field(repr=False)
+    controller_timeout_seconds: float
+    allow_mutations: bool
+    max_concurrent_calls: int
+    transport: McpTransport
+    http_host: str
+    http_port: int
 
     @classmethod
     def load(cls, environment: Mapping[str, str] | None = None) -> McpConfig:
@@ -133,7 +110,7 @@ class McpConfig:
         return cls(
             controller_url=controller_url,
             controller_token_file=token_path,
-            controller_token=token,
+            _controller_token=token,
             controller_timeout_seconds=timeout,
             allow_mutations=allow_mutations,
             max_concurrent_calls=max_concurrent_calls,
