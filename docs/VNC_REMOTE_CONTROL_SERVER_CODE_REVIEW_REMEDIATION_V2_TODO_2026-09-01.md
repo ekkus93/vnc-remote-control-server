@@ -93,9 +93,9 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Reject mutable third-party tags/branches/aliases.
 - [x] Available local release-policy contract suite passed for the new rule.
 - [x] Document immutable third-party Action policy in release documentation/evidence.
-- [ ] Re-run actionlint on the exact final candidate.
-- [ ] Re-run complete workflow contract tests on the exact final candidate.
-- [ ] Prove immutable pins in exact-final-candidate Release Gates.
+- [x] Re-run actionlint on the exact final candidate.
+- [x] Re-run complete workflow contract tests on the exact final candidate.
+- [x] Prove immutable pins in exact-final-candidate Release Gates.
 
 ## V2-R3 — Command outcome identity truthfulness
 
@@ -120,7 +120,7 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Same next ID reserves normally once terminal capacity becomes available.
 - [x] Existing terminal eviction -> `Expired` regression remains present.
 - [x] Explicitly adjudicate separate worker-client failed-reservation integration as unnecessary: the deterministic tiny-capacity registry test exercises the exact allocation defect without adding a test-only production capacity seam.
-- [ ] Run exact-final-candidate Rust/workspace/HTTP/Python suites.
+- [x] Run exact-final-candidate Rust/workspace/HTTP/Python suites.
 
 ## V2-R4 — Native framebuffer revision exhaustion
 
@@ -148,7 +148,7 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Rust adapter mapping is covered by typed status mapping/source tests.
 - [x] Native source-contract test requires checked helper/status path.
 - [x] Add dedicated worker-level framebuffer-exhaustion recovery regression proving stale authority is lost before replacement factory completion.
-- [ ] Run exact-final-candidate native/Rust tests.
+- [x] Run exact-final-candidate native/Rust tests.
 
 ## V2-R5 — Explicit HTTP connection concurrency bound
 
@@ -230,75 +230,77 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 
 ### Rust
 
-- [ ] `cargo fmt --all --check` on exact final candidate.
-- [ ] `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` on exact final candidate.
-- [ ] `cargo test --locked --workspace --all-features` on exact final candidate.
-- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps` on exact final candidate.
+- [x] `cargo fmt --all --check` on exact final candidate.
+- [x] `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` on exact final candidate.
+- [x] `cargo test --locked --workspace --all-features` on exact final candidate.
+- [x] `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps` on exact final candidate.
 
 ### Python
 
-- [ ] compileall first-party Python on exact final candidate.
-- [ ] Ruff on exact final candidate.
-- [ ] Pylint on exact final candidate.
-- [ ] mypy on exact final candidate.
-- [ ] full `unittest` suite on exact final candidate.
+- [x] compileall first-party Python on exact final candidate.
+- [x] Ruff on exact final candidate.
+- [x] Pylint on exact final candidate.
+- [x] mypy on exact final candidate.
+- [x] full `unittest` suite on exact final candidate.
 - [x] Available local Python/workflow/documentation contract suite passed before first candidate publication.
 
 ### Shell/workflows/security
 
-- [ ] repository `bash -n` set on exact final candidate.
-- [ ] ShellCheck on exact final candidate.
-- [ ] actionlint on exact final candidate.
-- [ ] cargo-deny advisories/bans/licenses/sources on exact final candidate.
-- [ ] full-history Gitleaks on exact final candidate.
-- [ ] auditable release-binary verification on exact final candidate.
-- [ ] Dockerfile BuildKit checks on exact final candidate.
-- [ ] Compose config validation on exact final candidate.
-- [ ] ASan on exact final candidate.
-- [ ] TSan controller concurrency tests on exact final candidate.
-- [ ] TSan core shared-state tests on exact final candidate.
-- [ ] Miri on exact final candidate.
-- [ ] Trivy vulnerability inventories on exact final candidate.
-- [ ] CycloneDX SBOM generation on exact final candidate.
-- [ ] exact CRITICAL VEX enforcement on exact final candidate.
+- [x] repository `bash -n` set on exact final candidate.
+- [x] ShellCheck on exact final candidate.
+- [x] actionlint on exact final candidate.
+- [x] cargo-deny advisories/bans/licenses/sources on exact final candidate.
+- [x] full-history Gitleaks on exact final candidate.
+- [x] auditable release-binary verification on exact final candidate.
+- [x] Dockerfile BuildKit checks on exact final candidate.
+- [x] Compose config validation on exact final candidate.
+- [x] ASan on exact final candidate.
+- [x] TSan controller concurrency tests on exact final candidate.
+- [x] TSan core shared-state tests on exact final candidate.
+- [x] Miri on exact final candidate.
+- [x] Trivy vulnerability inventories on exact final candidate.
+- [x] CycloneDX SBOM generation on exact final candidate.
+- [x] exact CRITICAL VEX enforcement on exact final candidate.
 
 ### Integration/E2E
 
-- [ ] desktop image smoke on exact final candidate.
-- [ ] native adapter smoke on exact final candidate.
-- [ ] WorkerHandle input E2E on exact final candidate.
-- [ ] WorkerHandle text/clipboard E2E on exact final candidate.
-- [ ] authenticated HTTP E2E on exact final candidate.
-- [ ] Compose/persistence smoke on exact final candidate.
-- [ ] R13 integration/reconnect/resource validation on exact final candidate.
+- [x] desktop image smoke on exact final candidate.
+- [x] native adapter smoke on exact final candidate.
+- [x] WorkerHandle input E2E on exact final candidate.
+- [x] WorkerHandle text/clipboard E2E on exact final candidate.
+- [x] authenticated HTTP E2E on exact final candidate.
+- [x] Compose/persistence smoke on exact final candidate.
+- [x] R13 integration/reconnect/resource validation on exact final candidate.
 - [x] Explicitly adjudicate additional real-TigerVNC input-fault injection as unnecessary; deterministic worker-generation tests exercise quarantine, while existing TigerVNC E2E validates the normal native path.
 - [x] Explicitly adjudicate additional container-level HTTP-capacity probe as unnecessary; the runtime tests exercise the production admission code with real TCP sockets.
 
 ## V2-R9 — Exact candidate and merged-master validation
 
+Closeout evidence: PR #28 accepted implementation candidate `4f0904ab1976660eaf23fb4fd2fb1052855503fb` passed CI `33593375859` and Release Gates `33593375791`. After merge, `master` `b11c7c0b6cf7b1386fe740d609b8b5c2539f57a4` passed Release Gates `33597230305` but exposed one race-sensitive lifecycle test in CI `33597230151`. PR #29 changed only that test contract; exact head `fbb9f7fe214e6c95e6eb39ba2b3bacf1212936af` passed CI `33626101316` and Release Gates `33626101208`. The resulting exact `master` `4956a624be10ddb4b23aa23bcea23560b9c13a24` passed CI `33666006266` and Release Gates `33666005936`.
+
 ### Candidate
 
 - [x] Finish in-scope implementation and living-document changes for the six V2 findings.
 - [x] Reconcile pre-CI TODO boxes against actual branch source/tests/evidence.
-- [ ] Record exact final frozen candidate SHA externally after this reconciliation commit.
+- [x] Record exact final frozen candidate SHA externally after this reconciliation commit.
 - [x] Open focused PR #28 against `master`.
-- [ ] Require regular CI on exact final candidate SHA.
-- [ ] Record final candidate CI run ID and conclusion.
-- [ ] Require Release Gates on exact final candidate SHA.
-- [ ] Record final candidate Release Gates run ID and conclusion.
+- [x] Require regular CI on exact final candidate SHA.
+- [x] Record final candidate CI run ID and conclusion.
+- [x] Require Release Gates on exact final candidate SHA.
+- [x] Record final candidate Release Gates run ID and conclusion.
 - [x] Inspect every failed candidate job/step encountered rather than blindly rerun.
 - [x] Fix each encountered root cause without weakening gates.
-- [ ] Confirm both workflows are green on the same exact final candidate generation.
+- [x] Confirm both workflows are green on the same exact final candidate generation.
 
 ### Merge and exact master
 
-- [ ] Merge only after exact-final-candidate CI and Release Gates are green and remaining acceptance-test debt is resolved/explicitly adjudicated.
-- [ ] Record exact merged `master` SHA.
-- [ ] Require fresh regular CI on exact merged `master` SHA.
-- [ ] Record final `master` CI run ID/conclusion.
-- [ ] Require fresh Release Gates on exact merged `master` SHA.
-- [ ] Record final `master` Release Gates run ID/conclusion.
-- [ ] Re-review VEX status/expiry at final validation time.
+- [x] Merge only after exact-final-candidate CI and Release Gates are green and remaining acceptance-test debt is resolved/explicitly adjudicated.
+- [x] Record exact merged `master` SHA.
+- [x] Require fresh regular CI on exact merged `master` SHA.
+- [x] Record final `master` CI run ID/conclusion.
+- [x] Require fresh Release Gates on exact merged `master` SHA.
+- [x] Record final `master` Release Gates run ID/conclusion.
+- [x] Re-review VEX status/expiry at final validation time.
 
 ## V2-R10 — Final evidence and sign-off
 
@@ -318,13 +320,21 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] MCP remains deferred until V2 sign-off.
 - [x] Re-review every previously open named/conditional regression requirement and either add the test or record an explicit reviewed equivalence/non-applicability decision.
 
-### Pending external/final evidence
+### Final external evidence
 
-- [ ] Record exact final candidate SHA and PR number.
-- [ ] Record final candidate CI and Release Gates IDs/conclusions.
-- [ ] Record exact merged implementation/master SHA.
-- [ ] Record final master CI and Release Gates IDs/conclusions.
-- [ ] Update final changed-file inventory after any final-candidate CI fixes, if needed.
-- [ ] Re-review every TODO checkbox against final source/tests/workflows/evidence.
-- [ ] Confirm no checkbox is closed solely because a commit message says so.
-- [ ] Declare V2 complete only after all applicable R0-R10 requirements are genuinely satisfied.
+- [x] Record exact final candidate SHA and PR number.
+- [x] Record final candidate CI and Release Gates IDs/conclusions.
+- [x] Record exact merged implementation/master SHA.
+- [x] Record final master CI and Release Gates IDs/conclusions.
+- [x] Update final changed-file inventory after any final-candidate CI fixes, if needed.
+- [x] Re-review every TODO checkbox against final source/tests/workflows/evidence.
+- [x] Confirm no checkbox is closed solely because a commit message says so.
+- [x] Declare V2 complete only after all applicable R0-R10 requirements are genuinely satisfied.
+
+## V2 completion declaration
+
+V2 remediation is complete. Every applicable V2-R0 through V2-R10 checkbox has been reconciled against source, tests, workflow configuration, PR history, and exact-generation CI evidence. No item is closed solely from a commit message or historical green run. No release/security gate was weakened for sign-off. The authoritative final validated `master` implementation generation is `4956a624be10ddb4b23aa23bcea23560b9c13a24`, with CI `33666006266` and Release Gates `33666005936` both successful.
+
+The CRITICAL VEX metadata was re-reviewed at final validation time on 2026-09-02: repository metadata remains `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`, and exact CRITICAL VEX enforcement passed the final Release Gates run.
+
+MCP is still not implemented, but the V2 remediation gate that intentionally deferred MCP is now satisfied; MCP may proceed as a separate next phase.
