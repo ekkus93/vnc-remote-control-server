@@ -61,6 +61,14 @@ def _components() -> mcp_server.McpSdkComponents:
     )
 
 
+def _executor_mock() -> BoundedControllerExecutor:
+    """Return an autospecced executor without allocating worker threads."""
+    return cast(
+        BoundedControllerExecutor,
+        mock.create_autospec(BoundedControllerExecutor, instance=True),
+    )
+
+
 class McpServerScaffoldTests(unittest.TestCase):
     """Verify MCP remains optional and server construction is deterministic."""
 
@@ -95,18 +103,39 @@ class McpServerScaffoldTests(unittest.TestCase):
     ) -> None:
         """Construction registers tools but never starts a transport implicitly."""
         config = _config()
-        client = config.build_client()
-        executor = BoundedControllerExecutor(2)
-        self.addCleanup(executor.close)
+        executor = _executor_mock()
         server = mcp_server.create_mcp_server(
             config=config,
             components=_components(),
-            client=client,
+            client=config.build_client(),
             executor=executor,
         )
         self.assertEqual(server.name, "VNC Remote Control Server")
         server.run.assert_not_called()
         self.assertIsNotNone(server.lifespan)
+        executor.close.assert_not_called()  # type: ignore[attr-defined]
+
+    def test_construction_failure_closes_executor_before_lifespan_ownership(self) -> None:
+        """Tool-registration failure cannot leak adapter-owned worker capacity."""
+        executor = _executor_mock()
+
+        def fail_annotations(**_kwargs: Any) -> None:
+            """Represent an SDK annotation-construction failure."""
+            raise RuntimeError("annotation setup failed")
+
+        components = mcp_server.McpSdkComponents(
+            server_factory=_fake_server_factory,
+            annotations_factory=fail_annotations,
+            field_factory=_fake_field_factory,
+        )
+        with self.assertRaisesRegex(RuntimeError, "annotation setup failed"):
+            mcp_server.create_mcp_server(
+                config=_config(),
+                components=components,
+                client=mock.create_autospec(VncRemoteControlClient, instance=True),
+                executor=executor,
+            )
+        executor.close.assert_called_once_with()  # type: ignore[attr-defined]
 
     def test_sdk_loader_uses_exact_v2_modules_and_symbols(self) -> None:
         """The reviewed SDK paths are explicit rather than compatibility-probed."""
@@ -163,8 +192,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             annotations_factory=_fake_annotations_factory,
             field_factory=field_factory,
         )
-        executor = BoundedControllerExecutor(1)
-        self.addCleanup(executor.close)
+        executor = _executor_mock()
         mcp_server.create_mcp_server(
             config=_config(),
             components=components,
@@ -176,6 +204,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             strict=True,
             description="Positive process-local controller command identifier.",
         )
+        executor.close.assert_not_called()  # type: ignore[attr-defined]
 
     def test_main_reports_missing_dependency_on_stderr_and_exits_nonzero(self) -> None:
         """The executable never converts a missing SDK into apparent success."""
@@ -241,6 +270,24 @@ class McpServerScaffoldTests(unittest.TestCase):
             mcp_server.main()
         create.assert_called_once_with(config=config)
         server.run.assert_called_once_with(transport="stdio")
+
+
+class McpServerLifespanTests(unittest.IsolatedAsyncioTestCase):
+    """Verify successful construction transfers executor cleanup to the lifespan."""
+
+    async def test_lifespan_closes_executor_once(self) -> None:
+        """Normal lifespan exit awaits adapter-owned executor shutdown."""
+        executor = _executor_mock()
+        server = mcp_server.create_mcp_server(
+            config=_config(),
+            components=_components(),
+            client=mock.create_autospec(VncRemoteControlClient, instance=True),
+            executor=executor,
+        )
+        async with server.lifespan(server):
+            executor.aclose.assert_not_awaited()  # type: ignore[attr-defined]
+        executor.aclose.assert_awaited_once_with()  # type: ignore[attr-defined]
+        executor.close.assert_not_called()  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":
