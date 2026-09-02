@@ -5,33 +5,25 @@ from __future__ import annotations
 import builtins
 import importlib.util
 import io
-import sys
 import tomllib
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
+
+from vnc_remote_control import mcp_server
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
 SRC_ROOT = PYTHON_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-from vnc_remote_control import mcp_server  # noqa: E402
 
 
-class _FakeMcpServer:
-    """Minimal fake matching the runtime surface consumed by the entry point."""
-
-    def __init__(self, name: str) -> None:
-        self.name = name
-        self.run_calls: list[tuple[str, dict[str, Any]]] = []
-
-    def run(self, transport: str = "stdio", **kwargs: Any) -> None:
-        """Record one transport invocation."""
-        self.run_calls.append((transport, kwargs))
+def _fake_server_factory(name: str) -> mock.Mock:
+    server = mock.Mock()
+    server.name = name
+    return server
 
 
 class McpServerScaffoldTests(unittest.TestCase):
@@ -68,19 +60,26 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_create_mcp_server_uses_injected_factory_without_starting_it(self) -> None:
         """Construction is injectable and never starts a transport implicitly."""
-        server = mcp_server.create_mcp_server(factory=_FakeMcpServer)
-        self.assertIsInstance(server, _FakeMcpServer)
-        assert isinstance(server, _FakeMcpServer)
+        server = mcp_server.create_mcp_server(factory=_fake_server_factory)
         self.assertEqual(server.name, "VNC Remote Control Server")
-        self.assertEqual(server.run_calls, [])
+        server.run.assert_not_called()
 
     def test_missing_optional_dependency_fails_explicitly(self) -> None:
         """Requesting MCP without the extra gives an actionable hard failure."""
-        with self.assertRaises(mcp_server.McpDependencyError) as context:
-            mcp_server.create_mcp_server()
+        with mock.patch.object(mcp_server, "import_module", side_effect=ImportError("missing")):
+            with self.assertRaises(mcp_server.McpDependencyError) as context:
+                mcp_server.create_mcp_server()
         message = str(context.exception)
         self.assertIn("mcp==2.1.1", message)
         self.assertIn("vnc-remote-control-client[mcp]", message)
+
+    def test_incompatible_optional_dependency_fails_explicitly(self) -> None:
+        """An installed but incompatible SDK never falls back to a fake server."""
+        incompatible = SimpleNamespace()
+        with mock.patch.object(mcp_server, "import_module", return_value=incompatible):
+            with self.assertRaises(mcp_server.McpDependencyError) as context:
+                mcp_server.create_mcp_server()
+        self.assertIn("expected MCPServer API", str(context.exception))
 
     def test_main_reports_missing_dependency_on_stderr_and_exits_nonzero(self) -> None:
         """The executable never converts a missing SDK into apparent success."""
@@ -98,10 +97,10 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_main_runs_stdio_once(self) -> None:
         """The initial executable has one explicit non-network transport."""
-        server = _FakeMcpServer("VNC Remote Control Server")
+        server = mock.Mock()
         with mock.patch.object(mcp_server, "create_mcp_server", return_value=server):
             mcp_server.main()
-        self.assertEqual(server.run_calls, [("stdio", {})])
+        server.run.assert_called_once_with(transport="stdio")
 
 
 if __name__ == "__main__":
