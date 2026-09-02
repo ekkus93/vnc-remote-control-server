@@ -6,7 +6,7 @@
 **Reviewed baseline:** `2506686ecdd77ddbfcc106d0109d6f7198233808`  
 **Working branch:** `ralph/code-review-remediation-v2-20260901`
 
-This TODO is evidence-driven. A checkbox is closed only when source, tests, workflow configuration, documentation, or recorded external validation actually proves it. Historical green runs do not close exact-candidate items. Named regression scenarios that do not yet have one-to-one tests remain open even when the implementation is structurally fail-closed.
+This TODO is evidence-driven. A checkbox is closed only when source, tests, workflow configuration, documentation, or recorded external validation actually proves it. Historical green runs do not close exact-candidate items. Named conditional regression scenarios may be closed only with an explicit reviewed equivalence/non-applicability decision recorded in V2 evidence.
 
 ## V2-R0 — Baseline and preservation
 
@@ -67,20 +67,20 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 
 - [x] Failed pointer movement taints input state.
 - [x] Failed button press taints/tracks input state.
-- [ ] Add a dedicated explicit `SetButton` release-failure regression.
-- [ ] Add a dedicated click-press failure regression.
+- [x] Add a dedicated explicit `SetButton` release-failure regression.
+- [x] Add a dedicated click-press failure regression.
 - [x] Click release failure + successful neutralizing retry preserves the original failure and taint.
-- [ ] Add a dedicated click-release double-failure regression.
-- [ ] Add a dedicated double-click second-sequence failure regression.
+- [x] Add a dedicated click-release double-failure regression.
+- [x] Add a dedicated double-click second-sequence failure regression.
 - [x] Scroll release failure + cleanup success leaves the session tainted.
 - [x] Scroll double-release failure cannot make the session reusable.
 - [x] Failed key-down is tracked and taints input state.
-- [ ] Add a dedicated explicit key-up failure regression.
+- [x] Add a dedicated explicit key-up failure regression.
 - [x] Partial chord failure + successful cleanup remains tainted.
-- [ ] Add a dedicated partial-chord cleanup-failure regression.
+- [x] Add a dedicated partial-chord cleanup-failure regression.
 - [x] Typed-text key-up failure + cleanup success remains tainted.
 - [x] Typed-text double cleanup failure remains tracked until abandonment.
-- [ ] Add a worker regression proving an already-queued next mutation cannot execute on the tainted generation.
+- [x] Add a worker regression proving an already-queued next mutation cannot execute on the tainted generation.
 - [x] Existing generation-tagged worker regression proves replacement-session input executes on a clean generation.
 
 ## V2-R2 — Immutable GitHub Actions
@@ -93,9 +93,9 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Reject mutable third-party tags/branches/aliases.
 - [x] Available local release-policy contract suite passed for the new rule.
 - [x] Document immutable third-party Action policy in release documentation/evidence.
-- [ ] Re-run actionlint on the exact candidate.
-- [ ] Re-run complete workflow contract tests on the exact candidate.
-- [ ] Prove immutable pins in exact-candidate Release Gates.
+- [ ] Re-run actionlint on the exact final candidate.
+- [ ] Re-run complete workflow contract tests on the exact final candidate.
+- [ ] Prove immutable pins in exact-final-candidate Release Gates.
 
 ## V2-R3 — Command outcome identity truthfulness
 
@@ -119,8 +119,8 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Unconsumed next ID remains `Unknown`.
 - [x] Same next ID reserves normally once terminal capacity becomes available.
 - [x] Existing terminal eviction -> `Expired` regression remains present.
-- [ ] Add/verify a worker-client integration regression for a real failed-reservation gap if practical.
-- [ ] Run exact-candidate Rust/workspace/HTTP/Python suites.
+- [x] Explicitly adjudicate separate worker-client failed-reservation integration as unnecessary: the deterministic tiny-capacity registry test exercises the exact allocation defect without adding a test-only production capacity seam.
+- [ ] Run exact-final-candidate Rust/workspace/HTTP/Python suites.
 
 ## V2-R4 — Native framebuffer revision exhaustion
 
@@ -147,8 +147,8 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Native poll propagates callback exhaustion status.
 - [x] Rust adapter mapping is covered by typed status mapping/source tests.
 - [x] Native source-contract test requires checked helper/status path.
-- [ ] Add/identify one dedicated worker-level framebuffer-exhaustion recovery regression rather than relying only on generic poll-error recovery.
-- [ ] Run exact-candidate native/Rust tests.
+- [x] Add dedicated worker-level framebuffer-exhaustion recovery regression proving stale authority is lost before replacement factory completion.
+- [ ] Run exact-final-candidate native/Rust tests.
 
 ## V2-R5 — Explicit HTTP connection concurrency bound
 
@@ -170,12 +170,12 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 
 ### R5 tests/docs
 
-- [ ] Add an explicit exact-maximum admission test.
+- [x] Add an explicit exact-maximum `65536` configuration-admission test.
 - [x] Test one-over-live-limit saturation behavior.
 - [x] Test permit recovery after a held connection exits.
 - [x] Existing task-outcome coverage classifies clean/peer/runtime/panic/cancellation behavior.
 - [x] Test shutdown while all permits are held.
-- [ ] Add practical R13/real-runtime saturation assertion if the integration environment supports it.
+- [x] Explicitly adjudicate separate R13 saturation assertion as unnecessary: the Tokio runtime test already exercises the production semaphore/saturation path with real TCP sockets; R13 continues to validate deployment/integration behavior.
 - [x] Document `VRC_HTTP_MAX_CONNECTIONS` in `README.md`, operator guide, and deployment guide.
 
 ## V2-R6 — Cross-cutting silent-failure/fallback audit
@@ -201,7 +201,7 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Log termination-listener failure with payload-safe error metadata.
 - [x] Still perform bounded shutdown after listener failure.
 - [x] Return process failure after cleanup rather than false success.
-- [ ] Add deterministic termination-listener failure test if a practical injectable seam is introduced.
+- [x] Explicitly adjudicate deterministic termination-listener failure injection as unnecessary because no practical injectable seam was introduced; adding one solely for this OS-listener edge would widen production lifecycle surface.
 
 ### Surviving ignores
 
@@ -224,55 +224,55 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Re-check `SECURITY.md` trust-boundary and VEX statements; no V2 edit required.
 - [x] Confirm new diagnostics exclude typed text, clipboard payloads, credentials and screenshots.
 - [x] Continue to state MCP is not implemented and remains gated on V2 sign-off.
-- [x] Create `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_V2_EVIDENCE_2026-09-01.md`.
+- [x] Create and reconcile `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_V2_EVIDENCE_2026-09-01.md`.
 
 ## V2-R8 — Complete quality/regression gates
 
 ### Rust
 
-- [ ] `cargo fmt --all --check`.
-- [ ] `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`.
-- [ ] `cargo test --locked --workspace --all-features`.
-- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps`.
+- [ ] `cargo fmt --all --check` on exact final candidate.
+- [ ] `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` on exact final candidate.
+- [ ] `cargo test --locked --workspace --all-features` on exact final candidate.
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps` on exact final candidate.
 
 ### Python
 
-- [ ] compileall first-party Python.
-- [ ] Ruff.
-- [ ] Pylint.
-- [ ] mypy.
-- [ ] full `unittest` suite on exact candidate.
+- [ ] compileall first-party Python on exact final candidate.
+- [ ] Ruff on exact final candidate.
+- [ ] Pylint on exact final candidate.
+- [ ] mypy on exact final candidate.
+- [ ] full `unittest` suite on exact final candidate.
 - [x] Available local Python/workflow/documentation contract suite passed before first candidate publication.
 
 ### Shell/workflows/security
 
-- [ ] repository `bash -n` set.
-- [ ] ShellCheck.
-- [ ] actionlint.
-- [ ] cargo-deny advisories/bans/licenses/sources.
-- [ ] full-history Gitleaks.
-- [ ] auditable release-binary verification.
-- [ ] Dockerfile BuildKit checks.
-- [ ] Compose config validation.
-- [ ] ASan.
-- [ ] TSan controller concurrency tests.
-- [ ] TSan core shared-state tests.
-- [ ] Miri.
-- [ ] Trivy vulnerability inventories.
-- [ ] CycloneDX SBOM generation.
-- [ ] exact CRITICAL VEX enforcement.
+- [ ] repository `bash -n` set on exact final candidate.
+- [ ] ShellCheck on exact final candidate.
+- [ ] actionlint on exact final candidate.
+- [ ] cargo-deny advisories/bans/licenses/sources on exact final candidate.
+- [ ] full-history Gitleaks on exact final candidate.
+- [ ] auditable release-binary verification on exact final candidate.
+- [ ] Dockerfile BuildKit checks on exact final candidate.
+- [ ] Compose config validation on exact final candidate.
+- [ ] ASan on exact final candidate.
+- [ ] TSan controller concurrency tests on exact final candidate.
+- [ ] TSan core shared-state tests on exact final candidate.
+- [ ] Miri on exact final candidate.
+- [ ] Trivy vulnerability inventories on exact final candidate.
+- [ ] CycloneDX SBOM generation on exact final candidate.
+- [ ] exact CRITICAL VEX enforcement on exact final candidate.
 
 ### Integration/E2E
 
-- [ ] desktop image smoke.
-- [ ] native adapter smoke.
-- [ ] WorkerHandle input E2E.
-- [ ] WorkerHandle text/clipboard E2E.
-- [ ] authenticated HTTP E2E.
-- [ ] Compose/persistence smoke.
-- [ ] R13 integration/reconnect/resource validation.
-- [ ] input-taint/session-replacement integration path beyond unit/generation regression, if required by review.
-- [ ] HTTP connection-capacity integration path beyond Tokio runtime tests, if practical.
+- [ ] desktop image smoke on exact final candidate.
+- [ ] native adapter smoke on exact final candidate.
+- [ ] WorkerHandle input E2E on exact final candidate.
+- [ ] WorkerHandle text/clipboard E2E on exact final candidate.
+- [ ] authenticated HTTP E2E on exact final candidate.
+- [ ] Compose/persistence smoke on exact final candidate.
+- [ ] R13 integration/reconnect/resource validation on exact final candidate.
+- [x] Explicitly adjudicate additional real-TigerVNC input-fault injection as unnecessary; deterministic worker-generation tests exercise quarantine, while existing TigerVNC E2E validates the normal native path.
+- [x] Explicitly adjudicate additional container-level HTTP-capacity probe as unnecessary; the runtime tests exercise the production admission code with real TCP sockets.
 
 ## V2-R9 — Exact candidate and merged-master validation
 
@@ -280,19 +280,19 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 
 - [x] Finish in-scope implementation and living-document changes for the six V2 findings.
 - [x] Reconcile pre-CI TODO boxes against actual branch source/tests/evidence.
-- [ ] Record exact frozen candidate SHA externally after this reconciliation commit.
-- [ ] Open focused PR against `master`.
-- [ ] Require regular CI on exact candidate SHA.
-- [ ] Record candidate CI run ID and conclusion.
-- [ ] Require Release Gates on exact candidate SHA.
-- [ ] Record candidate Release Gates run ID and conclusion.
-- [ ] Inspect every failed job/step rather than blindly rerun.
-- [ ] Fix root cause of any failure without weakening gates.
-- [ ] Confirm both workflows are green on the same exact candidate generation.
+- [ ] Record exact final frozen candidate SHA externally after this reconciliation commit.
+- [x] Open focused PR #28 against `master`.
+- [ ] Require regular CI on exact final candidate SHA.
+- [ ] Record final candidate CI run ID and conclusion.
+- [ ] Require Release Gates on exact final candidate SHA.
+- [ ] Record final candidate Release Gates run ID and conclusion.
+- [x] Inspect every failed candidate job/step encountered rather than blindly rerun.
+- [x] Fix each encountered root cause without weakening gates.
+- [ ] Confirm both workflows are green on the same exact final candidate generation.
 
 ### Merge and exact master
 
-- [ ] Merge only after exact-candidate CI and Release Gates are green and remaining acceptance-test debt is resolved/explicitly adjudicated.
+- [ ] Merge only after exact-final-candidate CI and Release Gates are green and remaining acceptance-test debt is resolved/explicitly adjudicated.
 - [ ] Record exact merged `master` SHA.
 - [ ] Require fresh regular CI on exact merged `master` SHA.
 - [ ] Record final `master` CI run ID/conclusion.
@@ -305,7 +305,8 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 ### Already recorded in V2 evidence
 
 - [x] Reviewed starting SHA and historical V1 validation provenance.
-- [x] Pre-candidate changed-file inventory.
+- [x] Candidate-generation failure/success history through the last superseded green checkpoint.
+- [x] Final pre-candidate changed-file inventory.
 - [x] Input certainty/quarantine policy and no automatic replay rule.
 - [x] Exact command `Unknown` / `Expired` policy.
 - [x] Native framebuffer exhaustion policy.
@@ -315,15 +316,15 @@ This TODO is evidence-driven. A checkbox is closed only when source, tests, work
 - [x] Confirmation that no release-critical gate was intentionally weakened.
 - [x] Current VEX review date (`2026-08-31`) and expiry (`2026-09-30`).
 - [x] MCP remains deferred until V2 sign-off.
+- [x] Re-review every previously open named/conditional regression requirement and either add the test or record an explicit reviewed equivalence/non-applicability decision.
 
 ### Pending external/final evidence
 
-- [ ] Record exact candidate SHA and PR number.
-- [ ] Record candidate CI and Release Gates IDs/conclusions.
+- [ ] Record exact final candidate SHA and PR number.
+- [ ] Record final candidate CI and Release Gates IDs/conclusions.
 - [ ] Record exact merged implementation/master SHA.
 - [ ] Record final master CI and Release Gates IDs/conclusions.
-- [ ] Update final changed-file inventory after all candidate fixes, if any.
-- [ ] Re-review every open named regression requirement and either add the test or document an explicit reviewed equivalence/non-applicability decision.
+- [ ] Update final changed-file inventory after any final-candidate CI fixes, if needed.
 - [ ] Re-review every TODO checkbox against final source/tests/workflows/evidence.
 - [ ] Confirm no checkbox is closed solely because a commit message says so.
 - [ ] Declare V2 complete only after all applicable R0-R10 requirements are genuinely satisfied.
