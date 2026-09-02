@@ -85,9 +85,7 @@ impl RuntimeSettings {
             }
         }
         if !(1..=MAX_HTTP_CONNECTIONS).contains(&maximum_connections) {
-            return Err(RuntimeConfigError::InvalidValue(
-                "VRC_HTTP_MAX_CONNECTIONS",
-            ));
+            return Err(RuntimeConfigError::InvalidValue("VRC_HTTP_MAX_CONNECTIONS"));
         }
         if maximum_body_bytes == 0 {
             return Err(RuntimeConfigError::InvalidValue("VRC_MAX_JSON_BYTES"));
@@ -432,14 +430,9 @@ mod tests {
             .expect("test listener binds");
         let address = listener.local_addr().expect("test address exists");
         let (shutdown_sender, shutdown_receiver) = oneshot::channel();
-        let server = tokio::spawn(serve_until_shutdown(
-            listener,
-            app,
-            settings,
-            async move {
-                let _ = shutdown_receiver.await;
-            },
-        ));
+        let server = tokio::spawn(serve_until_shutdown(listener, app, settings, async move {
+            let _ = shutdown_receiver.await;
+        }));
         (address, shutdown_sender, server)
     }
 
@@ -557,10 +550,13 @@ mod tests {
             .await
             .expect("TCP accept may complete before capacity rejection");
         let mut excess_bytes = Vec::new();
-        timeout(Duration::from_secs(1), excess.read_to_end(&mut excess_bytes))
-            .await
-            .expect("excess accepted socket is closed promptly")
-            .expect("excess socket read succeeds");
+        timeout(
+            Duration::from_secs(1),
+            excess.read_to_end(&mut excess_bytes),
+        )
+        .await
+        .expect("excess accepted socket is closed promptly")
+        .expect("excess socket read succeeds");
         assert!(excess_bytes.is_empty());
 
         drop(held);
