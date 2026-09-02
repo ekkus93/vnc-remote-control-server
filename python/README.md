@@ -2,7 +2,7 @@
 
 Typed synchronous Python client for the controller HTTP API.
 
-The core HTTP client has no third-party runtime dependencies. WebSocket event streaming is optional and uses `websocket-client`.
+The core HTTP client has no third-party runtime dependencies. WebSocket event streaming is optional and uses `websocket-client`. MCP support is also optional and uses the exact-reviewed official Python MCP SDK pin.
 
 For the project-wide documentation index and the distinction between current guides and historical milestone artifacts, see [`../docs/README.md`](../docs/README.md).
 
@@ -46,6 +46,14 @@ With WebSocket event support:
 python -m pip install './python[websocket]'
 ```
 
+With the MCP server entry point:
+
+```bash
+python -m pip install './python[mcp]'
+```
+
+The MCP extra currently pins `mcp==2.1.1`. The MCP implementation phase is in progress; the installed `vnc-remote-control-mcp` executable currently provides the package/transport scaffold while the controller tool catalog and fail-closed configuration are added task by task. The core client remains dependency-free when the extra is not selected.
+
 ### Directly from GitHub
 
 `pip` can install the package directly from this repository even though the Python project lives in the `python/` subdirectory:
@@ -60,6 +68,13 @@ For WebSocket event support:
 ```bash
 python -m pip install \
   "vnc-remote-control-client[websocket] @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
+```
+
+For the MCP server entry point:
+
+```bash
+python -m pip install \
+  "vnc-remote-control-client[mcp] @ git+https://github.com/ekkus93/vnc-remote-control-server.git@master#subdirectory=python"
 ```
 
 Installing from `master` is convenient for development, but it is not reproducible because `master` can advance. For deployments, automation, and other reproducible environments, pin the install to a full Git commit SHA:
