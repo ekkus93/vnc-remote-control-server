@@ -4,12 +4,10 @@
 **Repository:** `ekkus93/vnc-remote-control-server`  
 **Reviewed baseline:** `2506686ecdd77ddbfcc106d0109d6f7198233808`  
 **Working branch:** `ralph/code-review-remediation-v2-20260901`  
-**Pre-evidence source/documentation head:** `165a5bc897b9e8810b8d1e9af067e7ce14802e86`  
-**Exact candidate SHA:** pending pre-CI TODO reconciliation and PR freeze  
-**Candidate CI / Release Gates:** pending  
+**Exact final candidate SHA:** recorded externally in PR #28 after the final evidence/TODO reconciliation commit  
 **Merged master / final master gates:** pending
 
-This file is cumulative V2 evidence. It intentionally does not treat a historical green workflow as proof for a newer candidate. The exact frozen candidate SHA and its workflow run IDs are authoritative only after the final pre-CI TODO reconciliation commit and PR creation.
+This file is cumulative V2 evidence. Historical or superseded green workflow runs are useful provenance, but they do not substitute for the final exact-candidate pair or the final merged-`master` pair.
 
 ## 1. Historical baseline preserved, not reused as V2 proof
 
@@ -34,9 +32,33 @@ The later independent V2 review found that the V1 R9 fallback audit was incomple
 
 This correction does not erase or rewrite the historical V1 run IDs, SHAs, or the fixes that were genuinely validated there.
 
-## 2. V2-R1 — Aggregate input uncertainty and session quarantine
+## 2. Candidate-generation history
 
-`InputController` now has one aggregate `InputState::{Known, Uncertain}`. All native pointer and key sends flow through controller-owned helpers that set `Uncertain` on any `NativeError`. The implementation does not infer that a failed native write had no remote effect.
+PR #28 intentionally records every candidate generation instead of laundering earlier red runs into a later green result.
+
+- `c939b75288d9e3d2887f413f9ca9ccf22b93b67b`
+  - CI `33588973602`: failed on rustfmt drift and Rust `E0502` in `InputController::release_all`;
+  - Release Gates `33588973555`: failed on the same generation.
+- `d24757fcebd71a8c5d2e724d81276281b825ea0f`
+  - intermediate rustfmt-only correction before the borrow fix;
+  - Release Gates `33589901648`: controller TSan compile and controller image build failed on the same `E0502`; static/supply-chain gates passed.
+- `6cc02cfedccb55743d42cb7a8f2f88f15108fddb`
+  - fixed `E0502`;
+  - CI `33589986013` then exposed a stale partial-chord regression expectation;
+  - Release Gates `33589986187` reached the same stale assertion rather than a sanitizer defect.
+- `3b371e3f86b2f3cd74c12f67930cd504c68c52c2`
+  - corrected only the fail-closed chord regression expectation;
+  - CI `33590382054` passed Rust and Ruff gates, then failed Pylint `C0116` for a missing test docstring.
+- `323714529f444228bb8cb07d893a9a20739c4779`
+  - added only the missing Pylint-required docstring;
+  - CI `33590696025`: success;
+  - Release Gates `33590695987`: success.
+
+The fully green `32371452...` generation is a strong checkpoint, but it became superseded when the final named acceptance-test debt was closed. The final candidate therefore requires a fresh pair on the post-reconciliation head.
+
+## 3. V2-R1 — Aggregate input uncertainty and session quarantine
+
+`InputController` has one aggregate `InputState::{Known, Uncertain}`. All native pointer and key sends flow through controller-owned helpers that set `Uncertain` on any `NativeError`. The implementation does not infer that a failed native write had no remote effect.
 
 The controller conservatively tracks state needed for neutralization:
 
@@ -54,37 +76,45 @@ The worker quarantine decision is centralized in `worker/run.rs` after ordinary 
 
 1. emits payload-free `worker_input_session_tainted` with command ID;
 2. calls `invalidate()`;
-3. `invalidate()` attempts bounded tracked-input release while the session still exists;
+3. attempts bounded tracked-input release while the session still exists;
 4. drops the VNC session;
-5. abandons any unresolved local input tracking only after the session is no longer reusable;
+5. abandons unresolved local input tracking only after the session is no longer reusable;
 6. invalidates framebuffer/clipboard authority;
 7. schedules bounded reconnect;
-8. only then continues the command loop.
+8. only then reaches another command-loop iteration.
 
-The command outcome is recorded from the original command `result`; quarantine never replays the original mutation and does not replace the original failure with cleanup success.
+The command outcome is recorded from the original command result; quarantine never replays the original mutation and does not replace the original failure with cleanup success.
 
-The obsolete V1 scroll-only uncertainty handling has been removed from `loop_state.rs`. A temporary compatibility shim created during the V2 refactor was also deleted before candidate freeze; there is no inert compatibility fallback remaining.
+The obsolete V1 scroll-only uncertainty handling and the temporary V2 `input_compat.rs` shim are removed.
 
-### R1 regression coverage present before candidate CI
+### R1 regression coverage
 
-Controller unit coverage includes:
+Controller and worker coverage together now explicitly exercise:
 
-- failed pointer send taints the session;
-- failed explicit button press is tracked and taints the session;
-- failed click release with successful bounded retry still leaves the session tainted and preserves the original failure;
-- scroll release retry success still leaves the session tainted;
-- scroll double-release failure cannot make the session reusable after cleanup;
-- partial chord failure performs bounded reverse release and leaves the session tainted;
-- failed key-down is tracked for cleanup and leaves the session tainted;
-- typed-text key-up failure is retried, reported and leaves the session tainted;
-- typed-text double release failure remains tracked until session abandonment;
-- failed `release_all()` pointer/key releases remain represented in `InputReleaseReport` and tracked until abandonment.
+- failed pointer movement;
+- failed explicit button press;
+- explicit `SetButton` release failure;
+- click press failure;
+- click release failure with successful bounded neutralization;
+- click release plus retry double failure;
+- double-click failure in the second click sequence;
+- scroll release retry success;
+- scroll double-release failure;
+- failed key-down;
+- explicit key-up failure;
+- partial chord failure with successful cleanup;
+- partial chord cleanup failure;
+- typed-text key-up failure with successful retry;
+- typed-text double cleanup failure;
+- failed final pointer/key cleanup retained until abandonment;
+- generation-tagged reconnect with clean replacement input state;
+- an already-queued next mutation held behind an ambiguous native failure, proving it cannot execute on the tainted generation.
 
-Worker-level generation-tagged regression coverage proves that a double-failed scroll release quarantines generation 1, reconnects, and subsequent pointer/key input executes on generation 2 with clean local state. The existing worker input-failure regression was reconciled to expect the final bounded neutralizing release performed during quarantine.
+The final dedicated cases live in `crates/controller-api/src/worker/tests/v2_regressions.rs`. The queued-next-mutation test deterministically blocks the first native send, queues a second mutation while the first is in flight, then releases the failure and asserts the queued target never appears on generation 1. The second command may fail while the worker is reconnecting or execute after replacement, but it cannot mutate the quarantined session.
 
-Exact Rust test execution remains pending the frozen candidate CI run.
+A separate real-TigerVNC ambiguous-send fault injector is not required: producing this transport ambiguity deterministically would require a test-only production/native hook, while the worker-generation regression directly exercises the quarantine boundary that owns the safety invariant. Existing TigerVNC E2E remains authoritative for the normal input path.
 
-## 3. V2-R2 — Immutable GitHub Actions
+## 4. V2-R2 — Immutable GitHub Actions
 
 Release Gates no longer use `dtolnay/rust-toolchain@stable`. The action is pinned to:
 
@@ -92,15 +122,15 @@ Release Gates no longer use `dtolnay/rust-toolchain@stable`. The action is pinne
 
 The Rust toolchain itself remains explicitly `1.97.1`.
 
-`tests/test_release_policy_contract.py` now applies a generic permanent-workflow rule: non-local third-party `uses:` references must use a full immutable 40-hex commit SHA; local `./...` Actions are the intentional exemption. The living release policy records the same requirement.
+`tests/test_release_policy_contract.py` applies a generic permanent-workflow rule: non-local third-party `uses:` references must use a full immutable 40-hex commit SHA; local `./...` Actions are the intentional exemption. The living release policy records the same requirement.
 
-Actionlint, the complete workflow contract suite, and immutable-pin proof in Release Gates remain pending exact-candidate execution.
+The superseded-but-green `32371452...` generation proved actionlint, the complete workflow contract suite, and immutable pin enforcement in Release Gates. Those checks must pass again on the final post-reconciliation candidate.
 
-## 4. V2-R3 — Truthful command outcome identity
+## 5. V2-R3 — Truthful command outcome identity
 
-Command outcome capacity reservation and ID allocation are now one registry operation under the outcome-registry lock. Capacity is checked before `next_command_id` advances. If all retained slots are nonterminal, `CommandOutcomeCapacityFull` returns without consuming an identifier.
+Command outcome capacity reservation and ID allocation are one registry operation under the outcome-registry lock. Capacity is checked before `next_command_id` advances. If all retained slots are nonterminal, `CommandOutcomeCapacityFull` returns without consuming an identifier.
 
-The existing bounded registry invariants are preserved:
+The bounded registry invariants are preserved:
 
 - nonterminal records are not evicted to admit new work;
 - terminal records may be evicted;
@@ -109,13 +139,13 @@ The existing bounded registry invariants are preserved:
 - an ID never reserved by this process is `Unknown`;
 - command ID exhaustion remains fail-closed.
 
-The deterministic tiny-capacity test `capacity_rejection_does_not_consume_a_never_retained_identifier` proves that a rejected next ID remains numerically unconsumed and `Unknown`, then becomes the same next retained ID once terminal capacity is available. Existing terminal eviction coverage still proves `Expired` for known evictions.
+The deterministic tiny-capacity test `capacity_rejection_does_not_consume_a_never_retained_identifier` proves that a rejected next ID remains numerically unconsumed and `Unknown`, then becomes the same next retained ID once terminal capacity is available. Existing terminal eviction coverage proves `Expired` for known evictions.
 
-The HTTP/OpenAPI/Python wire semantics do not require a schema change: the correction is internal identity truthfulness behind the existing `404 command_status_unknown` / `410 command_status_expired` contract. Exact workspace/HTTP/Python regression execution remains pending candidate CI.
+A separate public worker-client integration fixture for a full outcome registry is explicitly not added. Creating that state through the public worker would require holding the fixed production-sized registry full of nonterminal commands or exposing a test-only capacity seam. The defect lived in the registry allocation operation itself, and the deterministic tiny-capacity registry test exercises the exact failed-reservation/next-ID transition without widening production API surface. HTTP/OpenAPI/Python status semantics are separately covered by their existing contract suites.
 
-## 5. V2-R4 — Native framebuffer revision exhaustion
+## 6. V2-R4 — Native framebuffer revision exhaustion
 
-The C shim now uses checked helper `vrc_advance_framebuffer_revision()` instead of incrementing unconditionally. At `UINT64_MAX` it:
+The C shim uses checked helper `vrc_advance_framebuffer_revision()` instead of incrementing unconditionally. At `UINT64_MAX` it:
 
 - does not wrap;
 - sets `VRC_STATUS_FRAMEBUFFER_REVISION_EXHAUSTED`;
@@ -125,21 +155,13 @@ The C shim now uses checked helper `vrc_advance_framebuffer_revision()` instead 
 
 The callback status is machine-readable and survives an outer successful LibVNC message-handler return. `vrc_client_poll()` therefore returns a non-success status and marks the native session disconnected/incomplete.
 
-Rust maps the status to typed `NativeError::FramebufferRevisionExhausted`, and the worker failure classifier handles it explicitly. The existing native-poll error path invalidates authoritative framebuffer and clipboard state, drops the native session, and schedules bounded reconnect before any replacement frame can become current.
+Rust maps the status to typed `NativeError::FramebufferRevisionExhausted`, and the worker failure classifier handles it explicitly. The native-poll error path invalidates authoritative framebuffer and clipboard state, drops the native session, and schedules bounded reconnect before replacement authority.
 
-Deterministic native coverage proves:
+Deterministic native coverage proves maximum-1 advancement, maximum non-wrap failure, and callback-to-poll propagation. `worker::tests::v2_regressions::framebuffer_revision_exhaustion_invalidates_before_replacement_connects` adds the dedicated worker-level proof: generation 2's factory is blocked after exhaustion, the old framebuffer is already `Stale` while replacement is blocked, then the replacement connection is released and becomes current with the next process-local framebuffer revision.
 
-- `UINT64_MAX - 1` advances to `UINT64_MAX`;
-- `UINT64_MAX` does not wrap and returns the exhaustion status;
-- outer poll success does not hide callback exhaustion;
-- connection completeness is cleared and the native client is disconnected;
-- source-contract coverage requires the checked helper/status path.
+## 7. V2-R5 — Explicit accepted HTTP connection bound
 
-Exact Rust/native execution remains pending candidate CI/Release Gates.
-
-## 6. V2-R5 — Explicit accepted HTTP connection bound
-
-`RuntimeSettings` now includes `maximum_connections`, loaded from `VRC_HTTP_MAX_CONNECTIONS`.
+`RuntimeSettings` includes `maximum_connections`, loaded from `VRC_HTTP_MAX_CONNECTIONS`.
 
 Policy:
 
@@ -148,15 +170,25 @@ Policy:
 - maximum: `65536`;
 - zero, above-maximum, malformed, and non-Unicode configured values fail startup closed.
 
-`serve_until_shutdown()` creates one process-owned Tokio semaphore with the configured capacity. Every admitted connection task owns one `OwnedSemaphorePermit` for the full task lifetime. When capacity is saturated, the already accepted new socket is closed immediately and no helper/connection task is spawned for it.
+`serve_until_shutdown()` creates one process-owned Tokio semaphore with the configured capacity. Every admitted connection task owns one `OwnedSemaphorePermit` for the full task lifetime. At saturation, the already accepted new socket is closed immediately and no connection task is spawned for it.
 
-Because the permit is moved into the connection task, it remains held across header/body processing and releases only when the connection task exits, including clean close, peer/runtime failure, unwind/cancellation, or shutdown abort. Request/body timeouts cannot release the process-level connection permit while the connection task remains alive.
+Because the permit is moved into the connection task, it remains held across header/body processing and releases only when the connection task exits, including clean close, peer/runtime failure, unwind/cancellation, or shutdown abort. Request/body timeouts cannot release the process-level permit while the connection task remains alive.
 
-Runtime tests cover zero/max+1 rejection, one-connection saturation, prompt excess-socket closure, permit recovery after the held connection exits, and bounded shutdown while capacity is fully occupied. Existing connection-task classification covers clean, peer/runtime failure, panic and cancellation outcomes.
+Coverage now includes:
 
-`README.md`, `docs/OPERATOR_GUIDE.md`, and `deploy/README.md` describe the limit and saturation behavior. A larger real-runtime/R13 capacity assertion remains a candidate integration-gate concern rather than a reason to claim local proof that did not run.
+- zero and maximum+1 rejection;
+- exact documented maximum `65536` acceptance in `crates/controller-api/tests/v2_runtime_limits.rs`;
+- one-over-live-limit saturation using real Tokio `TcpListener`/`TcpStream` sockets;
+- prompt excess-socket closure;
+- permit recovery after a held connection exits;
+- bounded shutdown while capacity is fully occupied;
+- connection-task clean/error/panic/cancellation classification.
 
-## 7. V2-R6 — Silent-failure/fallback audit
+A separate Docker/R13 saturation fixture is explicitly not required. The connection semaphore and saturation decision live entirely in the Rust runtime and the existing test exercises that path with real sockets. Docker/Compose/R13 gates still validate deployment/integration behavior, but duplicating the same semaphore assertion there would not exercise another admission implementation.
+
+`README.md`, `docs/OPERATOR_GUIDE.md`, and `deploy/README.md` describe the limit and saturation behavior.
+
+## 8. V2-R6 — Silent-failure/fallback audit
 
 The V2 audit re-reviewed changed and adjacent Rust, Python, shell and workflow surfaces for discarded `Result`s, `.ok()`, `unwrap_or*`, wildcard error collapsing, side-effecting retries, cleanup retries, stale cache authority, sequence/revision exhaustion, detached work, poisoned synchronization, channel notifications, timeout abandonment, broad Python exceptions, shell `|| true`/`set +e`, workflow `continue-on-error`, mutable Actions and scanner/VEX bypasses.
 
@@ -164,8 +196,8 @@ The V2 audit re-reviewed changed and adjacent Rust, Python, shell and workflow s
 
 The relevant surviving ignored results are intentional and non-authoritative:
 
-- worker completion-channel sends are ignored only **after** the command outcome registry has reached its authoritative state; a timed-out/dropped waiter cannot change command truth;
-- `WorkerExitSignal` ignores a terminal `try_send` only after worker exit is already authoritative;
+- worker completion-channel sends are ignored only after the command outcome registry has reached its authoritative state;
+- `WorkerExitSignal` ignores a terminal `try_send` only after worker exit is authoritative;
 - worker startup notification is advisory to the spawning waiter and does not own lifecycle truth;
 - HTTP shutdown-watch send ignores receiver absence only when no connection task remains to consume the notification;
 - teardown `kill ... || true` shell sites are terminal/best-effort process cleanup, not configuration/readiness success criteria;
@@ -173,17 +205,19 @@ The relevant surviving ignored results are intentional and non-authoritative:
 - diagnostic duration conversion saturation is confined to log/metric representation, not protocol or lifecycle authority;
 - checked-arithmetic/header `.ok()` uses convert local parse/conversion failure into explicit validation branches rather than silently continuing an operation.
 
-No V2 audit result justified a compatibility fallback that allows normal service to resume from uncertain authoritative state. The temporary input compatibility shim was removed before candidate freeze.
+No V2 audit result justified a compatibility fallback that allows normal service to resume from uncertain authoritative state. The temporary input compatibility shim was removed.
 
 ### Additional R6 defect fixed
 
-The process termination listener previously allowed listener failure to collapse into normal shutdown. `main.rs` now records a payload-safe error, still initiates and completes bounded shutdown cleanup, then returns process failure rather than false success.
+The process termination listener previously allowed listener failure to collapse into normal shutdown. `main.rs` now records a payload-safe error, still performs bounded shutdown cleanup, then returns process failure rather than false success.
 
-No release-critical `continue-on-error`, broad scanner/VEX bypass, weakened Gitleaks/Trivy policy, or mutable third-party Action reference is accepted by the V2 source/workflow review. Exact Release Gates remain the authoritative execution proof.
+No separate termination-listener failure injection seam was introduced. Adding a production/test-only signal-source abstraction solely to force an operating-system listener-construction failure would widen code and lifecycle surface for an edge already expressed as straightforward result propagation. The requirement was conditional on a practical injectable seam; the reviewed decision is that no such seam is warranted.
 
-## 8. V2-R7 — Documentation and security reconciliation
+No release-critical `continue-on-error`, broad scanner/VEX bypass, weakened Gitleaks/Trivy policy, or mutable third-party Action reference is accepted.
 
-Living documentation now records:
+## 9. V2-R7 — Documentation and security reconciliation
+
+Living documentation records:
 
 - aggregate input-session quarantine and no automatic mutation replay;
 - readiness/reconnect behavior after ambiguous input failure;
@@ -191,17 +225,17 @@ Living documentation now records:
 - immutable third-party GitHub Action SHA policy;
 - current VEX review date and expiry.
 
-No public HTTP/OpenAPI status shape changed, so no OpenAPI or Python client wire-format edit is required for R3/R4/R5. The operator guide continues to document exact `Unknown` versus `Expired` HTTP status semantics and accepted mutation non-retry-safety.
+No public HTTP/OpenAPI status shape changed, so no OpenAPI or Python client wire-format edit is required for R3/R4/R5.
 
-`SECURITY.md` was re-read against V2 and remains consistent: `/v1/*` authorization, file-backed secret boundaries, raw-VNC isolation, payload logging prohibitions, TLS boundary, and CRITICAL VEX review/expiry remain accurate. The authoritative VEX file was reviewed `2026-08-31` and expires `2026-09-30`; the release policy was corrected to the same date.
+`SECURITY.md` remains consistent: `/v1/*` authorization, file-backed secret boundaries, raw-VNC isolation, payload logging prohibitions, TLS boundary, and CRITICAL VEX review/expiry remain accurate. The authoritative VEX file was reviewed `2026-08-31` and expires `2026-09-30`.
 
 New V2 diagnostics contain command IDs, bounded counts/categories, configured numeric limits or fixed error text only. They do not include typed text, clipboard payloads, framebuffer pixels, bearer tokens or VNC passwords.
 
-MCP remains unimplemented and explicitly deferred until V2 final sign-off.
+MCP remains unimplemented and deferred until V2 final sign-off.
 
-## 9. Changed-file inventory before evidence/TODO reconciliation
+## 10. Final changed-file inventory before exact-candidate freeze
 
-Compared with baseline `2506686ecdd77ddbfcc106d0109d6f7198233808`, the pre-evidence source/documentation head changed these files:
+Compared with baseline `2506686ecdd77ddbfcc106d0109d6f7198233808`, V2 changes include:
 
 - `.github/workflows/release-gates.yml`
 - `README.md`
@@ -214,6 +248,9 @@ Compared with baseline `2506686ecdd77ddbfcc106d0109d6f7198233808`, the pre-evide
 - `crates/controller-api/src/worker/outcome.rs`
 - `crates/controller-api/src/worker/run.rs`
 - `crates/controller-api/src/worker/tests/clipboard_and_input.rs`
+- `crates/controller-api/src/worker/tests/mod.rs`
+- `crates/controller-api/src/worker/tests/v2_regressions.rs`
+- `crates/controller-api/tests/v2_runtime_limits.rs`
 - `crates/libvnc-adapter/native/vnc_shim.c`
 - `crates/libvnc-adapter/native/vnc_shim.h`
 - `crates/libvnc-adapter/src/lib.rs`
@@ -221,31 +258,40 @@ Compared with baseline `2506686ecdd77ddbfcc106d0109d6f7198233808`, the pre-evide
 - `docs/OPERATOR_GUIDE.md`
 - `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_V2_SPEC_2026-09-01.md`
 - `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_V2_TODO_2026-09-01.md`
+- `docs/VNC_REMOTE_CONTROL_SERVER_CODE_REVIEW_REMEDIATION_V2_EVIDENCE_2026-09-01.md`
 - `docs/VNC_REMOTE_CONTROL_SERVER_RELEASE_POLICY_2026-08-05.md`
 - `tests/native/vnc_shim_clipboard_callback_test.c`
 - `tests/test_native_contract.py`
 - `tests/test_release_policy_contract.py`
 
-This evidence file and the subsequent reconciled TODO are additional candidate files and must be included in the final PR inventory.
+The exact final PR diff remains the source of truth if subsequent CI fixes add another file.
 
-## 10. Candidate-validation contract
+## 11. Final candidate-validation contract
 
-The next branch head after evidence/TODO reconciliation is the candidate generation to freeze in the PR. The PR must trigger both permanent workflows because both `CI` and `Release Gates` include `pull_request` triggers.
+The branch head after this evidence update and TODO reconciliation is the final candidate generation. PR #28 must run both permanent workflows because both `CI` and `Release Gates` include `pull_request` triggers.
 
-Acceptance requires both workflows to report success on the **same exact PR-head SHA**. If any job fails, that job/step must be inspected and the root cause fixed without weakening gates. Any fix creates a new candidate SHA, and both workflows must be evaluated again for that new generation.
+Acceptance requires both workflows to report success on the **same exact PR-head SHA**. If any job fails, the failing job/step must be inspected and the root cause fixed without weakening gates. Any fix creates a new candidate SHA, and both workflows must be evaluated again for that generation.
 
-Until those exact runs exist, all V2-R8 execution boxes and V2-R9 candidate conclusion boxes remain open.
+The final candidate run must cover at least:
 
-## 11. Final-signoff items intentionally pending
+- Rust fmt, Clippy, workspace tests and rustdoc;
+- Python compile, Ruff, Pylint, mypy and workflow/unit contracts;
+- shell syntax/ShellCheck/actionlint;
+- cargo-deny and full-history Gitleaks;
+- auditable release binary verification;
+- Dockerfile and Compose validation;
+- ASan, both TSan suites and Miri;
+- Trivy vulnerability inventories, CycloneDX SBOMs and exact CRITICAL VEX enforcement;
+- desktop/native/WorkerHandle/HTTP/Compose/R13 integration gates.
 
-The following evidence cannot truthfully be populated before exact-candidate execution and/or merge:
+No earlier green generation substitutes for the final post-reconciliation head.
 
-- frozen candidate SHA and PR number;
-- candidate CI run ID/conclusion;
-- candidate Release Gates run ID/conclusion;
+## 12. Final-signoff items pending after candidate freeze
+
+The following evidence is populated only after the final reconciliation commit and/or merge:
+
+- exact final candidate SHA and its CI/Release Gates IDs/conclusions (recorded in PR #28 and then summarized here after merge if useful);
 - exact merged `master` SHA;
 - final `master` CI and Release Gates IDs/conclusions;
 - final validation-time VEX re-review;
 - final V2 completion declaration.
-
-No older workflow run is substituted for those fields.
