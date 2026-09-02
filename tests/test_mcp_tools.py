@@ -18,6 +18,7 @@ from vnc_remote_control.models import (
 
 P = ParamSpec("P")
 R = TypeVar("R")
+RegisteredTool = tuple[Callable[..., Any], dict[str, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,20 +31,19 @@ class FakeAnnotations:
     open_world_hint: bool
 
 
-class FakeServer:
-    """Capture tool registrations without importing the optional MCP SDK."""
+def _recording_tool_registrar(
+    tools: dict[str, RegisteredTool],
+) -> Callable[..., Callable[[Callable[..., Any]], Callable[..., Any]]]:
+    """Return a dependency-free registrar that captures MCP tool metadata."""
 
-    def __init__(self) -> None:
-        self.tools: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {}
-
-    def tool(self, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Capture one tool decorator invocation."""
-
+    def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
-            self.tools[kwargs["name"]] = (function, kwargs)
+            tools[kwargs["name"]] = (function, kwargs)
             return function
 
         return decorator
+
+    return tool
 
 
 class RecordingExecutor:
@@ -80,15 +80,15 @@ class FakeClient:
         """Return deterministic status."""
         return StatusResponse(
             state="connected",
-            started_at_unix_ms=1,
-            connected_at_unix_ms=2,
-            last_message_at_unix_ms=3,
             reconnect_attempts=4,
+            started_at_unix_ms=1,
             last_failure=None,
+            connected_at_unix_ms=2,
             framebuffer_revision=5,
+            last_message_at_unix_ms=3,
             rejected_commands=6,
-            dropped_events=7,
             fatal_exit=False,
+            dropped_events=7,
             shutting_down=False,
         )
 
@@ -131,13 +131,13 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         """Register one dependency-free fake MCP catalog."""
-        self.server = FakeServer()
+        self.tools: dict[str, RegisteredTool] = {}
         self.executor = RecordingExecutor()
         self.client = FakeClient()
         self.command_id_metadata = object()
         runtime = McpReadRuntime(client=self.client, executor=self.executor)
         register_read_only_tools(
-            self.server,
+            _recording_tool_registrar(self.tools),
             runtime,
             annotations_factory=FakeAnnotations,
             positive_command_id_metadata=self.command_id_metadata,
@@ -146,7 +146,7 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
     def test_catalog_contains_only_initial_read_tools(self) -> None:
         """Screenshot and mutation tools remain absent during MCP-004."""
         self.assertEqual(
-            set(self.server.tools),
+            set(self.tools),
             {
                 "vnc_get_status",
                 "vnc_get_display",
@@ -155,7 +155,7 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
                 "vnc_get_metrics",
             },
         )
-        for _, registration in self.server.tools.values():
+        for _, registration in self.tools.values():
             self.assertIs(registration["structured_output"], True)
 
     def test_no_argument_tools_have_empty_signatures(self) -> None:
@@ -166,12 +166,12 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             "vnc_get_clipboard",
             "vnc_get_metrics",
         ):
-            function, _ = self.server.tools[name]
+            function, _ = self.tools[name]
             self.assertEqual(tuple(inspect.signature(function).parameters), ())
 
     def test_command_status_schema_carries_positive_integer_metadata(self) -> None:
         """The command ID annotation carries injected minimum-one SDK metadata."""
-        function, _ = self.server.tools["vnc_get_command_status"]
+        function, _ = self.tools["vnc_get_command_status"]
         parameter = inspect.signature(function).parameters["command_id"]
         annotation = parameter.annotation
         self.assertIs(get_origin(annotation), Annotated)
@@ -181,7 +181,7 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
 
     def test_annotations_match_closed_and_open_world_contract(self) -> None:
         """All tools are read-only/idempotent; only clipboard is open-world."""
-        for name, (_, registration) in self.server.tools.items():
+        for name, (_, registration) in self.tools.items():
             annotations = registration["annotations"]
             self.assertTrue(annotations.read_only_hint)
             self.assertFalse(annotations.destructive_hint)
@@ -193,11 +193,11 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_handlers_map_once_to_exact_typed_client_methods(self) -> None:
         """Every handler invokes exactly one intended typed-client method."""
-        status = await self.server.tools["vnc_get_status"][0]()
-        display = await self.server.tools["vnc_get_display"][0]()
-        clipboard = await self.server.tools["vnc_get_clipboard"][0]()
-        command = await self.server.tools["vnc_get_command_status"][0](17)
-        metrics = await self.server.tools["vnc_get_metrics"][0]()
+        status = await self.tools["vnc_get_status"][0]()
+        display = await self.tools["vnc_get_display"][0]()
+        clipboard = await self.tools["vnc_get_clipboard"][0]()
+        command = await self.tools["vnc_get_command_status"][0](17)
+        metrics = await self.tools["vnc_get_metrics"][0]()
 
         self.assertEqual(status, self.client.get_status())
         self.assertEqual(display, self.client.get_display())
