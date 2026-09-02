@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Annotated, Any, ParamSpec, TypeVar, get_args, get_origin
 from unittest import mock
 
+from vnc_remote_control import mcp_tools
 from vnc_remote_control.errors import ProtocolError
 from vnc_remote_control.mcp_tools import McpReadRuntime, register_read_only_tools
 from vnc_remote_control.models import (
@@ -362,6 +363,23 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(self.client, "get_screenshot", return_value=response),
             self.assertRaisesRegex(ProtocolError, "framebuffer limit"),
+        ):
+            await self.tools["vnc_get_screenshot"][0]()
+
+    async def test_screenshot_rejects_encoded_body_before_image_expansion(self) -> None:
+        """The encoded PNG ceiling is enforced before the SDK can base64-expand bytes."""
+        png = _rgba_png()
+        response = ScreenshotResponse(
+            data=png,
+            etag='"process-0000000000000008"',
+            cache_control=None,
+            request_id="request-8",
+            not_modified=False,
+        )
+        with (
+            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            mock.patch.object(mcp_tools, "_MAX_MCP_SCREENSHOT_PNG_BYTES", len(png) - 1),
+            self.assertRaisesRegex(ProtocolError, "PNG byte limit"),
         ):
             await self.tools["vnc_get_screenshot"][0]()
 
