@@ -7,6 +7,7 @@ assert on required fail-closed patterns and forbidden compatibility escapes.
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -98,6 +99,37 @@ class ReleasePolicyContractTests(unittest.TestCase):
         self.assertIn("binary_sha256", text)
         self.assertNotIn('"CratesIo"', text)
         self.assertNotIn("except Exception", text)
+
+    def test_all_third_party_actions_are_immutably_pinned(self) -> None:
+        action_ref = re.compile(r"^[^/\s]+/[^@\s]+@[0-9a-fA-F]{40}$")
+        workflow_dir = ROOT / ".github" / "workflows"
+        workflow_paths = sorted(
+            [*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")]
+        )
+        self.assertTrue(workflow_paths, "permanent workflow files must exist")
+
+        violations: list[str] = []
+        for workflow_path in workflow_paths:
+            for line_number, line in enumerate(
+                workflow_path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                stripped = line.strip()
+                if not stripped.startswith("uses:") and not stripped.startswith("- uses:"):
+                    continue
+                value = stripped.split("uses:", 1)[1].strip().strip('"').strip("'")
+                if value.startswith("./"):
+                    continue
+                if not action_ref.fullmatch(value):
+                    violations.append(
+                        f"{workflow_path.relative_to(ROOT)}:{line_number}: {value}"
+                    )
+
+        self.assertEqual(
+            violations,
+            [],
+            "third-party GitHub Actions must use immutable 40-hex commit SHAs: "
+            + "; ".join(violations),
+        )
 
     def test_cache_and_actions_are_immutably_pinned(self) -> None:
         """Release Gates actions/cache must be pinned to an immutable commit SHA."""
