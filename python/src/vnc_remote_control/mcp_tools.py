@@ -15,13 +15,8 @@ from .models import (
 
 P = ParamSpec("P")
 R = TypeVar("R")
-
-
-class McpToolRegistrar(Protocol):
-    """Minimal MCP server surface required to register tools."""
-
-    def tool(self, **kwargs: Any) -> Any:
-        """Return the SDK tool-registration decorator."""
+McpToolDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
+McpToolRegistrar = Callable[..., McpToolDecorator]
 
 
 class McpReadClient(Protocol):
@@ -98,7 +93,7 @@ async def _get_metrics(runtime: McpReadRuntime) -> str:
 
 
 def register_read_only_tools(
-    server: McpToolRegistrar,
+    tool: McpToolRegistrar,
     runtime: McpReadRuntime,
     *,
     annotations_factory: Any,
@@ -123,7 +118,7 @@ def register_read_only_tools(
         open_world_hint=True,
     )
 
-    @server.tool(
+    @tool(
         name="vnc_get_status",
         description="Return the controller's current connection and lifecycle status.",
         annotations=closed_world,
@@ -133,7 +128,7 @@ def register_read_only_tools(
         """Return controller status without mutating the desktop."""
         return await _get_status(runtime)
 
-    @server.tool(
+    @tool(
         name="vnc_get_display",
         description="Return current framebuffer geometry, revision, and completeness.",
         annotations=closed_world,
@@ -143,7 +138,7 @@ def register_read_only_tools(
         """Return current display metadata without capturing image bytes."""
         return await _get_display(runtime)
 
-    @server.tool(
+    @tool(
         name="vnc_get_clipboard",
         description="Return the controller's current clipboard text and revision metadata.",
         annotations=open_world,
@@ -163,14 +158,14 @@ def register_read_only_tools(
     vnc_get_command_status.__annotations__["command_id"] = Annotated[
         int, positive_command_id_metadata
     ]
-    server.tool(
+    tool(
         name="vnc_get_command_status",
         description="Return retained lifecycle state for a controller command ID.",
         annotations=closed_world,
         structured_output=True,
     )(vnc_get_command_status)
 
-    @server.tool(
+    @tool(
         name="vnc_get_metrics",
         description="Return the controller's bounded Prometheus metrics text.",
         annotations=closed_world,
