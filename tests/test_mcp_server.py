@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import builtins
 import importlib
 import io
@@ -165,6 +166,24 @@ class McpServerScaffoldTests(unittest.TestCase):
         self.assertIs(components.server_factory, _fake_server_factory)
         self.assertIs(components.image_factory, image_factory)
         self.assertIs(components.call_tool_result_factory, SimpleNamespace)
+
+    def test_exact_sdk_image_helper_produces_native_content(self) -> None:
+        """The pinned SDK emits ImageContent and preserves structured metadata."""
+        components = mcp_server.load_mcp_sdk_components()
+        payload = b"\x89PNG\r\n\x1a\nMCP-NATIVE-IMAGE-CONTRACT"
+        image = components.image_factory(data=payload, format="png")
+        content = image.to_image_content()
+        self.assertEqual(content.type, "image")
+        self.assertEqual(content.mime_type, "image/png")
+        self.assertEqual(base64.b64decode(content.data, validate=True), payload)
+
+        metadata = {"request_id": "sdk-contract"}
+        result = components.call_tool_result_factory(
+            content=[content],
+            structured_content=metadata,
+        )
+        self.assertEqual(result.content, [content])
+        self.assertEqual(result.structured_content, metadata)
 
     def test_missing_optional_dependency_fails_explicitly(self) -> None:
         """Requesting MCP without the extra gives an actionable hard failure."""
