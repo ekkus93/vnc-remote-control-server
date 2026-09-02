@@ -40,6 +40,24 @@ def _fake_field_factory(**kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(**kwargs)
 
 
+def _fake_image_factory(**kwargs: Any) -> SimpleNamespace:
+    """Return an SDK-like image helper without importing MCP."""
+
+    def to_image_content() -> SimpleNamespace:
+        return SimpleNamespace(
+            type="image",
+            data=kwargs["data"],
+            mime_type=f"image/{kwargs['format']}",
+        )
+
+    return SimpleNamespace(to_image_content=to_image_content)
+
+
+def _fake_call_tool_result_factory(**kwargs: Any) -> SimpleNamespace:
+    """Return an inspectable SDK-like CallToolResult."""
+    return SimpleNamespace(**kwargs)
+
+
 def _config(*, transport: str = "stdio", allow_mutations: bool = False) -> McpConfig:
     """Return a typed stand-in for validated configuration."""
     client = mock.create_autospec(VncRemoteControlClient, instance=True)
@@ -58,6 +76,8 @@ def _components() -> mcp_server.McpSdkComponents:
         server_factory=_fake_server_factory,
         annotations_factory=_fake_annotations_factory,
         field_factory=_fake_field_factory,
+        image_factory=_fake_image_factory,
+        call_tool_result_factory=_fake_call_tool_result_factory,
     )
 
 
@@ -124,6 +144,8 @@ class McpServerScaffoldTests(unittest.TestCase):
             server_factory=_fake_server_factory,
             annotations_factory=fail_annotations,
             field_factory=_fake_field_factory,
+            image_factory=_fake_image_factory,
+            call_tool_result_factory=_fake_call_tool_result_factory,
         )
         with self.assertRaisesRegex(RuntimeError, "annotation setup failed"):
             mcp_server.create_mcp_server(
@@ -136,18 +158,31 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_sdk_loader_uses_exact_v2_modules_and_symbols(self) -> None:
         """The reviewed SDK paths are explicit rather than compatibility-probed."""
+        image_factory = mock.Mock()
+        image_factory.to_image_content = mock.Mock()
         modules = [
             SimpleNamespace(MCPServer=_fake_server_factory),
-            SimpleNamespace(ToolAnnotations=_fake_annotations_factory),
+            SimpleNamespace(Image=image_factory),
+            SimpleNamespace(
+                ToolAnnotations=_fake_annotations_factory,
+                CallToolResult=_fake_call_tool_result_factory,
+            ),
             SimpleNamespace(Field=_fake_field_factory),
         ]
         with mock.patch.object(mcp_server, "import_module", side_effect=modules) as loader:
             components = mcp_server.load_mcp_sdk_components()
         self.assertEqual(
             [call.args[0] for call in loader.call_args_list],
-            ["mcp.server.mcpserver", "mcp_types", "pydantic"],
+            [
+                "mcp.server.mcpserver",
+                "mcp.server.mcpserver.utilities.types",
+                "mcp_types",
+                "pydantic",
+            ],
         )
         self.assertIs(components.server_factory, _fake_server_factory)
+        self.assertIs(components.image_factory, image_factory)
+        self.assertIs(components.call_tool_result_factory, _fake_call_tool_result_factory)
 
     def test_missing_optional_dependency_fails_explicitly(self) -> None:
         """Requesting MCP without the extra gives an actionable hard failure."""
@@ -162,15 +197,33 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_incompatible_optional_dependency_fails_explicitly(self) -> None:
         """An installed but incompatible SDK never falls back to another API."""
+        image_factory = mock.Mock()
+        image_factory.to_image_content = mock.Mock()
         modules = [
             SimpleNamespace(MCPServer=_fake_server_factory),
-            SimpleNamespace(),
+            SimpleNamespace(Image=image_factory),
+            SimpleNamespace(ToolAnnotations=_fake_annotations_factory),
             SimpleNamespace(Field=_fake_field_factory),
         ]
         with mock.patch.object(mcp_server, "import_module", side_effect=modules):
             with self.assertRaises(mcp_server.McpDependencyError) as context:
                 mcp_server.load_mcp_sdk_components()
-        self.assertIn("MCPServer/ToolAnnotations/Field", str(context.exception))
+        self.assertIn("MCPServer/Image/ToolAnnotations/CallToolResult/Field", str(context.exception))
+
+    def test_image_helper_without_native_conversion_fails_explicitly(self) -> None:
+        """A callable lookalike Image symbol cannot silently downgrade to text output."""
+        modules = [
+            SimpleNamespace(MCPServer=_fake_server_factory),
+            SimpleNamespace(Image=mock.Mock()),
+            SimpleNamespace(
+                ToolAnnotations=_fake_annotations_factory,
+                CallToolResult=_fake_call_tool_result_factory,
+            ),
+            SimpleNamespace(Field=_fake_field_factory),
+        ]
+        with mock.patch.object(mcp_server, "import_module", side_effect=modules):
+            with self.assertRaises(mcp_server.McpDependencyError):
+                mcp_server.load_mcp_sdk_components()
 
     def test_mutation_opt_in_fails_until_mutation_catalog_exists(self) -> None:
         """An explicit mutation request is never silently downgraded to read-only."""
@@ -188,6 +241,8 @@ class McpServerScaffoldTests(unittest.TestCase):
             server_factory=_fake_server_factory,
             annotations_factory=_fake_annotations_factory,
             field_factory=field_factory,
+            image_factory=_fake_image_factory,
+            call_tool_result_factory=_fake_call_tool_result_factory,
         )
         executor = _executor_mock()
         mcp_server.create_mcp_server(
