@@ -195,6 +195,7 @@ def _validation_error(message: str) -> McpMutationValidationError:
 
 
 def _require_coordinate(value: Any) -> int:
+    """Return one strict unsigned-32-bit coordinate or fail before mutation."""
     if not isinstance(value, int) or isinstance(value, bool):
         raise _validation_error("pointer coordinate must be an integer")
     if not 0 <= value <= _MAX_COORDINATE:
@@ -203,18 +204,21 @@ def _require_coordinate(value: Any) -> int:
 
 
 def _require_button(value: Any) -> MouseButton:
-    if value not in {"left", "middle", "right"} or not isinstance(value, str):
+    """Return one exact public mouse-button value."""
+    if not isinstance(value, str) or value not in {"left", "middle", "right"}:
         raise _validation_error("pointer button is not supported")
     return cast(MouseButton, value)
 
 
 def _require_boolean(value: Any) -> bool:
+    """Return a strict boolean without truthy coercion."""
     if not isinstance(value, bool):
         raise _validation_error("pointer pressed state must be a boolean")
     return value
 
 
 def _require_interval_ms(value: Any) -> int:
+    """Return one strict bounded double-click interval."""
     if not isinstance(value, int) or isinstance(value, bool):
         raise _validation_error("double-click interval must be an integer")
     if not _MIN_DOUBLE_CLICK_INTERVAL_MS <= value <= _MAX_DOUBLE_CLICK_INTERVAL_MS:
@@ -223,6 +227,7 @@ def _require_interval_ms(value: Any) -> int:
 
 
 def _require_delta_y(value: Any) -> int:
+    """Return one strict bounded vertical scroll delta."""
     if not isinstance(value, int) or isinstance(value, bool):
         raise _validation_error("vertical scroll delta must be an integer")
     if not -_MAX_SCROLL_STEPS <= value <= _MAX_SCROLL_STEPS:
@@ -231,22 +236,25 @@ def _require_delta_y(value: Any) -> int:
 
 
 def _require_keyboard_key(value: Any) -> str:
+    """Return one supported symbolic key or printable ASCII character."""
     if not isinstance(value, str):
         raise _validation_error("keyboard key must be a string")
     if value in _SYMBOLIC_KEYS:
         return value
-    if len(value) == 1 and (value.isascii() and " " <= value <= "~"):
+    if len(value) == 1 and value.isascii() and " " <= value <= "~":
         return value
     raise _validation_error("keyboard key is not supported")
 
 
 def _require_key_action(value: Any) -> KeyAction:
-    if value not in {"down", "up"} or not isinstance(value, str):
+    """Return one exact keyboard action without coercion."""
+    if not isinstance(value, str) or value not in {"down", "up"}:
         raise _validation_error("keyboard action is not supported")
     return cast(KeyAction, value)
 
 
 def _require_chord(keys: Any) -> list[str]:
+    """Return one fully preflighted one-to-sixteen-key chord."""
     if not isinstance(keys, list):
         raise _validation_error("keyboard chord must be an array")
     if not 1 <= len(keys) <= _MAX_CHORD_KEYS:
@@ -257,6 +265,7 @@ def _require_chord(keys: Any) -> list[str]:
 
 
 def _require_keyboard_text(text: Any) -> str:
+    """Return bounded tab/CR/LF/printable-ASCII text without echoing payloads."""
     if not isinstance(text, str):
         raise _validation_error("keyboard text must be a string")
     if len(text) > _MAX_TEXT_BYTES:
@@ -270,6 +279,7 @@ def _require_keyboard_text(text: Any) -> str:
 
 
 def _require_clipboard_text(text: Any) -> str:
+    """Return valid bounded UTF-8 clipboard text without echoing its contents."""
     if not isinstance(text, str):
         raise _validation_error("clipboard text must be a string")
     if "\x00" in text:
@@ -286,6 +296,7 @@ def _require_clipboard_text(text: Any) -> str:
 
 
 async def _move_pointer(runtime: McpMutationRuntime, x: Any, y: Any) -> CommandResponse:
+    """Preflight and issue exactly one pointer-move call."""
     return await runtime.executor.call(
         runtime.client.move_pointer,
         _require_coordinate(x),
@@ -300,6 +311,7 @@ async def _set_pointer_button(
     button: Any,
     pressed: Any,
 ) -> CommandResponse:
+    """Preflight and issue exactly one pointer-button call."""
     return await runtime.executor.call(
         runtime.client.set_pointer_button,
         _require_coordinate(x),
@@ -315,6 +327,7 @@ async def _click_pointer(
     y: Any,
     button: Any,
 ) -> CommandResponse:
+    """Preflight and issue exactly one pointer-click call."""
     return await runtime.executor.call(
         runtime.client.click_pointer,
         _require_coordinate(x),
@@ -330,6 +343,7 @@ async def _double_click_pointer(
     button: Any,
     interval_ms: Any,
 ) -> CommandResponse:
+    """Preflight and issue exactly one pointer-double-click call."""
     return await runtime.executor.call(
         runtime.client.double_click_pointer,
         _require_coordinate(x),
@@ -345,6 +359,7 @@ async def _scroll_pointer(
     y: Any,
     delta_y: Any,
 ) -> CommandResponse:
+    """Preflight and issue one vertical-only pointer-scroll call."""
     return await runtime.executor.call(
         runtime.client.scroll_pointer,
         _require_coordinate(x),
@@ -358,6 +373,7 @@ async def _set_keyboard_key(
     key: Any,
     action: Any,
 ) -> CommandResponse:
+    """Preflight and issue exactly one keyboard-key call."""
     return await runtime.executor.call(
         runtime.client.set_keyboard_key,
         _require_keyboard_key(key),
@@ -369,6 +385,7 @@ async def _send_keyboard_chord(
     runtime: McpMutationRuntime,
     keys: Any,
 ) -> CommandResponse:
+    """Preflight the complete chord before issuing one controller call."""
     return await runtime.executor.call(
         runtime.client.send_keyboard_chord,
         _require_chord(keys),
@@ -379,6 +396,7 @@ async def _type_keyboard_text(
     runtime: McpMutationRuntime,
     text: Any,
 ) -> CommandResponse:
+    """Preflight the complete sensitive text before issuing one controller call."""
     return await runtime.executor.call(
         runtime.client.type_keyboard_text,
         _require_keyboard_text(text),
@@ -389,6 +407,7 @@ async def _set_clipboard(
     runtime: McpMutationRuntime,
     text: Any,
 ) -> CommandResponse:
+    """Preflight the complete sensitive clipboard before one controller call."""
     return await runtime.executor.call(
         runtime.client.set_clipboard,
         _require_clipboard_text(text),
@@ -396,6 +415,7 @@ async def _set_clipboard(
 
 
 async def _request_reconnect(runtime: McpMutationRuntime) -> CommandResponse:
+    """Issue exactly one controller-managed reconnect request."""
     return await runtime.executor.call(runtime.client.request_reconnect)
 
 
@@ -419,6 +439,206 @@ def _register(
     )(function)
 
 
+def _register_pointer_tools(
+    tool: McpToolRegistrar,
+    runtime: McpMutationRuntime,
+    *,
+    annotations: Any,
+    schema: McpMutationSchemaMetadata,
+) -> None:
+    """Register the five bounded pointer mutation tools."""
+
+    async def vnc_move_pointer(x: int, y: int) -> CommandResponse:
+        """Move the remote pointer without changing button state."""
+        return await _move_pointer(runtime, x, y)
+
+    _register(
+        tool,
+        vnc_move_pointer,
+        name="vnc_move_pointer",
+        description="Move the remote pointer without changing button state.",
+        annotations=annotations,
+        parameter_annotations={
+            "x": Annotated[int, schema.coordinate],
+            "y": Annotated[int, schema.coordinate],
+        },
+    )
+
+    async def vnc_set_pointer_button(
+        x: int,
+        y: int,
+        button: MouseButton,
+        pressed: bool,
+    ) -> CommandResponse:
+        """Move the pointer and set one mouse button state."""
+        return await _set_pointer_button(runtime, x, y, button, pressed)
+
+    _register(
+        tool,
+        vnc_set_pointer_button,
+        name="vnc_set_pointer_button",
+        description="Move the pointer and set one mouse button pressed or released.",
+        annotations=annotations,
+        parameter_annotations={
+            "x": Annotated[int, schema.coordinate],
+            "y": Annotated[int, schema.coordinate],
+            "button": MouseButton,
+            "pressed": Annotated[bool, schema.boolean],
+        },
+    )
+
+    async def vnc_click_pointer(
+        x: int,
+        y: int,
+        button: MouseButton,
+    ) -> CommandResponse:
+        """Move the pointer and click one mouse button once."""
+        return await _click_pointer(runtime, x, y, button)
+
+    _register(
+        tool,
+        vnc_click_pointer,
+        name="vnc_click_pointer",
+        description="Move the pointer and click one mouse button once.",
+        annotations=annotations,
+        parameter_annotations={
+            "x": Annotated[int, schema.coordinate],
+            "y": Annotated[int, schema.coordinate],
+            "button": MouseButton,
+        },
+    )
+
+    async def vnc_double_click_pointer(
+        x: int,
+        y: int,
+        button: MouseButton,
+        interval_ms: int,
+    ) -> CommandResponse:
+        """Move the pointer and double-click with a bounded interval."""
+        return await _double_click_pointer(runtime, x, y, button, interval_ms)
+
+    _register(
+        tool,
+        vnc_double_click_pointer,
+        name="vnc_double_click_pointer",
+        description="Move the pointer and double-click with a bounded interval.",
+        annotations=annotations,
+        parameter_annotations={
+            "x": Annotated[int, schema.coordinate],
+            "y": Annotated[int, schema.coordinate],
+            "button": MouseButton,
+            "interval_ms": Annotated[int, schema.interval_ms],
+        },
+    )
+
+    async def vnc_scroll_pointer(x: int, y: int, delta_y: int) -> CommandResponse:
+        """Move the pointer and apply bounded vertical wheel steps."""
+        return await _scroll_pointer(runtime, x, y, delta_y)
+
+    _register(
+        tool,
+        vnc_scroll_pointer,
+        name="vnc_scroll_pointer",
+        description="Move the pointer and apply bounded vertical wheel steps.",
+        annotations=annotations,
+        parameter_annotations={
+            "x": Annotated[int, schema.coordinate],
+            "y": Annotated[int, schema.coordinate],
+            "delta_y": Annotated[int, schema.delta_y],
+        },
+    )
+
+
+def _register_keyboard_tools(
+    tool: McpToolRegistrar,
+    runtime: McpMutationRuntime,
+    *,
+    annotations: Any,
+    schema: McpMutationSchemaMetadata,
+) -> None:
+    """Register the three bounded keyboard mutation tools."""
+
+    async def vnc_set_keyboard_key(key: str, action: KeyAction) -> CommandResponse:
+        """Press or release one controller-supported keyboard key."""
+        return await _set_keyboard_key(runtime, key, action)
+
+    _register(
+        tool,
+        vnc_set_keyboard_key,
+        name="vnc_set_keyboard_key",
+        description="Press or release one controller-supported keyboard key.",
+        annotations=annotations,
+        parameter_annotations={
+            "key": Annotated[str, schema.keyboard_key],
+            "action": KeyAction,
+        },
+    )
+
+    async def vnc_send_keyboard_chord(keys: list[str]) -> CommandResponse:
+        """Send one bounded controller-supported keyboard chord."""
+        return await _send_keyboard_chord(runtime, keys)
+
+    _register(
+        tool,
+        vnc_send_keyboard_chord,
+        name="vnc_send_keyboard_chord",
+        description="Press and release one bounded controller-supported keyboard chord.",
+        annotations=annotations,
+        parameter_annotations={
+            "keys": Annotated[
+                list[Annotated[str, schema.keyboard_key]],
+                schema.chord,
+            ],
+        },
+    )
+
+    async def vnc_type_keyboard_text(text: str) -> CommandResponse:
+        """Type bounded tab/CR/LF/printable-ASCII text on the remote desktop."""
+        return await _type_keyboard_text(runtime, text)
+
+    _register(
+        tool,
+        vnc_type_keyboard_text,
+        name="vnc_type_keyboard_text",
+        description="Type bounded tab/CR/LF/printable-ASCII text on the remote desktop.",
+        annotations=annotations,
+        parameter_annotations={"text": Annotated[str, schema.text]},
+    )
+
+
+def _register_clipboard_and_reconnect_tools(
+    tool: McpToolRegistrar,
+    runtime: McpMutationRuntime,
+    *,
+    annotations: Any,
+    schema: McpMutationSchemaMetadata,
+) -> None:
+    """Register bounded clipboard and reconnect mutation tools."""
+
+    async def vnc_set_clipboard(text: str) -> CommandResponse:
+        """Set bounded valid-UTF-8 clipboard text without logging it."""
+        return await _set_clipboard(runtime, text)
+
+    _register(
+        tool,
+        vnc_set_clipboard,
+        name="vnc_set_clipboard",
+        description="Set bounded valid-UTF-8 clipboard text without logging the payload.",
+        annotations=annotations,
+        parameter_annotations={"text": Annotated[str, schema.clipboard]},
+    )
+
+    @tool(
+        name="vnc_request_reconnect",
+        description="Request one controller-managed reconnect to the remote desktop.",
+        annotations=annotations,
+        structured_output=True,
+    )
+    async def vnc_request_reconnect() -> CommandResponse:
+        """Request one controller-managed reconnect."""
+        return await _request_reconnect(runtime)
+
+
 def register_mutation_tools(
     tool: McpToolRegistrar,
     runtime: McpMutationRuntime,
@@ -433,163 +653,21 @@ def register_mutation_tools(
         idempotent_hint=False,
         open_world_hint=True,
     )
-
-    async def vnc_move_pointer(x: int, y: int) -> CommandResponse:
-        return await _move_pointer(runtime, x, y)
-
-    _register(
+    _register_pointer_tools(
         tool,
-        vnc_move_pointer,
-        name="vnc_move_pointer",
-        description="Move the remote pointer without changing button state.",
+        runtime,
         annotations=mutation_annotations,
-        parameter_annotations={
-            "x": Annotated[int, schema.coordinate],
-            "y": Annotated[int, schema.coordinate],
-        },
+        schema=schema,
     )
-
-    async def vnc_set_pointer_button(
-        x: int,
-        y: int,
-        button: MouseButton,
-        pressed: bool,
-    ) -> CommandResponse:
-        return await _set_pointer_button(runtime, x, y, button, pressed)
-
-    _register(
+    _register_keyboard_tools(
         tool,
-        vnc_set_pointer_button,
-        name="vnc_set_pointer_button",
-        description="Move the pointer and set one mouse button pressed or released.",
+        runtime,
         annotations=mutation_annotations,
-        parameter_annotations={
-            "x": Annotated[int, schema.coordinate],
-            "y": Annotated[int, schema.coordinate],
-            "button": MouseButton,
-            "pressed": Annotated[bool, schema.boolean],
-        },
+        schema=schema,
     )
-
-    async def vnc_click_pointer(
-        x: int,
-        y: int,
-        button: MouseButton,
-    ) -> CommandResponse:
-        return await _click_pointer(runtime, x, y, button)
-
-    _register(
+    _register_clipboard_and_reconnect_tools(
         tool,
-        vnc_click_pointer,
-        name="vnc_click_pointer",
-        description="Move the pointer and click one mouse button once.",
+        runtime,
         annotations=mutation_annotations,
-        parameter_annotations={
-            "x": Annotated[int, schema.coordinate],
-            "y": Annotated[int, schema.coordinate],
-            "button": MouseButton,
-        },
+        schema=schema,
     )
-
-    async def vnc_double_click_pointer(
-        x: int,
-        y: int,
-        button: MouseButton,
-        interval_ms: int,
-    ) -> CommandResponse:
-        return await _double_click_pointer(runtime, x, y, button, interval_ms)
-
-    _register(
-        tool,
-        vnc_double_click_pointer,
-        name="vnc_double_click_pointer",
-        description="Move the pointer and double-click with a bounded interval.",
-        annotations=mutation_annotations,
-        parameter_annotations={
-            "x": Annotated[int, schema.coordinate],
-            "y": Annotated[int, schema.coordinate],
-            "button": MouseButton,
-            "interval_ms": Annotated[int, schema.interval_ms],
-        },
-    )
-
-    async def vnc_scroll_pointer(x: int, y: int, delta_y: int) -> CommandResponse:
-        return await _scroll_pointer(runtime, x, y, delta_y)
-
-    _register(
-        tool,
-        vnc_scroll_pointer,
-        name="vnc_scroll_pointer",
-        description="Move the pointer and apply bounded vertical wheel steps.",
-        annotations=mutation_annotations,
-        parameter_annotations={
-            "x": Annotated[int, schema.coordinate],
-            "y": Annotated[int, schema.coordinate],
-            "delta_y": Annotated[int, schema.delta_y],
-        },
-    )
-
-    async def vnc_set_keyboard_key(key: str, action: KeyAction) -> CommandResponse:
-        return await _set_keyboard_key(runtime, key, action)
-
-    _register(
-        tool,
-        vnc_set_keyboard_key,
-        name="vnc_set_keyboard_key",
-        description="Press or release one controller-supported keyboard key.",
-        annotations=mutation_annotations,
-        parameter_annotations={
-            "key": Annotated[str, schema.keyboard_key],
-            "action": KeyAction,
-        },
-    )
-
-    async def vnc_send_keyboard_chord(keys: list[str]) -> CommandResponse:
-        return await _send_keyboard_chord(runtime, keys)
-
-    _register(
-        tool,
-        vnc_send_keyboard_chord,
-        name="vnc_send_keyboard_chord",
-        description="Press and release one bounded controller-supported keyboard chord.",
-        annotations=mutation_annotations,
-        parameter_annotations={
-            "keys": Annotated[
-                list[Annotated[str, schema.keyboard_key]],
-                schema.chord,
-            ],
-        },
-    )
-
-    async def vnc_type_keyboard_text(text: str) -> CommandResponse:
-        return await _type_keyboard_text(runtime, text)
-
-    _register(
-        tool,
-        vnc_type_keyboard_text,
-        name="vnc_type_keyboard_text",
-        description="Type bounded tab/CR/LF/printable-ASCII text on the remote desktop.",
-        annotations=mutation_annotations,
-        parameter_annotations={"text": Annotated[str, schema.text]},
-    )
-
-    async def vnc_set_clipboard(text: str) -> CommandResponse:
-        return await _set_clipboard(runtime, text)
-
-    _register(
-        tool,
-        vnc_set_clipboard,
-        name="vnc_set_clipboard",
-        description="Set bounded valid-UTF-8 clipboard text without logging the payload.",
-        annotations=mutation_annotations,
-        parameter_annotations={"text": Annotated[str, schema.clipboard]},
-    )
-
-    @tool(
-        name="vnc_request_reconnect",
-        description="Request one controller-managed reconnect to the remote desktop.",
-        annotations=mutation_annotations,
-        structured_output=True,
-    )
-    async def vnc_request_reconnect() -> CommandResponse:
-        return await _request_reconnect(runtime)
