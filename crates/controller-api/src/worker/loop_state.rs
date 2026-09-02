@@ -377,20 +377,12 @@ impl<S: WorkerSession> LoopState<'_, S> {
                 delta_y,
             } => {
                 let display = self.current_display()?;
-                let result = {
-                    let session = self
-                        .session
-                        .as_mut()
-                        .ok_or(DesktopError::WorkerUnavailable)?;
-                    self.input
-                        .scroll(session, coordinate, display, delta_x, delta_y)
-                };
-                if self.input.pointer_state_uncertain() {
-                    tracing::warn!("worker_input_pointer_state_uncertain");
-                    self.invalidate()?;
-                    self.schedule_reconnect()?;
-                }
-                result
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or(DesktopError::WorkerUnavailable)?;
+                self.input
+                    .scroll(session, coordinate, display, delta_x, delta_y)
             }
             WorkerCommand::SetKey { key, pressed } => {
                 let session = self
