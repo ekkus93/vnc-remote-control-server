@@ -6,7 +6,7 @@ import inspect
 import unittest
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, ParamSpec, TypeVar, get_args, get_origin, Annotated
+from typing import Annotated, Any, ParamSpec, TypeVar, get_args, get_origin
 
 from vnc_remote_control.mcp_tools import McpReadRuntime, register_read_only_tools
 from vnc_remote_control.models import (
@@ -106,7 +106,11 @@ class FakeClient:
 
     def get_clipboard(self) -> ClipboardResponse:
         """Return deterministic clipboard state."""
-        return ClipboardResponse(text="sensitive clipboard", revision=10, updated_at_unix_ms=11)
+        return ClipboardResponse(
+            text="sensitive clipboard",
+            revision=10,
+            updated_at_unix_ms=11,
+        )
 
     def get_command_status(self, command_id: int) -> CommandStatusResponse:
         """Return deterministic retained command state."""
@@ -182,7 +186,10 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(annotations.read_only_hint)
             self.assertFalse(annotations.destructive_hint)
             self.assertTrue(annotations.idempotent_hint)
-            self.assertEqual(annotations.open_world_hint, name == "vnc_get_clipboard")
+            self.assertEqual(
+                annotations.open_world_hint,
+                name == "vnc_get_clipboard",
+            )
 
     async def test_handlers_map_once_to_exact_typed_client_methods(self) -> None:
         """Every handler invokes exactly one intended typed-client method."""
