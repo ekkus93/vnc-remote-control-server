@@ -85,6 +85,7 @@ pub(super) fn classify_native_error(error: &NativeError) -> WorkerFailureKind {
         | NativeError::ClipboardTooLarge { .. }
         | NativeError::ClipboardNotUtf8 => WorkerFailureKind::Protocol,
         NativeError::AllocationFailed
+        | NativeError::FramebufferRevisionExhausted
         | NativeError::ClipboardAllocationFailed
         | NativeError::ClipboardStateInvalid
         | NativeError::ClipboardRevisionExhausted
@@ -171,6 +172,14 @@ mod tests {
         for (error, expected) in cases {
             assert_eq!(classify_desktop_error(&error), expected, "{error}");
         }
+    }
+
+    #[test]
+    fn framebuffer_revision_exhaustion_is_classified_as_native_failure() {
+        assert_eq!(
+            classify_native_error(&NativeError::FramebufferRevisionExhausted),
+            WorkerFailureKind::Native
+        );
     }
 
     #[test]
