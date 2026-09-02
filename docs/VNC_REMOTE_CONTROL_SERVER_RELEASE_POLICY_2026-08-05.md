@@ -51,6 +51,8 @@ Release Gates builds the controller and desktop release images from the candidat
 
 The release gate pins the Rust stable and nightly toolchains, cargo-deny, actionlint, Gitleaks, Trivy, and GitHub Actions by immutable version or commit. Downloaded release archives are checked against the publisher-provided checksum manifest before installation.
 
+Every permanent third-party GitHub Action reference under `.github/workflows/*.yml` or `.yaml` must use a full 40-hex commit SHA. Mutable tags, branches, aliases such as `@stable`, and major-version refs such as `@v4` are prohibited even when an action input separately pins the tool it installs. Repository-local actions referenced through `./...` are exempt because their implementation is already fixed by the candidate commit. The release-policy contract scans every permanent workflow file and fails closed on any non-local mutable `uses:` reference.
+
 ## Metric and API naming compatibility
 
 Exported metric and API names must describe the represented value. A misleading pre-release name may be corrected without an alias only when a repository-wide search confirms that no shipped API schema, dashboard, alert, deployment example, operator contract, or permanent integration test consumes it. The evidence must record the search and the compatibility decision. Once an external consumer is identified, a rename requires a documented compatibility window or an explicit breaking-release decision.
