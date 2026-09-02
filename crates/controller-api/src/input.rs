@@ -332,10 +332,9 @@ impl InputController {
     /// the session and clearing state for a replacement does that.
     pub(crate) fn release_all<S: InputSink>(&mut self, sink: &mut S) -> InputReleaseReport {
         let mut report = InputReleaseReport::default();
-        if self.button_mask != 0
-            || (self.input_state_uncertain() && self.last_coordinate.is_some())
-        {
-            match self.last_coordinate {
+        let last_coordinate = self.last_coordinate;
+        if self.button_mask != 0 || (self.input_state_uncertain() && last_coordinate.is_some()) {
+            match last_coordinate {
                 Some(coordinate) if self.send_pointer(sink, coordinate, 0).is_ok() => {
                     self.button_mask = 0;
                 }
