@@ -13,9 +13,11 @@ dependencies = []
 
 [project.optional-dependencies]
 websocket = ["websocket-client>=1.8,<2"]
+mcp = ["mcp==2.1.1"]
 
 [project.scripts]
 vnc-remote-control-demo = "vnc_remote_control.demo:main"
+vnc-remote-control-mcp = "vnc_remote_control.mcp_server:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
