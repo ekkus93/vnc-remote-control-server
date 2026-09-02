@@ -2,14 +2,15 @@
 //!
 //! V2 makes `InputController::input_state_uncertain()` authoritative for all
 //! input operations and centralizes quarantine in the worker dispatch loop. The
-//! older scroll arm still probes its former pointer-specific method; this bridge
-//! deliberately aliases that probe to the aggregate state until the large
-//! worker loop module can be simplified without a broad unrelated rewrite.
+//! older scroll arm still calls its former pointer-specific probe; this bridge
+//! keeps that stale call compile-compatible but deliberately inert so scroll is
+//! quarantined only by the same aggregate post-command policy as every other
+//! input mutation.
 
 use crate::input::InputController;
 
 impl InputController {
     pub(crate) const fn pointer_state_uncertain(&self) -> bool {
-        self.input_state_uncertain()
+        false
     }
 }
