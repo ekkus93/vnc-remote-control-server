@@ -4,8 +4,10 @@
 **Repository:** `ekkus93/vnc-remote-control-server`  
 **Reviewed baseline:** `2506686ecdd77ddbfcc106d0109d6f7198233808`  
 **Working branch:** `ralph/code-review-remediation-v2-20260901`  
-**Exact final candidate SHA:** recorded externally in PR #28 after the final evidence/TODO reconciliation commit  
-**Merged master / final master gates:** pending
+**Exact final implementation candidate SHA:** `4f0904ab1976660eaf23fb4fd2fb1052855503fb` (PR #28)
+**Final validated master SHA:** `4956a624be10ddb4b23aa23bcea23560b9c13a24`
+**Final master CI:** `33666006266` — success
+**Final master Release Gates:** `33666005936` — success
 
 This file is cumulative V2 evidence. Historical or superseded green workflow runs are useful provenance, but they do not substitute for the final exact-candidate pair or the final merged-`master` pair.
 
@@ -231,7 +233,7 @@ No public HTTP/OpenAPI status shape changed, so no OpenAPI or Python client wire
 
 New V2 diagnostics contain command IDs, bounded counts/categories, configured numeric limits or fixed error text only. They do not include typed text, clipboard payloads, framebuffer pixels, bearer tokens or VNC passwords.
 
-MCP remains unimplemented and deferred until V2 final sign-off.
+MCP remains unimplemented. V2 final sign-off is now complete, so the remediation gate that deferred MCP is satisfied and MCP may proceed as a separate phase.
 
 ## 10. Final changed-file inventory before exact-candidate freeze
 
@@ -249,6 +251,7 @@ Compared with baseline `2506686ecdd77ddbfcc106d0109d6f7198233808`, V2 changes in
 - `crates/controller-api/src/worker/run.rs`
 - `crates/controller-api/src/worker/tests/clipboard_and_input.rs`
 - `crates/controller-api/src/worker/tests/mod.rs`
+- `crates/controller-api/src/worker/tests/lifecycle.rs`
 - `crates/controller-api/src/worker/tests/v2_regressions.rs`
 - `crates/controller-api/tests/v2_runtime_limits.rs`
 - `crates/libvnc-adapter/native/vnc_shim.c`
@@ -286,12 +289,55 @@ The final candidate run must cover at least:
 
 No earlier green generation substitutes for the final post-reconciliation head.
 
-## 12. Final-signoff items pending after candidate freeze
+## 12. Final validation and closeout
 
-The following evidence is populated only after the final reconciliation commit and/or merge:
+### Accepted PR #28 implementation candidate
 
-- exact final candidate SHA and its CI/Release Gates IDs/conclusions (recorded in PR #28 and then summarized here after merge if useful);
-- exact merged `master` SHA;
-- final `master` CI and Release Gates IDs/conclusions;
-- final validation-time VEX re-review;
-- final V2 completion declaration.
+The final V2 implementation candidate was `4f0904ab1976660eaf23fb4fd2fb1052855503fb` in PR #28. Both permanent workflows passed on that exact generation:
+
+- CI `33593375859`: **success**;
+- Release Gates `33593375791`: **success**.
+
+Those runs cover the complete R8 matrix required by the permanent workflows: Rust formatting/Clippy/workspace tests/rustdoc; Python compile/Ruff/Pylint/mypy/unittest; shell syntax/ShellCheck/actionlint; cargo-deny/Gitleaks/auditable release-binary verification; Dockerfile/Compose checks; ASan, both TSan scopes and Miri; Trivy inventories, CycloneDX SBOM generation and exact CRITICAL VEX enforcement; and desktop/native/WorkerHandle/HTTP/Compose/R13 integration gates.
+
+### First merged-master validation and race-test correction
+
+PR #28 merged as `b11c7c0b6cf7b1386fe740d609b8b5c2539f57a4`. Fresh merged-master validation produced:
+
+- Release Gates `33597230305`: **success**;
+- CI `33597230151`: **failure** with 191/192 controller tests passing because `worker::tests::lifecycle::dropped_worker_event_receiver_stops_command_service` assumed only one of two legitimate fail-closed receiver-loss linearizations.
+
+The failure did not expose a production behavior defect. It exposed a race-sensitive test contract: after the event receiver is dropped, either reconnect submission may be admitted and then fail when event publication detects receiver loss, or the worker may detect terminal receiver loss first and reject `submit()` immediately with `DesktopError::WorkerUnavailable`. Both are fail-closed; success or unrelated errors remain invalid.
+
+PR #29 changed only `crates/controller-api/src/worker/tests/lifecycle.rs` to accept those two terminal outcomes. Its exact candidate `fbb9f7fe214e6c95e6eb39ba2b3bacf1212936af` passed both permanent workflows:
+
+- CI `33626101316`: **success**;
+- Release Gates `33626101208`: **success**.
+
+No production code or release/security gate changed in PR #29.
+
+### Final exact master
+
+PR #29 merged as `4956a624be10ddb4b23aa23bcea23560b9c13a24`. Fresh workflows on that exact `master` generation both passed:
+
+- CI `33666006266`: **success**;
+- Release Gates `33666005936`: **success**.
+
+This is the authoritative final validated V2 implementation generation. Earlier green runs remain provenance and are not substituted for this exact-master pair.
+
+### Final VEX re-review
+
+At final validation time on 2026-09-02, `SECURITY.md` and `security/trivy-critical-vex.json` were re-reviewed for status and expiry. Repository metadata remains:
+
+- `reviewed_at: 2026-08-31`;
+- `expires_at: 2026-09-30`.
+
+The VEX is therefore current, and exact CRITICAL VEX enforcement passed final Release Gates `33666005936`. No VEX bypass or release-gate weakening was accepted.
+
+### Completion declaration
+
+Every applicable V2-R0 through V2-R10 requirement has been reconciled against final source, tests, workflow configuration, PR history, and exact-generation external validation. No checkbox is closed solely because a commit message claims completion. The silent-failure/fallback audit remains fail-closed: no compatibility fallback was accepted that permits normal service to continue from uncertain authoritative input, framebuffer, lifecycle, or security state.
+
+**V2 remediation is complete on final validated `master` SHA `4956a624be10ddb4b23aa23bcea23560b9c13a24`.**
+
+MCP remains unimplemented, but the remediation sign-off gate that intentionally deferred MCP is now satisfied. MCP may proceed as a separate next phase.
