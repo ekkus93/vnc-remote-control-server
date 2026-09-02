@@ -832,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_chord_failure_releases_prior_keys_but_taints_session() {
+    fn partial_chord_failed_key_down_neutralizes_ambiguous_key_and_prior_keys() {
         let mut controller = InputController::default();
         let mut sink = RecordingSink::fail_on(2);
         assert!(
@@ -845,9 +845,11 @@ mod tests {
             sink.events,
             vec![
                 Event::Key(KeyboardKey::CtrlLeft, true),
+                Event::Key(KeyboardKey::AltLeft, false),
                 Event::Key(KeyboardKey::CtrlLeft, false),
             ]
         );
+        assert!(controller.pressed_keys.is_empty());
     }
 
     #[test]
