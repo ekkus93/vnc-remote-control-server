@@ -313,11 +313,17 @@ fn dropped_worker_event_receiver_stops_command_service() {
     let event_receiver = worker.take_events().expect("single event receiver");
     drop(event_receiver);
 
-    client
-        .submit(WorkerCommand::Reconnect)
-        .expect("reconnect reaches worker")
-        .wait(Duration::from_secs(1))
-        .expect_err("event receiver loss fails the triggering command");
+    // Receiver loss may be observed either before submission or while the
+    // reconnect command is executing. Both linearizations must fail closed.
+    match client.submit(WorkerCommand::Reconnect) {
+        Ok(ticket) => {
+            ticket
+                .wait(Duration::from_secs(1))
+                .expect_err("event receiver loss fails the triggering command");
+        }
+        Err(DesktopError::WorkerUnavailable) => {}
+        Err(error) => panic!("unexpected submit failure after event receiver loss: {error:?}"),
+    }
     wait_for_state(&client, ConnectionState::Stopped);
     assert!(client.snapshot().fatal_exit);
     assert!(client.submit(WorkerCommand::RequestFullRefresh).is_err());
