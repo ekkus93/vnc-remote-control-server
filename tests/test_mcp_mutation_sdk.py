@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 from typing import Any, cast
 
+from mcp_test_support import MUTATION_TOOL_NAMES
 from vnc_remote_control.client import VncRemoteControlClient
 from vnc_remote_control.mcp_config import McpConfig
 from vnc_remote_control.mcp_server import create_mcp_server, load_mcp_sdk_components
@@ -117,20 +118,8 @@ class McpMutationPinnedSdkTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mutation_annotations_are_conservative_in_real_sdk_catalog(self) -> None:
         """All wire-visible mutation hints match the MCP-006 safety contract."""
-        mutation_names = {
-            "vnc_move_pointer",
-            "vnc_set_pointer_button",
-            "vnc_click_pointer",
-            "vnc_double_click_pointer",
-            "vnc_scroll_pointer",
-            "vnc_set_keyboard_key",
-            "vnc_send_keyboard_chord",
-            "vnc_type_keyboard_text",
-            "vnc_set_clipboard",
-            "vnc_request_reconnect",
-        }
-        self.assertTrue(mutation_names.issubset(self.tools))
-        for name in mutation_names:
+        self.assertTrue(MUTATION_TOOL_NAMES.issubset(self.tools))
+        for name in MUTATION_TOOL_NAMES:
             annotations = self.tools[name].annotations
             self.assertIsNotNone(annotations)
             self.assertFalse(annotations.read_only_hint)
