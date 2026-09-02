@@ -34,8 +34,9 @@ _CONTROLLER_MAX_FRAMEBUFFER_BYTES = 64 * 1024 * 1024
 # larger than the framebuffer, so allow a conservative 2x wire envelope while
 # still refusing an unbounded response before the SDK performs base64 expansion.
 _MAX_MCP_SCREENSHOT_PNG_BYTES = 2 * _CONTROLLER_MAX_FRAMEBUFFER_BYTES
-_MAX_ETAG_BYTES = 128
+_MAX_PROCESS_INSTANCE_BYTES = 64
 _MAX_REQUEST_ID_BYTES = 64
+_EXPECTED_CACHE_CONTROL = "private, no-cache, max-age=0"
 
 
 class McpReadClient(Protocol):
@@ -138,7 +139,7 @@ def _validate_png(data: bytes) -> None:
         data_start = offset + 8
         data_end = data_start + chunk_length
         chunk_end = data_end + 4
-        if data_end < data_start or chunk_end > len(data):
+        if chunk_end > len(data):
             raise ProtocolError("screenshot response was not a valid controller PNG")
 
         chunk_data = data[data_start:data_end]
@@ -175,28 +176,58 @@ def _validate_png(data: bytes) -> None:
         raise ProtocolError("screenshot response was not a valid controller PNG")
 
 
-def _sanitize_metadata_value(value: str | None, *, name: str, maximum: int) -> str | None:
-    """Return bounded printable-ASCII metadata or fail closed."""
-    if value is None:
-        return None
+def _is_safe_identifier(value: str, maximum: int) -> bool:
+    """Return whether value matches the controller's bounded identifier alphabet."""
     try:
         encoded = value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise ProtocolError(f"screenshot {name} metadata was invalid") from exc
-    if not encoded or len(encoded) > maximum or any(byte < 0x20 or byte > 0x7E for byte in encoded):
-        raise ProtocolError(f"screenshot {name} metadata was invalid")
+    except UnicodeEncodeError:
+        return False
+    return (
+        0 < len(encoded) <= maximum
+        and all(
+            byte in b"._-"
+            or ord("0") <= byte <= ord("9")
+            or ord("A") <= byte <= ord("Z")
+            or ord("a") <= byte <= ord("z")
+            for byte in encoded
+        )
+    )
+
+
+def _sanitize_etag(value: str | None) -> str | None:
+    """Validate the controller's strong process-instance/revision ETag shape."""
+    if value is None:
+        return None
+    if len(value) < 20 or not value.startswith('"') or not value.endswith('"'):
+        raise ProtocolError("screenshot ETag metadata was invalid")
+    instance_and_revision = value[1:-1]
+    instance, separator, revision = instance_and_revision.rpartition("-")
+    if (
+        separator != "-"
+        or not _is_safe_identifier(instance, _MAX_PROCESS_INSTANCE_BYTES)
+        or len(revision) != 16
+        or any(character not in "0123456789abcdef" for character in revision)
+    ):
+        raise ProtocolError("screenshot ETag metadata was invalid")
+    return value
+
+
+def _sanitize_request_id(value: str | None) -> str | None:
+    """Validate request IDs against the controller's public identifier contract."""
+    if value is None:
+        return None
+    if not _is_safe_identifier(value, _MAX_REQUEST_ID_BYTES):
+        raise ProtocolError("screenshot request ID metadata was invalid")
     return value
 
 
 def _screenshot_metadata(response: ScreenshotResponse) -> dict[str, str]:
     """Return only bounded metadata safe to expose beside native image content."""
+    if response.cache_control not in (None, _EXPECTED_CACHE_CONTROL):
+        raise ProtocolError("screenshot cache-control metadata was invalid")
     metadata: dict[str, str] = {}
-    etag = _sanitize_metadata_value(response.etag, name="ETag", maximum=_MAX_ETAG_BYTES)
-    request_id = _sanitize_metadata_value(
-        response.request_id,
-        name="request ID",
-        maximum=_MAX_REQUEST_ID_BYTES,
-    )
+    etag = _sanitize_etag(response.etag)
+    request_id = _sanitize_request_id(response.request_id)
     if etag is not None:
         metadata["etag"] = etag
     if request_id is not None:
