@@ -8,8 +8,9 @@ when the ``mcp`` extra is not installed.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from importlib import import_module
-from typing import Any, Callable, TypeAlias, cast
+from typing import Any, TypeAlias, cast
 
 MCP_EXTRA_REQUIREMENT = "mcp==2.1.1"
 MCP_INSTALL_HINT = 'pip install "vnc-remote-control-client[mcp]"'
