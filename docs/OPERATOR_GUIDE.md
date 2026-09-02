@@ -266,6 +266,8 @@ curl --fail-with-body \
 
 Coordinates are zero-based and must be inside the current display. They are never silently clamped.
 
+Any native pointer/key send failure is treated as having an ambiguous remote effect. The controller preserves the original command failure, performs only bounded idempotent neutralizing releases, invalidates and drops the affected VNC session, and reconnects before later input can execute. Cleanup success never makes the old session reusable, and the failed caller mutation is never automatically replayed. During quarantine/reconnect, readiness fails closed until a complete frame from the replacement session becomes authoritative.
+
 ### Keyboard key, chord, and text
 
 ```bash
@@ -413,6 +415,8 @@ For a transport interruption or desktop restart:
 - a full framebuffer is requested after reconnect;
 - readiness returns only after a complete new frame arrives.
 
+The same recovery sequence is used after an ambiguous native input failure: the original mutation remains failed, neutralizing cleanup is bounded, the old VNC session is discarded even if cleanup appears successful, and later input is not executed on that tainted session.
+
 A mismatched VNC secret is visible as `last_failure: protocol` with bounded, backoff-safe reconnect attempts rather than a rapid retry loop, because the native library does not expose trustworthy authentication-rejection evidence. Correct the VNC source secret, recreate the affected services, and verify readiness. The reserved `authentication_failed` state is not produced by the current classification.
 
 A manual reconnect request is available, but it is rate-limited and should not be used as a polling loop.
@@ -435,6 +439,7 @@ Important controller defaults:
 | JSON request body | `VRC_MAX_JSON_BYTES` | 1 MiB | maximum 2 MiB |
 | HTTP header read | `VRC_HTTP_HEADER_TIMEOUT_MS` | 5000 ms | maximum 300000 ms |
 | HTTP body read | `VRC_HTTP_BODY_TIMEOUT_MS` | 5000 ms | maximum 300000 ms |
+| Live HTTP connections | `VRC_HTTP_MAX_CONNECTIONS` | 256 | 1–65536; excess accepted sockets are closed without spawning another task |
 | HTTP shutdown drain | `VRC_SHUTDOWN_GRACE_MS` | 10000 ms | maximum 300000 ms |
 | Complete worker startup | `VRC_STARTUP_TIMEOUT_MS` | 10000 ms | one total acknowledgement-and-cleanup budget |
 | Process cleanup | `VRC_SHUTDOWN_TIMEOUT_MS` | 10500 ms | 1 ms–24 h generally, and must be at least `max(VNC connect, VNC read, poll) + 500 ms` |
@@ -457,7 +462,7 @@ Important controller defaults:
 | Stall probe | `VRC_STALL_PROBE_AFTER_MS` | 30000 ms | nonzero |
 | Stall confirmation | `VRC_STALL_CONFIRM_AFTER_MS` | 10000 ms | nonzero |
 
-Tune one limit at a time and rerun the real integration suite. Increasing queue or WebSocket capacities increases worst-case memory use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. Controller-owned millisecond durations are bounded to 1 ms through 24 hours unless a narrower downstream representation applies. The native connect/read settings keep their historical `_MS` environment names but LibVNCClient represents them as whole seconds, so values such as 1500 ms are rejected rather than rounded. The poll interval is converted to a native `u32` microsecond field and is rejected above 4,294,967 ms. `VRC_SHUTDOWN_TIMEOUT_MS` must also cover the longest configured connect/read/poll blocking window plus a 500 ms cleanup margin. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.
+Tune one limit at a time and rerun the real integration suite. Increasing queue, WebSocket, HTTP-connection, or screenshot capacities increases worst-case memory, file-descriptor, or task use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. Controller-owned millisecond durations are bounded to 1 ms through 24 hours unless a narrower downstream representation applies. The native connect/read settings keep their historical `_MS` environment names but LibVNCClient represents them as whole seconds, so values such as 1500 ms are rejected rather than rounded. The poll interval is converted to a native `u32` microsecond field and is rejected above 4,294,967 ms. `VRC_SHUTDOWN_TIMEOUT_MS` must also cover the longest configured connect/read/poll blocking window plus a 500 ms cleanup margin. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.
 
 ## 15. Troubleshooting
 
@@ -550,7 +555,7 @@ Do not serve a cached pre-disconnect screenshot as current.
 - `command_id_exhausted`: the process-local command identifier sequence is permanently exhausted; the controller can no longer safely identify new commands and must be recreated;
 - `worker_unavailable`: shutdown or worker failure prevented admission or execution;
 - `command_timeout`: the command was already admitted, the bounded HTTP wait elapsed, and the remote execution outcome is unknown. The response's `command_id` must be inspected with `GET /v1/commands/{command_id}`; do not blindly retry the mutation;
-- `desktop_operation_failed`: an admitted native VNC operation reached a known failure. The error includes the stable `command_id` and is conservatively non-retry-safe.
+- `desktop_operation_failed`: an admitted native VNC operation reached a known failure. The error includes the stable `command_id` and is conservatively non-retry-safe. For input operations, an ambiguous native send also triggers session quarantine/reconnect before later input can execute.
 
 Back off on pre-admission overload. For an admitted command with unknown or failed outcome, preserve its command ID and inspect status rather than issuing a duplicate mutation. Do not hide any of these states as successful input.
 
