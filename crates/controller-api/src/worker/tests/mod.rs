@@ -21,6 +21,7 @@ mod outcome_panic;
 mod privacy;
 mod reconnect;
 mod shutdown;
+mod v2_regressions;
 
 pub(super) struct MockSession {
     mode: Arc<Mutex<MockMode>>,

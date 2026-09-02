@@ -1,6 +1,7 @@
 use super::helpers::lock_unpoisoned;
 use remote_desktop_core::DesktopError;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Maximum process-local command outcome records retained for later inspection.
@@ -140,11 +141,45 @@ impl CommandOutcomeRegistry {
         }
     }
 
-    /// Reserves a record before queue admission.
+    /// Atomically reserves retention capacity and the next process-local ID.
     ///
-    /// Terminal records may be evicted oldest-first. Non-terminal records are
-    /// never evicted; if none can be removed, admission fails closed.
-    pub(super) fn reserve(&self, command_id: u64) -> Result<(), DesktopError> {
+    /// Capacity is checked while the registry lock is held *before* the command
+    /// sequence advances. A capacity rejection therefore cannot consume an ID
+    /// that was never retained and later make that numerical hole look expired.
+    pub(super) fn reserve_next(&self, next_command_id: &AtomicU64) -> Result<u64, DesktopError> {
+        let mut state = lock_unpoisoned(&self.state);
+        if state.entries.len() == self.capacity {
+            let Some(index) = state
+                .entries
+                .iter()
+                .position(|record| record.state.terminal())
+            else {
+                return Err(DesktopError::CommandOutcomeCapacityFull);
+            };
+            let expired = state
+                .entries
+                .remove(index)
+                .expect("terminal command outcome index must exist");
+            state.expired_through = state.expired_through.max(expired.command_id);
+        }
+
+        let command_id = next_command_id
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+                value.checked_add(1)
+            })
+            .map_err(|_| DesktopError::CommandIdExhausted)?;
+        state.highest_reserved = command_id;
+        state.entries.push_back(CommandOutcomeRecord {
+            command_id,
+            state: CommandOutcomeState::Reserved,
+            failure: None,
+        });
+        Ok(command_id)
+    }
+
+    /// Reserves an explicit record for deterministic registry unit tests.
+    #[cfg(test)]
+    fn reserve(&self, command_id: u64) -> Result<(), DesktopError> {
         let mut state = lock_unpoisoned(&self.state);
         if state.entries.len() == self.capacity {
             let Some(index) = state
@@ -318,6 +353,35 @@ mod tests {
             registry.lookup(2),
             CommandOutcomeLookup::Found(CommandOutcomeRecord {
                 state: CommandOutcomeState::Queued,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn capacity_rejection_does_not_consume_a_never_retained_identifier() {
+        let registry = CommandOutcomeRegistry::new(2);
+        let next = AtomicU64::new(1);
+
+        assert_eq!(registry.reserve_next(&next), Ok(1));
+        registry.mark_queued(1);
+        assert_eq!(registry.reserve_next(&next), Ok(2));
+        registry.mark_queued(2);
+        assert_eq!(next.load(Ordering::Acquire), 3);
+
+        assert_eq!(
+            registry.reserve_next(&next),
+            Err(DesktopError::CommandOutcomeCapacityFull)
+        );
+        assert_eq!(next.load(Ordering::Acquire), 3);
+        assert_eq!(registry.lookup(3), CommandOutcomeLookup::Unknown);
+
+        registry.mark_succeeded(1);
+        assert_eq!(registry.reserve_next(&next), Ok(3));
+        assert!(matches!(
+            registry.lookup(3),
+            CommandOutcomeLookup::Found(CommandOutcomeRecord {
+                state: CommandOutcomeState::Reserved,
                 ..
             })
         ));

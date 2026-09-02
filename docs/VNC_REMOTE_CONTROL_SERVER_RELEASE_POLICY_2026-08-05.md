@@ -33,7 +33,7 @@ There are no implicit or silent exceptions. `--ignore-unfixed` is prohibited, wi
 
 A permitted determination must be either `not_affected` or `not_exploitable`, include a substantive reachability rationale, cite the Debian Security Tracker, link a repository tracking issue, and expire no more than 30 days after review. Risk-acceptance entries are not permitted for v0.1. Stale determinations that no longer appear in the scan also fail the gate so they cannot accumulate silently.
 
-Current determinations are stored in `security/trivy-critical-vex.json` and tracked by issue #7. They expire on 2026-09-04. Expiry, a new finding, a package-version change, a new application input path, or a mismatch between the report and the VEX file blocks release.
+Current determinations are stored in `security/trivy-critical-vex.json` and tracked by issue #7. They were re-reviewed on **2026-08-31** and expire on **2026-09-30**. Expiry, a new finding, a package-version change, a new application input path, or a mismatch between the report and the VEX file blocks release.
 
 ## Native-safety coverage and limitations
 
@@ -50,6 +50,8 @@ Release Gates builds the controller and desktop release images from the candidat
 ## Tool pinning
 
 The release gate pins the Rust stable and nightly toolchains, cargo-deny, actionlint, Gitleaks, Trivy, and GitHub Actions by immutable version or commit. Downloaded release archives are checked against the publisher-provided checksum manifest before installation.
+
+Every permanent third-party GitHub Action reference under `.github/workflows/*.yml` or `.yaml` must use a full 40-hex commit SHA. Mutable tags, branches, aliases such as `@stable`, and major-version refs such as `@v4` are prohibited even when an action input separately pins the tool it installs. Repository-local actions referenced through `./...` are exempt because their implementation is already fixed by the candidate commit. The release-policy contract scans every permanent workflow file and fails closed on any non-local mutable `uses:` reference.
 
 ## Metric and API naming compatibility
 

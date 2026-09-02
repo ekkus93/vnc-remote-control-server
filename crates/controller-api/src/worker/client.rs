@@ -118,22 +118,18 @@ impl WorkerClient {
         if self.command_id_exhausted() {
             return Err(DesktopError::CommandIdExhausted);
         }
-        let id =
-            match self
-                .next_command_id
-                .try_update(Ordering::AcqRel, Ordering::Acquire, |value| {
-                    value.checked_add(1)
-                }) {
-                Ok(id) => id,
-                Err(_) => {
-                    self.mark_command_id_exhausted();
-                    return Err(DesktopError::CommandIdExhausted);
-                }
-            };
 
-        // Outcome retention is reserved before queue admission. If every slot
-        // is occupied by unresolved work, fail before the command can execute.
-        self.command_outcomes.reserve(id)?;
+        // Reserve retention capacity and allocate the sequence value under one
+        // registry lock. Capacity failure therefore cannot consume an ID that
+        // was never retained and later make that numerical hole look expired.
+        let id = match self.command_outcomes.reserve_next(&self.next_command_id) {
+            Ok(id) => id,
+            Err(DesktopError::CommandIdExhausted) => {
+                self.mark_command_id_exhausted();
+                return Err(DesktopError::CommandIdExhausted);
+            }
+            Err(error) => return Err(error),
+        };
 
         let (completion_tx, completion_rx) = sync_channel(1);
         let envelope = CommandEnvelope::new_with_id(

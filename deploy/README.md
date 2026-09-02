@@ -119,6 +119,12 @@ The Python client connects to the controller API rather than directly to the VNC
 
 The controller image has an image-level liveness check against `/health/live`. Production Compose overrides it with the readiness check at `/health/ready`, which becomes healthy only after the controller has a current complete desktop frame.
 
-## Controller timing budgets
+## Controller timing and resource budgets
 
 `VRC_STARTUP_TIMEOUT_MS` is the complete native-worker startup budget, including timeout cleanup; its default is 10000 ms. `VRC_SHUTDOWN_TIMEOUT_MS` is one total process-cleanup budget shared by worker shutdown and event-bridge cleanup; its default is 10500 ms and it must be at least the longest configured native connect/read/poll wait plus a 500 ms cleanup margin. `VRC_VNC_CONNECT_TIMEOUT_MS` and `VRC_VNC_READ_TIMEOUT_MS` default to 10000 ms but must be exact whole-second values (1000 ms through 24 hours); fractional-second values such as 1500 ms fail startup instead of being rounded. `VRC_POLL_INTERVAL_MS` defaults to 10 ms and must fit the native `u32` microsecond wait field (at most 4294967 ms). These are distinct from `VRC_COMMAND_ACK_TIMEOUT_MS`, which applies only to individual HTTP command acknowledgements, and `VRC_SHUTDOWN_GRACE_MS`, which applies to HTTP server draining.
+
+`VRC_HTTP_MAX_CONNECTIONS` bounds simultaneously live accepted HTTP connection tasks. The default is **256**; valid values are **1 through 65536**. When the bound is saturated, the controller closes the newly accepted socket immediately and does not spawn another connection task. A permit remains owned until its connection task genuinely exits, including failure, panic/cancellation, and shutdown cleanup, so header/body timeouts cannot accidentally bypass the process-level connection bound.
+
+## Input failure quarantine
+
+A native pointer or key send failure has an ambiguous remote effect: the controller cannot prove that the desktop observed none of the write. V2 therefore treats any such failure as a tainted VNC input session. The worker preserves the original command failure, performs only bounded idempotent neutralizing releases, drops the affected VNC session, clears local tracked input only after that session is no longer reusable, and reconnects before later input can execute. The failed mutation is never automatically replayed. Clients must likewise not blindly retry a mutation merely because the transport/controller reported failure.

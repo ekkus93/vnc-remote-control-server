@@ -99,6 +99,9 @@ fn worker_returns_partial_input_failure_after_release_retry() {
             InputEvent::Pointer(point, 0),
             InputEvent::Pointer(point, 1),
             InputEvent::Pointer(point, 0),
+            // Aggregate V2 quarantine performs one final idempotent
+            // neutralizing release before the failed session is discarded.
+            InputEvent::Pointer(point, 0),
         ]
     );
     worker

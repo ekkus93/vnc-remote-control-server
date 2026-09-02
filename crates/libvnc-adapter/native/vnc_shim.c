@@ -167,19 +167,28 @@ static rfbBool vrc_allocate_framebuffer(rfbClient *native) {
     return TRUE;
 }
 
+static vrc_status vrc_advance_framebuffer_revision(vrc_client *client) {
+    if (client == NULL) {
+        return VRC_STATUS_INVALID_ARGUMENT;
+    }
+    if (client->revision == UINT64_MAX) {
+        client->callback_status = VRC_STATUS_FRAMEBUFFER_REVISION_EXHAUSTED;
+        vrc_set_error(client, "framebuffer revision overflow");
+        client->complete = 0;
+        return VRC_STATUS_FRAMEBUFFER_REVISION_EXHAUSTED;
+    }
+    client->revision += 1U;
+    client->complete = 1;
+    return VRC_STATUS_OK;
+}
+
 static void vrc_finished_framebuffer_update(rfbClient *native) {
     vrc_client *client = vrc_context(native);
 
     if (client == NULL || client->framebuffer == NULL) {
         return;
     }
-    if (client->revision == UINT64_MAX) {
-        vrc_set_error(client, "framebuffer revision overflow");
-        client->complete = 0;
-        return;
-    }
-    client->revision += 1U;
-    client->complete = 1;
+    (void)vrc_advance_framebuffer_revision(client);
 }
 
 static void vrc_clear_callback_failure(vrc_client *client) {

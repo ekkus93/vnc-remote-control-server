@@ -11,6 +11,8 @@ use controller_api::worker::DesktopWorker;
 use std::error::Error;
 use std::future::Future;
 use std::io;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -71,34 +73,42 @@ async fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     )?;
     let app = router(state.clone());
     let termination = termination_signal()?;
+    let termination_failed = Arc::new(AtomicBool::new(false));
+    let termination_failed_for_shutdown = Arc::clone(&termination_failed);
     let shutdown_state = state.clone();
     let server_result = serve_until_shutdown(listener, app, runtime, async move {
-        termination.await;
+        if let Err(error) = termination.await {
+            termination_failed_for_shutdown.store(true, Ordering::Release);
+            tracing::error!(error = %error, "controller_termination_signal_failed");
+        }
         shutdown_state.begin_shutdown();
     })
     .await;
 
     state.begin_shutdown();
     finalize_runtime(server_result, worker, event_bridge, shutdown_timeout)?;
+    if termination_failed.load(Ordering::Acquire) {
+        return Err(io::Error::other("controller termination signal listener failed").into());
+    }
     Ok(())
 }
 
 #[cfg(unix)]
-fn termination_signal() -> io::Result<impl Future<Output = ()> + Send> {
+fn termination_signal() -> io::Result<impl Future<Output = io::Result<()>> + Send> {
     use tokio::signal::unix::{SignalKind, signal};
 
     let mut terminate = signal(SignalKind::terminate())?;
     Ok(async move {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = terminate.recv() => {}
+            result = tokio::signal::ctrl_c() => result,
+            signal = terminate.recv() => signal
+                .map(|_| ())
+                .ok_or_else(|| io::Error::other("SIGTERM signal stream closed unexpectedly")),
         }
     })
 }
 
 #[cfg(not(unix))]
-fn termination_signal() -> io::Result<impl Future<Output = ()> + Send> {
-    Ok(async move {
-        let _ = tokio::signal::ctrl_c().await;
-    })
+fn termination_signal() -> io::Result<impl Future<Output = io::Result<()>> + Send> {
+    Ok(tokio::signal::ctrl_c())
 }
