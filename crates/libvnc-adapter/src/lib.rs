@@ -26,6 +26,7 @@ const STATUS_CLIPBOARD_TOO_LARGE: c_int = 10;
 const STATUS_CLIPBOARD_ALLOCATION_FAILED: c_int = 11;
 const STATUS_CLIPBOARD_STATE_INVALID: c_int = 12;
 const STATUS_CLIPBOARD_REVISION_EXHAUSTED: c_int = 13;
+const STATUS_FRAMEBUFFER_REVISION_EXHAUSTED: c_int = 14;
 
 #[repr(C)]
 struct VrcClient {
@@ -179,6 +180,8 @@ pub enum NativeError {
     Disconnected,
     /// No complete framebuffer is available.
     FramebufferUnavailable,
+    /// The native framebuffer revision counter is exhausted.
+    FramebufferRevisionExhausted,
     /// A destination buffer was smaller than the reported source size.
     BufferTooSmall,
     /// No inbound clipboard value has been observed.
@@ -217,6 +220,9 @@ impl fmt::Display for NativeError {
             Self::FramebufferUnavailable => {
                 formatter.write_str("native framebuffer is unavailable")
             }
+            Self::FramebufferRevisionExhausted => {
+                formatter.write_str("native framebuffer revision is exhausted")
+            }
             Self::BufferTooSmall => formatter.write_str("native destination buffer is too small"),
             Self::ClipboardUnavailable => formatter.write_str("native clipboard is unavailable"),
             Self::ClipboardTooLarge { maximum, .. } => {
@@ -251,6 +257,7 @@ impl From<NativeError> for DesktopError {
             NativeError::ClipboardTooLarge { maximum, .. } => Self::ClipboardTooLarge { maximum },
             NativeError::AllocationFailed
             | NativeError::NativeFailure { .. }
+            | NativeError::FramebufferRevisionExhausted
             | NativeError::BufferTooSmall
             | NativeError::ClipboardAllocationFailed
             | NativeError::ClipboardStateInvalid
@@ -520,6 +527,7 @@ impl NativeClient {
             },
             STATUS_DISCONNECTED => NativeError::Disconnected,
             STATUS_FRAMEBUFFER_UNAVAILABLE => NativeError::FramebufferUnavailable,
+            STATUS_FRAMEBUFFER_REVISION_EXHAUSTED => NativeError::FramebufferRevisionExhausted,
             STATUS_BUFFER_TOO_SMALL => NativeError::BufferTooSmall,
             STATUS_CLIPBOARD_UNAVAILABLE => NativeError::ClipboardUnavailable,
             STATUS_CLIPBOARD_TOO_LARGE => NativeError::ClipboardTooLarge {
@@ -615,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_callback_failures_map_to_distinct_domain_errors() {
+    fn callback_failures_map_to_distinct_domain_errors() {
         assert_eq!(
             DesktopError::from(NativeError::ClipboardTooLarge {
                 bytes: remote_desktop_core::MAX_CLIPBOARD_BYTES + 1,
@@ -635,6 +643,10 @@ mod tests {
         );
         assert_eq!(
             DesktopError::from(NativeError::ClipboardRevisionExhausted),
+            DesktopError::Native
+        );
+        assert_eq!(
+            DesktopError::from(NativeError::FramebufferRevisionExhausted),
             DesktopError::Native
         );
     }
