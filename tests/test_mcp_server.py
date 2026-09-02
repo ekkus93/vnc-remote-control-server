@@ -66,7 +66,9 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_package_metadata_keeps_mcp_optional_and_pinned(self) -> None:
         """Core installs stay dependency-free while the MCP extra is exact-pinned."""
-        metadata = tomllib.loads((PYTHON_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        metadata = tomllib.loads(
+            (PYTHON_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
         project = metadata["project"]
         self.assertEqual(project["dependencies"], [])
         self.assertEqual(project["optional-dependencies"]["mcp"], ["mcp==2.1.1"])
@@ -88,7 +90,9 @@ class McpServerScaffoldTests(unittest.TestCase):
             reloaded = importlib.reload(mcp_server)
         self.assertEqual(reloaded.MCP_EXTRA_REQUIREMENT, "mcp==2.1.1")
 
-    def test_create_mcp_server_uses_injected_components_without_starting_transport(self) -> None:
+    def test_create_mcp_server_uses_injected_components_without_starting_transport(
+        self,
+    ) -> None:
         """Construction registers tools but never starts a transport implicitly."""
         config = _config()
         client = config.build_client()
@@ -112,7 +116,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             SimpleNamespace(Field=_fake_field_factory),
         ]
         with mock.patch.object(mcp_server, "import_module", side_effect=modules) as loader:
-            components = mcp_server._load_mcp_sdk_components()  # pylint: disable=protected-access
+            components = mcp_server.load_mcp_sdk_components()
         self.assertEqual(
             [call.args[0] for call in loader.call_args_list],
             ["mcp.server.mcpserver", "mcp_types", "pydantic"],
@@ -121,9 +125,11 @@ class McpServerScaffoldTests(unittest.TestCase):
 
     def test_missing_optional_dependency_fails_explicitly(self) -> None:
         """Requesting MCP without the extra gives an actionable hard failure."""
-        with mock.patch.object(mcp_server, "import_module", side_effect=ImportError("missing")):
+        with mock.patch.object(
+            mcp_server, "import_module", side_effect=ImportError("missing")
+        ):
             with self.assertRaises(mcp_server.McpDependencyError) as context:
-                mcp_server._load_mcp_sdk_components()  # pylint: disable=protected-access
+                mcp_server.load_mcp_sdk_components()
         message = str(context.exception)
         self.assertIn("mcp==2.1.1", message)
         self.assertIn("vnc-remote-control-client[mcp]", message)
@@ -137,7 +143,7 @@ class McpServerScaffoldTests(unittest.TestCase):
         ]
         with mock.patch.object(mcp_server, "import_module", side_effect=modules):
             with self.assertRaises(mcp_server.McpDependencyError) as context:
-                mcp_server._load_mcp_sdk_components()  # pylint: disable=protected-access
+                mcp_server.load_mcp_sdk_components()
         self.assertIn("MCPServer/ToolAnnotations/Field", str(context.exception))
 
     def test_mutation_opt_in_fails_until_mutation_catalog_exists(self) -> None:
@@ -228,7 +234,9 @@ class McpServerScaffoldTests(unittest.TestCase):
         config = _config()
         with (
             mock.patch.object(McpConfig, "load", return_value=config),
-            mock.patch.object(mcp_server, "create_mcp_server", return_value=server) as create,
+            mock.patch.object(
+                mcp_server, "create_mcp_server", return_value=server
+            ) as create,
         ):
             mcp_server.main()
         create.assert_called_once_with(config=config)
