@@ -362,7 +362,9 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             ):
                 await self.tools["vnc_get_screenshot"][0]()
 
-    async def test_screenshot_rejects_crc_valid_corrupt_deflate_without_echoing_payload(self) -> None:
+    async def test_screenshot_rejects_crc_valid_corrupt_deflate_without_echoing_payload(
+        self,
+    ) -> None:
         """CRC-valid corrupt IDAT data still fails with a payload-free protocol error."""
         response = ScreenshotResponse(
             data=_corrupt_idat_png(),
