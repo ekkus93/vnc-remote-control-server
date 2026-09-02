@@ -38,6 +38,12 @@ class RecordingToolRegistrar:
     def __call__(
         self, **kwargs: Any
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Support the SDK registrar callable protocol."""
+        return self.register(**kwargs)
+
+    def register(
+        self, **kwargs: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Return one decorator that records its registration metadata."""
 
         def record(function: Callable[..., Any]) -> Callable[..., Any]:
