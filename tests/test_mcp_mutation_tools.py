@@ -39,7 +39,10 @@ def _recording_tool_registrar(
     """Return a registrar that captures tool functions and registration metadata."""
 
     def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Capture one SDK-style tool registration."""
+
         def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
+            """Store and return the registered function unchanged."""
             tools[kwargs["name"]] = (function, kwargs)
             return function
 
@@ -61,6 +64,7 @@ class RecordingExecutor:
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> R:
+        """Record and invoke one synchronous operation exactly once."""
         self.calls.append((operation.__name__, args, dict(kwargs)))
         return operation(*args, **kwargs)
 
@@ -80,6 +84,7 @@ class FakeMutationClient:
         self.next_command_id = 100
 
     def _result(self, name: str, *args: Any, **kwargs: Any) -> CommandResponse:
+        """Record one client call, optionally fail, or return terminal success."""
         self.calls.append((name, args, dict(kwargs)))
         if self.fail_operation == name:
             raise RuntimeError("controller mutation failed")
@@ -88,6 +93,7 @@ class FakeMutationClient:
         return result
 
     def move_pointer(self, x: int, y: int) -> CommandResponse:
+        """Record one pointer move."""
         return self._result("move_pointer", x, y)
 
     def set_pointer_button(
@@ -97,9 +103,11 @@ class FakeMutationClient:
         button: MouseButton,
         pressed: bool,
     ) -> CommandResponse:
+        """Record one explicit pointer-button transition."""
         return self._result("set_pointer_button", x, y, button, pressed)
 
     def click_pointer(self, x: int, y: int, button: MouseButton) -> CommandResponse:
+        """Record one pointer click."""
         return self._result("click_pointer", x, y, button)
 
     def double_click_pointer(
@@ -110,6 +118,7 @@ class FakeMutationClient:
         *,
         interval_ms: int,
     ) -> CommandResponse:
+        """Record one pointer double-click."""
         return self._result(
             "double_click_pointer",
             x,
@@ -126,6 +135,7 @@ class FakeMutationClient:
         *,
         delta_x: int = 0,
     ) -> CommandResponse:
+        """Record one pointer scroll including the client's fixed horizontal default."""
         return self._result(
             "scroll_pointer",
             x,
@@ -135,18 +145,23 @@ class FakeMutationClient:
         )
 
     def set_keyboard_key(self, key: str, action: KeyAction) -> CommandResponse:
+        """Record one keyboard-key transition."""
         return self._result("set_keyboard_key", key, action)
 
     def send_keyboard_chord(self, keys: Sequence[str]) -> CommandResponse:
+        """Record one keyboard chord."""
         return self._result("send_keyboard_chord", keys)
 
     def type_keyboard_text(self, text: str) -> CommandResponse:
+        """Record one text-typing operation without inspecting its payload."""
         return self._result("type_keyboard_text", text)
 
     def set_clipboard(self, text: str) -> CommandResponse:
+        """Record one clipboard-set operation without inspecting its payload."""
         return self._result("set_clipboard", text)
 
     def request_reconnect(self) -> CommandResponse:
+        """Record one manual reconnect request."""
         return self._result("request_reconnect")
 
 
@@ -165,7 +180,7 @@ def _schema() -> McpMutationSchemaMetadata:
 
 
 def _annotated_metadata(annotation: Any) -> tuple[Any, ...]:
-    """Return an Annotated type's metadata after asserting its shape."""
+    """Return an Annotated type's arguments after asserting its shape."""
     if get_origin(annotation) is not Annotated:
         raise AssertionError(f"expected Annotated, got {annotation!r}")
     return get_args(annotation)
@@ -175,9 +190,11 @@ class McpMutationSchemaBuilderTests(unittest.TestCase):
     """Verify Field metadata mirrors the public controller/MCP bounds exactly."""
 
     def test_schema_metadata_requests_exact_bounds_and_patterns(self) -> None:
+        """Every injected Field carries the reviewed controller-compatible bound."""
         calls: list[dict[str, Any]] = []
 
         def field_factory(**kwargs: Any) -> SimpleNamespace:
+            """Record one requested Field configuration."""
             calls.append(dict(kwargs))
             return SimpleNamespace(**kwargs)
 
@@ -253,6 +270,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
     """Verify mutation catalog schemas, annotations, preflight, and one-call mapping."""
 
     def setUp(self) -> None:
+        """Register one dependency-free mutation tool catalog."""
         self.tools: dict[str, RegisteredTool] = {}
         self.executor = RecordingExecutor()
         self.client = FakeMutationClient()
@@ -265,6 +283,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_catalog_contains_exact_initial_mutation_surface(self) -> None:
+        """Only the ten reviewed MCP-006 mutation tools are registered here."""
         self.assertEqual(
             set(self.tools),
             {
@@ -285,6 +304,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_all_mutation_annotations_are_conservative(self) -> None:
+        """Every mutation uses the same conservative MCP hint set."""
         for _, registration in self.tools.values():
             annotations = registration["annotations"]
             self.assertFalse(annotations.read_only_hint)
@@ -293,6 +313,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(annotations.open_world_hint)
 
     def test_parameter_annotations_carry_exact_schema_metadata(self) -> None:
+        """Runtime annotations expose bounds while omitting horizontal scroll entirely."""
         move = inspect.signature(self.tools["vnc_move_pointer"][0]).parameters
         self.assertIs(_annotated_metadata(move["x"].annotation)[1], self.schema.coordinate)
         self.assertIs(_annotated_metadata(move["y"].annotation)[1], self.schema.coordinate)
@@ -340,6 +361,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_every_handler_maps_to_exactly_one_typed_client_call(self) -> None:
+        """All ten mutation handlers forward exact fields once through the executor."""
         invocations = (
             ("vnc_move_pointer", (10, 11), {}),
             ("vnc_set_pointer_button", (12, 13, "left", True), {}),
@@ -378,15 +400,17 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.calls, expected_client_calls)
 
     async def test_invalid_inputs_fail_before_executor_or_controller_call(self) -> None:
+        """Direct handler calls cannot bypass mutation preflight or reach the client."""
         invalid_invocations = (
             ("vnc_move_pointer", (-1, 0)),
             ("vnc_move_pointer", (4_294_967_296, 0)),
             ("vnc_set_pointer_button", (1, 2, "left", 1)),
+            ("vnc_set_pointer_button", (1, 2, [], True)),
             ("vnc_click_pointer", (1, 2, "side")),
             ("vnc_double_click_pointer", (1, 2, "left", 19)),
             ("vnc_scroll_pointer", (1, 2, 101)),
             ("vnc_set_keyboard_key", ("CTRL_RIGHT", "down")),
-            ("vnc_set_keyboard_key", ("A", "press")),
+            ("vnc_set_keyboard_key", ("A", [])),
             ("vnc_send_keyboard_chord", ([],)),
             ("vnc_send_keyboard_chord", (["A"] * 17,)),
             ("vnc_type_keyboard_text", ("invalid\x01text",)),
@@ -404,6 +428,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.calls, [])
 
     async def test_sensitive_validation_errors_never_echo_payloads(self) -> None:
+        """Typed-text and clipboard preflight errors contain no supplied payload data."""
         cases = (
             ("vnc_type_keyboard_text", "TYPE_SECRET_SENTINEL\x01"),
             ("vnc_set_clipboard", "CLIPBOARD_SECRET_SENTINEL\x00"),
@@ -416,6 +441,7 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.executor.calls, [])
 
     async def test_controller_failure_is_never_automatically_retried(self) -> None:
+        """Every mutation failure crosses the typed-client boundary exactly once."""
         cases = (
             ("vnc_move_pointer", "move_pointer", (1, 2)),
             (
