@@ -120,6 +120,39 @@ async def _get_metrics(runtime: McpReadRuntime) -> str:
     return await runtime.executor.call(runtime.client.get_metrics)
 
 
+def _parse_png_chunk(data: bytes, offset: int) -> tuple[bytes, bytes, int]:
+    """Return one CRC-validated PNG chunk and its next offset."""
+    if len(data) - offset < 12:
+        raise ProtocolError("screenshot response was not a valid controller PNG")
+    chunk_length = int.from_bytes(data[offset : offset + 4], "big")
+    chunk_type = data[offset + 4 : offset + 8]
+    data_start = offset + 8
+    data_end = data_start + chunk_length
+    chunk_end = data_end + 4
+    if chunk_end > len(data):
+        raise ProtocolError("screenshot response was not a valid controller PNG")
+
+    chunk_data = data[data_start:data_end]
+    expected_crc = int.from_bytes(data[data_end:chunk_end], "big")
+    observed_crc = zlib.crc32(chunk_type)
+    observed_crc = zlib.crc32(chunk_data, observed_crc) & 0xFFFFFFFF
+    if observed_crc != expected_crc:
+        raise ProtocolError("screenshot response was not a valid controller PNG")
+    return chunk_type, chunk_data, chunk_end
+
+
+def _validate_png_ihdr(chunk_type: bytes, chunk_data: bytes) -> None:
+    """Validate the exact RGBA8 IHDR shape emitted by the controller."""
+    if chunk_type != _PNG_IHDR or len(chunk_data) != 13:
+        raise ProtocolError("screenshot response was not a valid controller PNG")
+    width = int.from_bytes(chunk_data[0:4], "big")
+    height = int.from_bytes(chunk_data[4:8], "big")
+    if width == 0 or height == 0 or chunk_data[8:13] != _PNG_RGBA8_IHDR_TAIL:
+        raise ProtocolError("screenshot response was not a valid controller PNG")
+    if width * height * 4 > _CONTROLLER_MAX_FRAMEBUFFER_BYTES:
+        raise ProtocolError("screenshot PNG exceeded the controller framebuffer limit")
+
+
 def _validate_png(data: bytes) -> None:
     """Validate the bounded PNG structure emitted by the controller encoder."""
     if len(data) > _MAX_MCP_SCREENSHOT_PNG_BYTES:
@@ -127,53 +160,21 @@ def _validate_png(data: bytes) -> None:
     if len(data) < 33 or not data.startswith(_PNG_SIGNATURE):
         raise ProtocolError("screenshot response was not a valid controller PNG")
 
-    offset = len(_PNG_SIGNATURE)
-    first_chunk = True
+    chunk_type, chunk_data, offset = _parse_png_chunk(data, len(_PNG_SIGNATURE))
+    _validate_png_ihdr(chunk_type, chunk_data)
     saw_idat = False
-    saw_iend = False
     while offset < len(data):
-        if len(data) - offset < 12:
+        chunk_type, chunk_data, next_offset = _parse_png_chunk(data, offset)
+        if chunk_type == _PNG_IHDR:
             raise ProtocolError("screenshot response was not a valid controller PNG")
-        chunk_length = int.from_bytes(data[offset : offset + 4], "big")
-        chunk_type = data[offset + 4 : offset + 8]
-        data_start = offset + 8
-        data_end = data_start + chunk_length
-        chunk_end = data_end + 4
-        if chunk_end > len(data):
-            raise ProtocolError("screenshot response was not a valid controller PNG")
-
-        chunk_data = data[data_start:data_end]
-        expected_crc = int.from_bytes(data[data_end:chunk_end], "big")
-        observed_crc = zlib.crc32(chunk_type)
-        observed_crc = zlib.crc32(chunk_data, observed_crc) & 0xFFFFFFFF
-        if observed_crc != expected_crc:
-            raise ProtocolError("screenshot response was not a valid controller PNG")
-
-        if first_chunk:
-            if chunk_type != _PNG_IHDR or chunk_length != 13:
-                raise ProtocolError("screenshot response was not a valid controller PNG")
-            width = int.from_bytes(chunk_data[0:4], "big")
-            height = int.from_bytes(chunk_data[4:8], "big")
-            if width == 0 or height == 0 or chunk_data[8:13] != _PNG_RGBA8_IHDR_TAIL:
-                raise ProtocolError("screenshot response was not a valid controller PNG")
-            if width * height * 4 > _CONTROLLER_MAX_FRAMEBUFFER_BYTES:
-                raise ProtocolError("screenshot PNG exceeded the controller framebuffer limit")
-            first_chunk = False
-        elif chunk_type == _PNG_IHDR:
-            raise ProtocolError("screenshot response was not a valid controller PNG")
-
         if chunk_type == _PNG_IDAT:
             saw_idat = True
         if chunk_type == _PNG_IEND:
-            if chunk_length != 0 or not saw_idat or chunk_end != len(data):
+            if chunk_data or not saw_idat or next_offset != len(data):
                 raise ProtocolError("screenshot response was not a valid controller PNG")
-            saw_iend = True
-        elif saw_iend:
-            raise ProtocolError("screenshot response was not a valid controller PNG")
-        offset = chunk_end
-
-    if first_chunk or not saw_idat or not saw_iend:
-        raise ProtocolError("screenshot response was not a valid controller PNG")
+            return
+        offset = next_offset
+    raise ProtocolError("screenshot response was not a valid controller PNG")
 
 
 def _is_safe_identifier(value: str, maximum: int) -> bool:
