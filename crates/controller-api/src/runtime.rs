@@ -2,7 +2,8 @@
 //!
 //! Axum owns routing and response semantics. This module owns the production
 //! TCP listener, per-connection header deadlines, bounded request-body reads,
-//! and graceful connection draining after the process termination signal.
+//! an explicit live-connection cap, and graceful connection draining after the
+//! process termination signal.
 
 use axum::Router;
 use axum::body::Body;
@@ -19,9 +20,10 @@ use std::error::Error;
 use std::fmt;
 use std::future::Future;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::timeout;
 use tower::util::ServiceExt;
@@ -29,7 +31,9 @@ use tower::util::ServiceExt;
 const DEFAULT_HEADER_READ_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_BODY_READ_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_SHUTDOWN_GRACE_MS: u64 = 10_000;
+const DEFAULT_MAX_CONNECTIONS: usize = 256;
 const MAX_RUNTIME_TIMEOUT_MS: u64 = 300_000;
+const MAX_HTTP_CONNECTIONS: usize = 65_536;
 
 /// Validated HTTP runtime limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +44,8 @@ pub struct RuntimeSettings {
     pub body_read_timeout: Duration,
     /// Maximum time to drain active HTTP connections after shutdown begins.
     pub shutdown_grace: Duration,
+    /// Maximum simultaneously live accepted HTTP connection tasks.
+    pub maximum_connections: usize,
     /// Maximum body bytes accepted before Axum dispatch.
     pub maximum_body_bytes: usize,
 }
@@ -51,6 +57,12 @@ impl RuntimeSettings {
             parse_timeout("VRC_HTTP_HEADER_TIMEOUT_MS", DEFAULT_HEADER_READ_TIMEOUT_MS)?,
             parse_timeout("VRC_HTTP_BODY_TIMEOUT_MS", DEFAULT_BODY_READ_TIMEOUT_MS)?,
             parse_timeout("VRC_SHUTDOWN_GRACE_MS", DEFAULT_SHUTDOWN_GRACE_MS)?,
+            parse_bounded_usize(
+                "VRC_HTTP_MAX_CONNECTIONS",
+                DEFAULT_MAX_CONNECTIONS,
+                1,
+                MAX_HTTP_CONNECTIONS,
+            )?,
             maximum_body_bytes,
         )
     }
@@ -60,6 +72,7 @@ impl RuntimeSettings {
         header_read_timeout: Duration,
         body_read_timeout: Duration,
         shutdown_grace: Duration,
+        maximum_connections: usize,
         maximum_body_bytes: usize,
     ) -> Result<Self, RuntimeConfigError> {
         for (name, value) in [
@@ -71,6 +84,11 @@ impl RuntimeSettings {
                 return Err(RuntimeConfigError::InvalidValue(name));
             }
         }
+        if !(1..=MAX_HTTP_CONNECTIONS).contains(&maximum_connections) {
+            return Err(RuntimeConfigError::InvalidValue(
+                "VRC_HTTP_MAX_CONNECTIONS",
+            ));
+        }
         if maximum_body_bytes == 0 {
             return Err(RuntimeConfigError::InvalidValue("VRC_MAX_JSON_BYTES"));
         }
@@ -78,6 +96,7 @@ impl RuntimeSettings {
             header_read_timeout,
             body_read_timeout,
             shutdown_grace,
+            maximum_connections,
             maximum_body_bytes,
         })
     }
@@ -177,6 +196,7 @@ where
     F: Future<Output = ()> + Send,
 {
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
+    let connection_permits = Arc::new(Semaphore::new(settings.maximum_connections));
     let mut connections = JoinSet::new();
     let mut accept_failure = None;
     tokio::pin!(shutdown);
@@ -188,9 +208,27 @@ where
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _peer)) => {
+                        let permit = match Arc::clone(&connection_permits).try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                // The socket has already been accepted, so close it
+                                // immediately without spawning another task. This
+                                // keeps both live sockets and task count bounded.
+                                tracing::warn!(
+                                    maximum_connections = settings.maximum_connections,
+                                    "http_connection_capacity_saturated"
+                                );
+                                drop(stream);
+                                continue;
+                            }
+                        };
                         let connection_app = app.clone();
                         let connection_shutdown = shutdown_receiver.clone();
                         connections.spawn(async move {
+                            // Owned permit lifetime exactly follows this task,
+                            // including error, panic unwind, cancellation, and
+                            // shutdown-abort paths.
+                            let _permit = permit;
                             serve_connection(
                                 stream,
                                 connection_app,
@@ -213,6 +251,8 @@ where
     }
 
     drop(listener);
+    // If no receiver remains, all connection tasks have already terminated;
+    // failed shutdown notification is therefore non-authoritative and safe.
     let _ = shutdown_sender.send(true);
     let drained = timeout(settings.shutdown_grace, async {
         while let Some(result) = connections.join_next().await {
@@ -330,6 +370,25 @@ fn parse_timeout(name: &'static str, default_ms: u64) -> Result<Duration, Runtim
     Ok(duration)
 }
 
+fn parse_bounded_usize(
+    name: &'static str,
+    default: usize,
+    minimum: usize,
+    maximum: usize,
+) -> Result<usize, RuntimeConfigError> {
+    let value = match env::var(name) {
+        Ok(value) => value
+            .parse::<usize>()
+            .map_err(|_| RuntimeConfigError::InvalidValue(name))?,
+        Err(env::VarError::NotPresent) => default,
+        Err(env::VarError::NotUnicode(_)) => return Err(RuntimeConfigError::InvalidValue(name)),
+    };
+    if !(minimum..=maximum).contains(&value) {
+        return Err(RuntimeConfigError::InvalidValue(name));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,13 +402,26 @@ mod tests {
             Duration::from_millis(75),
             Duration::from_millis(75),
             Duration::from_secs(1),
+            4,
             32,
         )
         .expect("test limits are valid")
     }
 
-    async fn start_server(
+    fn single_connection_settings() -> RuntimeSettings {
+        RuntimeSettings::new(
+            Duration::from_secs(1),
+            Duration::from_millis(75),
+            Duration::from_millis(250),
+            1,
+            32,
+        )
+        .expect("single-connection limits are valid")
+    }
+
+    async fn start_server_with_settings(
         app: Router,
+        settings: RuntimeSettings,
     ) -> (
         std::net::SocketAddr,
         oneshot::Sender<()>,
@@ -363,12 +435,22 @@ mod tests {
         let server = tokio::spawn(serve_until_shutdown(
             listener,
             app,
-            test_settings(),
+            settings,
             async move {
                 let _ = shutdown_receiver.await;
             },
         ));
         (address, shutdown_sender, server)
+    }
+
+    async fn start_server(
+        app: Router,
+    ) -> (
+        std::net::SocketAddr,
+        oneshot::Sender<()>,
+        tokio::task::JoinHandle<io::Result<()>>,
+    ) {
+        start_server_with_settings(app, test_settings()).await
     }
 
     async fn stop_server(
@@ -391,6 +473,7 @@ mod tests {
                 Duration::from_secs(1),
                 Duration::from_secs(1),
                 1,
+                1,
             ),
             Err(RuntimeConfigError::InvalidValue(
                 "VRC_HTTP_HEADER_TIMEOUT_MS"
@@ -402,8 +485,29 @@ mod tests {
                 Duration::from_millis(MAX_RUNTIME_TIMEOUT_MS + 1),
                 Duration::from_secs(1),
                 1,
+                1,
             ),
             Err(RuntimeConfigError::InvalidValue("VRC_HTTP_BODY_TIMEOUT_MS"))
+        );
+        assert_eq!(
+            RuntimeSettings::new(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                0,
+                1,
+            ),
+            Err(RuntimeConfigError::InvalidValue("VRC_HTTP_MAX_CONNECTIONS"))
+        );
+        assert_eq!(
+            RuntimeSettings::new(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                MAX_HTTP_CONNECTIONS + 1,
+                1,
+            ),
+            Err(RuntimeConfigError::InvalidValue("VRC_HTTP_MAX_CONNECTIONS"))
         );
     }
 
@@ -433,6 +537,72 @@ mod tests {
             classify_join_result(unexpected, false),
             ConnectionTaskObservation::CancelledUnexpectedly
         );
+    }
+
+    #[tokio::test]
+    async fn connection_capacity_rejects_excess_and_recovers_after_disconnect() {
+        let app = Router::new().route("/", get(|| async { StatusCode::NO_CONTENT }));
+        let (address, shutdown, server) =
+            start_server_with_settings(app, single_connection_settings()).await;
+
+        let mut held = TcpStream::connect(address)
+            .await
+            .expect("first connection is admitted");
+        held.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Hold:")
+            .await
+            .expect("partial header holds the only permit");
+        sleep(Duration::from_millis(25)).await;
+
+        let mut excess = TcpStream::connect(address)
+            .await
+            .expect("TCP accept may complete before capacity rejection");
+        let mut excess_bytes = Vec::new();
+        timeout(Duration::from_secs(1), excess.read_to_end(&mut excess_bytes))
+            .await
+            .expect("excess accepted socket is closed promptly")
+            .expect("excess socket read succeeds");
+        assert!(excess_bytes.is_empty());
+
+        drop(held);
+        sleep(Duration::from_millis(50)).await;
+        let mut recovered = TcpStream::connect(address)
+            .await
+            .expect("permit is recovered after first connection exits");
+        recovered
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("recovered request writes");
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(1), recovered.read_to_end(&mut response))
+            .await
+            .expect("recovered request completes")
+            .expect("recovered socket read succeeds");
+        let response = String::from_utf8(response).expect("HTTP response is text");
+        assert!(response.starts_with("HTTP/1.1 204 No Content"));
+
+        stop_server(shutdown, server).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_remains_bounded_while_connection_capacity_is_full() {
+        let app = Router::new().route("/", get(|| async { StatusCode::NO_CONTENT }));
+        let (address, shutdown, server) =
+            start_server_with_settings(app, single_connection_settings()).await;
+        let mut held = TcpStream::connect(address)
+            .await
+            .expect("single connection is admitted");
+        held.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nX-Hold:")
+            .await
+            .expect("partial header holds permit");
+        sleep(Duration::from_millis(25)).await;
+
+        shutdown.send(()).expect("shutdown receiver remains alive");
+        timeout(Duration::from_secs(1), server)
+            .await
+            .expect("saturated server shutdown remains bounded")
+            .expect("server task does not panic")
+            .expect("server exits cleanly");
+        drop(held);
     }
 
     #[tokio::test]
