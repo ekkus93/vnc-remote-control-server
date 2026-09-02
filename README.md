@@ -50,9 +50,11 @@ The implementation on `master` includes:
 
 - a warning-denied Rust workspace with a reviewed LibVNCClient adapter;
 - a single-owner native worker with bounded queues, reconnect, stall detection, and graceful shutdown;
+- fail-closed input-session quarantine: any ambiguous native pointer/key send failure preserves the command failure, drops the tainted VNC session, and reconnects before later input can execute;
 - coherent framebuffer snapshots, PNG encoding, ETags, conditional requests, and revision events;
 - complete v0.1 pointer, keyboard, text, and clipboard control;
 - authenticated HTTP and WebSocket APIs with bounded overload behavior and payload-free observability;
+- an explicit accepted-HTTP-connection bound (`VRC_HTTP_MAX_CONNECTIONS`, default 256, valid range 1–65536) whose permit lifetime follows the full connection task;
 - hosted Swagger UI, ReDoc, and raw OpenAPI 3.1 documentation;
 - a typed Python client with zero third-party dependencies for HTTP and optional WebSocket event support;
 - an installed `vnc-remote-control-demo` CLI for exercising status, screenshots, pointer/keyboard input, clipboard, reconnect, metrics, and bounded WebSocket event streaming;
