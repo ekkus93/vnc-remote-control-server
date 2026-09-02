@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, ParamSpec, Protocol, TypeVar
 
-from .client import VncRemoteControlClient
-from .mcp_execution import BoundedControllerExecutor
 from .models import (
     ClipboardResponse,
     CommandStatusResponse,
     DisplayResponse,
     StatusResponse,
 )
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 class McpToolRegistrar(Protocol):
@@ -22,12 +24,50 @@ class McpToolRegistrar(Protocol):
         """Return the SDK tool-registration decorator."""
 
 
+class McpReadClient(Protocol):
+    """Typed controller methods used by the read-only MCP catalog."""
+
+    def get_status(self) -> StatusResponse:
+        """Return controller status."""
+
+    def get_display(self) -> DisplayResponse:
+        """Return display metadata."""
+
+    def get_clipboard(self) -> ClipboardResponse:
+        """Return clipboard state."""
+
+    def get_command_status(self, command_id: int) -> CommandStatusResponse:
+        """Return retained command state."""
+
+    def get_metrics(self) -> str:
+        """Return bounded Prometheus metrics text."""
+
+
+class McpCallExecutor(Protocol):
+    """Bounded asynchronous execution surface required by MCP tools."""
+
+    async def call(
+        self,
+        operation: Callable[P, R],
+        /,
+        *args: P.args,
+        **kwargs: P.kwargs,
+    ) -> R:
+        """Execute one synchronous controller call off the event loop."""
+
+    def close(self) -> None:
+        """Close synchronously and wait for admitted work."""
+
+    async def aclose(self) -> None:
+        """Close without blocking the event loop."""
+
+
 @dataclass(slots=True)
 class McpReadRuntime:
     """One controller client and one shared bounded executor for all MCP calls."""
 
-    client: VncRemoteControlClient
-    executor: BoundedControllerExecutor
+    client: McpReadClient
+    executor: McpCallExecutor
 
 
 async def _get_status(runtime: McpReadRuntime) -> StatusResponse:
