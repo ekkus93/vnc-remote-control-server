@@ -5,10 +5,15 @@ from __future__ import annotations
 import inspect
 import unittest
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Annotated, Any, ParamSpec, TypeVar, get_args, get_origin
 
+from mcp_test_support import (
+    MUTATION_TOOL_NAMES,
+    RecordingToolRegistrar,
+    RegisteredTool,
+    fake_annotations_factory,
+)
 from vnc_remote_control.mcp_mutation_tools import (
     McpMutationRuntime,
     McpMutationSchemaMetadata,
@@ -20,35 +25,6 @@ from vnc_remote_control.models import CommandResponse, KeyAction, MouseButton
 
 P = ParamSpec("P")
 R = TypeVar("R")
-RegisteredTool = tuple[Callable[..., Any], dict[str, Any]]
-
-
-@dataclass(frozen=True, slots=True)
-class FakeAnnotations:
-    """Inspectable stand-in for the SDK ToolAnnotations model."""
-
-    read_only_hint: bool
-    destructive_hint: bool
-    idempotent_hint: bool
-    open_world_hint: bool
-
-
-def _recording_tool_registrar(
-    tools: dict[str, RegisteredTool],
-) -> Callable[..., Callable[[Callable[..., Any]], Callable[..., Any]]]:
-    """Return a registrar that captures tool functions and registration metadata."""
-
-    def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Capture one SDK-style tool registration."""
-
-        def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
-            """Store and return the registered function unchanged."""
-            tools[kwargs["name"]] = (function, kwargs)
-            return function
-
-        return decorator
-
-    return tool
 
 
 class RecordingExecutor:
@@ -276,29 +252,15 @@ class McpMutationToolContractTests(unittest.IsolatedAsyncioTestCase):
         self.client = FakeMutationClient()
         self.schema = _schema()
         register_mutation_tools(
-            _recording_tool_registrar(self.tools),
+            RecordingToolRegistrar(self.tools),
             McpMutationRuntime(client=self.client, executor=self.executor),
-            annotations_factory=FakeAnnotations,
+            annotations_factory=fake_annotations_factory,
             schema=self.schema,
         )
 
     def test_catalog_contains_exact_initial_mutation_surface(self) -> None:
         """Only the ten reviewed MCP-006 mutation tools are registered here."""
-        self.assertEqual(
-            set(self.tools),
-            {
-                "vnc_move_pointer",
-                "vnc_set_pointer_button",
-                "vnc_click_pointer",
-                "vnc_double_click_pointer",
-                "vnc_scroll_pointer",
-                "vnc_set_keyboard_key",
-                "vnc_send_keyboard_chord",
-                "vnc_type_keyboard_text",
-                "vnc_set_clipboard",
-                "vnc_request_reconnect",
-            },
-        )
+        self.assertEqual(set(self.tools), MUTATION_TOOL_NAMES)
         self.assertTrue(
             all(registration["structured_output"] for _, registration in self.tools.values())
         )
