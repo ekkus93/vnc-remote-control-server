@@ -8,7 +8,8 @@ when the ``mcp`` extra is not installed.
 from __future__ import annotations
 
 import sys
-from typing import Any, Protocol, TypeAlias, cast
+from importlib import import_module
+from typing import Any, Callable, TypeAlias, cast
 
 MCP_EXTRA_REQUIREMENT = "mcp==2.1.1"
 MCP_INSTALL_HINT = 'pip install "vnc-remote-control-client[mcp]"'
@@ -18,28 +19,28 @@ class McpDependencyError(RuntimeError):
     """Raised when MCP support is requested without the optional SDK."""
 
 
-class _McpServer(Protocol):
-    """Minimal SDK surface used by the package entry point."""
-
-    def run(self, transport: str = "stdio", **kwargs: Any) -> None:
-        """Run the MCP server using the requested transport."""
-
-
-McpServerFactory: TypeAlias = type[_McpServer]
+McpServerFactory: TypeAlias = Callable[[str], Any]
 
 
 def _load_mcp_server_factory() -> McpServerFactory:
     """Load the optional official MCP SDK only when MCP is actually requested."""
     try:
-        from mcp.server import MCPServer
+        module = import_module("mcp.server")
     except ImportError as exc:
         raise McpDependencyError(
             f"MCP support requires {MCP_EXTRA_REQUIREMENT}; install it with {MCP_INSTALL_HINT}"
         ) from exc
-    return cast(McpServerFactory, MCPServer)
+
+    factory = getattr(module, "MCPServer", None)
+    if not callable(factory):
+        raise McpDependencyError(
+            f"installed MCP SDK does not provide the expected MCPServer API for "
+            f"{MCP_EXTRA_REQUIREMENT}"
+        )
+    return cast(McpServerFactory, factory)
 
 
-def create_mcp_server(*, factory: McpServerFactory | None = None) -> _McpServer:
+def create_mcp_server(*, factory: McpServerFactory | None = None) -> Any:
     """Construct the MCP server without starting transport or network activity."""
     server_factory = factory or _load_mcp_server_factory()
     return server_factory("VNC Remote Control Server")
