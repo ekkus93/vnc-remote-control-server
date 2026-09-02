@@ -1,6 +1,6 @@
 use super::channels::WorkerChannels;
 use super::command::CommandEnvelope;
-use super::helpers::{classify_native_error, lock_unpoisoned};
+use super::helpers::{classify_desktop_error, classify_native_error, lock_unpoisoned};
 use super::loop_state::LoopState;
 use super::outcome::CommandOutcomeRegistry;
 use super::session::WorkerSession;
@@ -77,6 +77,8 @@ impl WorkerExitSignal {
 impl Drop for WorkerExitSignal {
     fn drop(&mut self) {
         if let Some(sender) = self.sender.take() {
+            // Terminal notification only: worker exit is already authoritative
+            // when this guard drops, so a missing waiter cannot affect cleanup.
             let _ = sender.try_send(());
         }
     }
@@ -120,6 +122,8 @@ pub(super) fn classify_received_command(
         if let Some(command_id) = envelope.command_id {
             outcomes.mark_succeeded(command_id);
         }
+        // The command has already reached its authoritative terminal state;
+        // completion delivery may legitimately have no waiting receiver.
         let _ = envelope.completion.send(Ok(()));
         drain_pending_commands_with_outcomes(commands, outcomes);
         return ReceivedCommandAction::Stop;
@@ -164,6 +168,8 @@ pub(super) fn run_worker<F, S>(
     let _command_outcome_exit_guard = CommandOutcomeExitGuard::new(command_outcomes.clone());
     let worker_span = tracing::info_span!("desktop_worker");
     let _worker_entered = worker_span.enter();
+    // Startup notification is advisory to the spawning thread; if it has
+    // already gone away the worker still owns the authoritative lifecycle.
     let _ = startup.send(());
     let mut state = LoopState {
         settings: &settings,
@@ -285,11 +291,34 @@ pub(super) fn run_worker<F, S>(
                     WorkerCommand::Reconnect => state.manual_reconnect(),
                     command => state.execute(command),
                 };
+
+                // Any failed native input send has an ambiguous remote effect.
+                // Quarantine is centralized here so every current/future input
+                // command receives the same policy instead of relying on one
+                // command arm to remember a special case. `invalidate()` drops
+                // the session before `abandon()` clears local tracked state.
+                let quarantine_result = if state.input.input_state_uncertain() {
+                    tracing::warn!(command_id, "worker_input_session_tainted");
+                    let invalidation = state.invalidate();
+                    let reconnect = state.schedule_reconnect();
+                    invalidation.and(reconnect)
+                } else {
+                    Ok(())
+                };
+
                 match &result {
                     Ok(()) => command_outcomes.mark_succeeded(command_id),
                     Err(error) => command_outcomes.mark_failed(command_id, error),
                 }
+                // Outcome registry state above is authoritative. Delivery can
+                // fail when a caller timed out/dropped its waiter, so this send
+                // cannot change the command result and is intentionally ignored.
                 let _ = envelope.completion.send(result);
+
+                if let Err(error) = quarantine_result {
+                    state.record_failure(classify_desktop_error(&error));
+                    break;
+                }
                 if state.event_terminal_failure() {
                     break;
                 }
