@@ -12,8 +12,11 @@ from collections.abc import Callable
 from importlib import import_module
 from typing import Any, TypeAlias, cast
 
+from .mcp_config import McpConfig, McpConfigError
+
 MCP_EXTRA_REQUIREMENT = "mcp==2.1.1"
 MCP_INSTALL_HINT = 'pip install "vnc-remote-control-client[mcp]"'
+MCP_SERVER_MODULE = "mcp.server.mcpserver"
 
 
 class McpDependencyError(RuntimeError):
@@ -26,7 +29,7 @@ McpServerFactory: TypeAlias = Callable[[str], Any]
 def _load_mcp_server_factory() -> McpServerFactory:
     """Load the optional official MCP SDK only when MCP is actually requested."""
     try:
-        module = import_module("mcp.server")
+        module = import_module(MCP_SERVER_MODULE)
     except ImportError as exc:
         raise McpDependencyError(
             f"MCP support requires {MCP_EXTRA_REQUIREMENT}; install it with {MCP_INSTALL_HINT}"
@@ -48,15 +51,20 @@ def create_mcp_server(*, factory: McpServerFactory | None = None) -> Any:
 
 
 def main() -> None:
-    """Run the initial MCP server over stdio.
+    """Load validated configuration and run the initial MCP server over stdio.
 
-    Transport/configuration selection is added by the next MCP implementation
-    tranche. Until then stdio is the only entry-point transport, which avoids
-    creating a network listener implicitly.
+    Streamable HTTP configuration is parsed now so invalid/public binds fail
+    closed, but the transport itself is intentionally unavailable until MCP-009
+    implements and tests the HTTP lifecycle and SDK protections.
     """
     try:
+        config = McpConfig.load()
+        if config.transport != "stdio":
+            raise McpConfigError(
+                "streamable-http transport is not implemented until MCP-009"
+            )
         server = create_mcp_server()
-    except McpDependencyError as exc:
+    except (McpConfigError, McpDependencyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
     server.run(transport="stdio")
