@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,8 +17,8 @@ class McpConfigTests(unittest.TestCase):
 
     def setUp(self) -> None:
         """Create one private token-file fixture for each test."""
-        tempdir = self.enterContext(tempfile.TemporaryDirectory())
-        self.root = Path(tempdir)
+        self.root = Path(tempfile.mkdtemp(prefix="vrc-mcp-config-test-"))
+        self.addCleanup(shutil.rmtree, self.root)
         self.token_path = self.root / "controller-token"
         self._write_secret(b"controller-secret\n")
 
