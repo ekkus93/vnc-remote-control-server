@@ -92,15 +92,17 @@ def _oversized_dimension_png() -> bytes:
     )
 
 
-def _fake_image_factory(*, data: bytes, format: str) -> SimpleNamespace:
+def _fake_image_factory(**kwargs: Any) -> SimpleNamespace:
     """Return an SDK-like image helper without encoding image bytes as text."""
-    return SimpleNamespace(
-        to_image_content=lambda: SimpleNamespace(
+
+    def to_image_content() -> SimpleNamespace:
+        return SimpleNamespace(
             type="image",
-            data=data,
-            mime_type=f"image/{format}",
+            data=kwargs["data"],
+            mime_type=f"image/{kwargs['format']}",
         )
-    )
+
+    return SimpleNamespace(to_image_content=to_image_content)
 
 
 def _fake_call_tool_result_factory(**kwargs: Any) -> SimpleNamespace:
@@ -292,14 +294,12 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_screenshot_rejects_missing_or_conditional_data_without_placeholder(self) -> None:
         """Unexpected 304-style output fails before any native image is fabricated."""
-        self.client.get_screenshot = mock.Mock(
-            return_value=ScreenshotResponse(
-                data=None,
-                etag='"process-8"',
-                cache_control="private, no-cache, max-age=0",
-                request_id="request-8",
-                not_modified=True,
-            )
+        response = ScreenshotResponse(
+            data=None,
+            etag='"process-0000000000000008"',
+            cache_control="private, no-cache, max-age=0",
+            request_id="request-8",
+            not_modified=True,
         )
         image_factory = mock.Mock(side_effect=AssertionError("image must not be created"))
         tools: dict[str, RegisteredTool] = {}
@@ -311,46 +311,58 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
             image_factory=image_factory,
             call_tool_result_factory=_fake_call_tool_result_factory,
         )
-        with self.assertRaisesRegex(ProtocolError, "contained no PNG data"):
+        with (
+            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            self.assertRaisesRegex(ProtocolError, "contained no PNG data"),
+        ):
             await tools["vnc_get_screenshot"][0]()
         image_factory.assert_not_called()
 
     async def test_screenshot_rejects_non_png_and_invalid_metadata(self) -> None:
         """Malformed image bytes or unsafe metadata remain explicit protocol failures."""
         cases = (
-            ScreenshotResponse(
-                data=b"not a png",
-                etag='"process-8"',
-                cache_control=None,
-                request_id="request-8",
-                not_modified=False,
+            (
+                "non-png",
+                ScreenshotResponse(
+                    data=b"not a png",
+                    etag='"process-0000000000000008"',
+                    cache_control=None,
+                    request_id="request-8",
+                    not_modified=False,
+                ),
             ),
-            ScreenshotResponse(
-                data=_rgba_png(),
-                etag='"process-8"\nleak',
-                cache_control=None,
-                request_id="request-8",
-                not_modified=False,
+            (
+                "unsafe-etag",
+                ScreenshotResponse(
+                    data=_rgba_png(),
+                    etag='"process-0000000000000008\nleak"',
+                    cache_control=None,
+                    request_id="request-8",
+                    not_modified=False,
+                ),
             ),
         )
-        for response in cases:
-            with self.subTest(response=response):
-                self.client.get_screenshot = mock.Mock(return_value=response)
-                with self.assertRaises(ProtocolError):
-                    await self.tools["vnc_get_screenshot"][0]()
+        for label, response in cases:
+            with (
+                self.subTest(label=label),
+                mock.patch.object(self.client, "get_screenshot", return_value=response),
+                self.assertRaises(ProtocolError),
+            ):
+                await self.tools["vnc_get_screenshot"][0]()
 
     async def test_screenshot_rejects_framebuffer_dimensions_beyond_controller_limit(self) -> None:
         """Declared RGBA dimensions cannot exceed the controller's 64 MiB bound."""
-        self.client.get_screenshot = mock.Mock(
-            return_value=ScreenshotResponse(
-                data=_oversized_dimension_png(),
-                etag='"process-8"',
-                cache_control=None,
-                request_id="request-8",
-                not_modified=False,
-            )
+        response = ScreenshotResponse(
+            data=_oversized_dimension_png(),
+            etag='"process-0000000000000008"',
+            cache_control=None,
+            request_id="request-8",
+            not_modified=False,
         )
-        with self.assertRaisesRegex(ProtocolError, "framebuffer limit"):
+        with (
+            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            self.assertRaisesRegex(ProtocolError, "framebuffer limit"),
+        ):
             await self.tools["vnc_get_screenshot"][0]()
 
     async def test_handlers_map_once_to_exact_typed_client_methods(self) -> None:
