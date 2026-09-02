@@ -93,6 +93,17 @@ def _oversized_dimension_png() -> bytes:
     )
 
 
+def _corrupt_idat_png() -> bytes:
+    """Build a CRC-valid PNG whose IDAT bytes are not a valid zlib stream."""
+    ihdr = (2).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes((8, 6, 0, 0, 0))
+    return (
+        _PNG_SIGNATURE
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", b"MCP_SCREENSHOT_PAYLOAD_SENTINEL")
+        + _png_chunk(b"IEND", b"")
+    )
+
+
 def _fake_image_factory(**kwargs: Any) -> SimpleNamespace:
     """Return an SDK-like image helper without encoding image bytes as text."""
 
@@ -350,6 +361,24 @@ class McpReadToolContractTests(unittest.IsolatedAsyncioTestCase):
                 self.assertRaises(ProtocolError),
             ):
                 await self.tools["vnc_get_screenshot"][0]()
+
+    async def test_screenshot_rejects_crc_valid_corrupt_deflate_without_echoing_payload(self) -> None:
+        """CRC-valid corrupt IDAT data still fails with a payload-free protocol error."""
+        response = ScreenshotResponse(
+            data=_corrupt_idat_png(),
+            etag='"process-0000000000000008"',
+            cache_control=None,
+            request_id="request-8",
+            not_modified=False,
+        )
+        with (
+            mock.patch.object(self.client, "get_screenshot", return_value=response),
+            self.assertRaises(ProtocolError) as captured,
+        ):
+            await self.tools["vnc_get_screenshot"][0]()
+        message = str(captured.exception)
+        self.assertEqual(message, "screenshot response was not a valid controller PNG")
+        self.assertNotIn("MCP_SCREENSHOT_PAYLOAD_SENTINEL", message)
 
     async def test_screenshot_rejects_framebuffer_dimensions_beyond_controller_limit(self) -> None:
         """Declared RGBA dimensions cannot exceed the controller's 64 MiB bound."""
