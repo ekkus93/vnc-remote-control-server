@@ -8,8 +8,8 @@ when the ``mcp`` extra is not installed.
 from __future__ import annotations
 
 import sys
-from collections.abc import Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, TypeAlias, cast
@@ -33,6 +33,7 @@ class McpDependencyError(RuntimeError):
 McpServerFactory: TypeAlias = Callable[..., Any]
 McpAnnotationsFactory: TypeAlias = Callable[..., Any]
 McpFieldFactory: TypeAlias = Callable[..., Any]
+McpLifespan: TypeAlias = Callable[[Any], AbstractAsyncContextManager[McpReadRuntime]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,11 +71,11 @@ def _load_mcp_sdk_components() -> McpSdkComponents:
     )
 
 
-def _runtime_lifespan(runtime: McpReadRuntime) -> Callable[[Any], Any]:
+def _runtime_lifespan(runtime: McpReadRuntime) -> McpLifespan:
     """Return an SDK lifespan that always closes the adapter-owned executor."""
 
     @asynccontextmanager
-    async def lifespan(_server: Any) -> Any:
+    async def lifespan(_server: Any) -> AsyncIterator[McpReadRuntime]:
         try:
             yield runtime
         finally:
@@ -94,10 +95,14 @@ def create_mcp_server(
     if config.allow_mutations:
         raise McpConfigError("mutation tools are not implemented until MCP-006")
 
-    sdk = components or _load_mcp_sdk_components()
+    sdk = components if components is not None else _load_mcp_sdk_components()
     runtime = McpReadRuntime(
-        client=client or config.build_client(),
-        executor=executor or BoundedControllerExecutor(config.max_concurrent_calls),
+        client=client if client is not None else config.build_client(),
+        executor=(
+            executor
+            if executor is not None
+            else BoundedControllerExecutor(config.max_concurrent_calls)
+        ),
     )
     server = sdk.server_factory(
         "VNC Remote Control Server",
