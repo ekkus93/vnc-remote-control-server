@@ -30,6 +30,7 @@ from .mcp_tools import (
 MCP_EXTRA_REQUIREMENT = "mcp==2.1.1"
 MCP_INSTALL_HINT = 'pip install "vnc-remote-control-client[mcp]"'
 MCP_SERVER_MODULE = "mcp.server.mcpserver"
+MCP_IMAGE_MODULE = "mcp.server.mcpserver.utilities.types"
 MCP_TYPES_MODULE = "mcp_types"
 PYDANTIC_MODULE = "pydantic"
 
@@ -41,6 +42,8 @@ class McpDependencyError(RuntimeError):
 McpServerFactory: TypeAlias = Callable[..., Any]
 McpAnnotationsFactory: TypeAlias = Callable[..., Any]
 McpFieldFactory: TypeAlias = Callable[..., Any]
+McpImageFactory: TypeAlias = Callable[..., Any]
+McpCallToolResultFactory: TypeAlias = Callable[..., Any]
 McpLifespan: TypeAlias = Callable[[Any], AbstractAsyncContextManager[McpReadRuntime]]
 
 
@@ -51,12 +54,15 @@ class McpSdkComponents:
     server_factory: McpServerFactory
     annotations_factory: McpAnnotationsFactory
     field_factory: McpFieldFactory
+    image_factory: McpImageFactory
+    call_tool_result_factory: McpCallToolResultFactory
 
 
 def load_mcp_sdk_components() -> McpSdkComponents:
     """Load the reviewed optional SDK surface without compatibility fallbacks."""
     try:
         server_module = import_module(MCP_SERVER_MODULE)
+        image_module = import_module(MCP_IMAGE_MODULE)
         types_module = import_module(MCP_TYPES_MODULE)
         pydantic_module = import_module(PYDANTIC_MODULE)
     except ImportError as exc:
@@ -65,17 +71,30 @@ def load_mcp_sdk_components() -> McpSdkComponents:
         ) from exc
 
     server_factory = getattr(server_module, "MCPServer", None)
+    image_factory = getattr(image_module, "Image", None)
     annotations_factory = getattr(types_module, "ToolAnnotations", None)
+    call_tool_result_factory = getattr(types_module, "CallToolResult", None)
     field_factory = getattr(pydantic_module, "Field", None)
-    if not all(callable(item) for item in (server_factory, annotations_factory, field_factory)):
+    required_callables = (
+        server_factory,
+        image_factory,
+        annotations_factory,
+        call_tool_result_factory,
+        field_factory,
+    )
+    if not all(callable(item) for item in required_callables) or not callable(
+        getattr(image_factory, "to_image_content", None)
+    ):
         raise McpDependencyError(
-            f"installed MCP SDK does not provide the expected MCPServer/ToolAnnotations/Field "
-            f"API for {MCP_EXTRA_REQUIREMENT}"
+            "installed MCP SDK does not provide the expected "
+            f"MCPServer/Image/ToolAnnotations/CallToolResult/Field API for {MCP_EXTRA_REQUIREMENT}"
         )
     return McpSdkComponents(
         server_factory=cast(McpServerFactory, server_factory),
         annotations_factory=cast(McpAnnotationsFactory, annotations_factory),
         field_factory=cast(McpFieldFactory, field_factory),
+        image_factory=cast(McpImageFactory, image_factory),
+        call_tool_result_factory=cast(McpCallToolResultFactory, call_tool_result_factory),
     )
 
 
@@ -146,6 +165,8 @@ def create_mcp_server(
             runtime,
             annotations_factory=sdk.annotations_factory,
             positive_command_id_metadata=positive_command_id_metadata,
+            image_factory=sdk.image_factory,
+            call_tool_result_factory=sdk.call_tool_result_factory,
         )
         cleanup.pop_all()
     return server

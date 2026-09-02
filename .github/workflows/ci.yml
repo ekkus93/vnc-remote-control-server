@@ -87,8 +87,8 @@ jobs:
       - name: Compile first-party Python
         run: python -m compileall -q tools/ci_status tests desktop/test-app
 
-      - name: Install Python client package
-        run: pip install -e python/
+      - name: Install Python client package with exact MCP test extra
+        run: pip install -e './python[mcp]'
 
       - name: Install Python lint tools
         run: pip install ruff==0.12.0 pylint==4.0.5 mypy==1.19.1

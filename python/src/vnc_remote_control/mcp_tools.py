@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any, ParamSpec, Protocol, TypeVar
 
+from .errors import ProtocolError
 from .models import (
     ClipboardResponse,
     CommandStatusResponse,
     DisplayResponse,
+    ScreenshotResponse,
     StatusResponse,
 )
 
@@ -17,6 +20,25 @@ P = ParamSpec("P")
 R = TypeVar("R")
 McpToolDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 McpToolRegistrar = Callable[..., McpToolDecorator]
+McpImageFactory = Callable[..., Any]
+McpCallToolResultFactory = Callable[..., Any]
+
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+_PNG_IHDR = b"IHDR"
+_PNG_IDAT = b"IDAT"
+_PNG_IEND = b"IEND"
+_PNG_RGBA8_IHDR_TAIL = bytes((8, 6, 0, 0, 0))
+_CONTROLLER_MAX_FRAMEBUFFER_BYTES = 64 * 1024 * 1024
+# The controller caps the decoded RGBA framebuffer at 64 MiB. PNG scanline
+# filtering and DEFLATE/chunk framing can make an incompressible encoded image
+# larger than the framebuffer, so allow a conservative 2x wire envelope while
+# still refusing an unbounded response before the SDK performs base64 expansion.
+_MAX_MCP_SCREENSHOT_PNG_BYTES = 2 * _CONTROLLER_MAX_FRAMEBUFFER_BYTES
+_MAX_PROCESS_INSTANCE_BYTES = 64
+_MAX_REQUEST_ID_BYTES = 64
+_DEFLATE_INPUT_CHUNK_BYTES = 64 * 1024
+_DEFLATE_OUTPUT_CHUNK_BYTES = 64 * 1024
+_EXPECTED_CACHE_CONTROL = "private, no-cache, max-age=0"
 
 
 class McpReadClient(Protocol):
@@ -27,6 +49,9 @@ class McpReadClient(Protocol):
 
     def get_display(self) -> DisplayResponse:
         """Return display metadata."""
+
+    def get_screenshot(self, *, etag: str | None = None) -> ScreenshotResponse:
+        """Return the current PNG screenshot."""
 
     def get_clipboard(self) -> ClipboardResponse:
         """Return clipboard state."""
@@ -75,6 +100,11 @@ async def _get_display(runtime: McpReadRuntime) -> DisplayResponse:
     return await runtime.executor.call(runtime.client.get_display)
 
 
+async def _get_screenshot(runtime: McpReadRuntime) -> ScreenshotResponse:
+    """Fetch one unconditional screenshot through the shared bounded executor."""
+    return await runtime.executor.call(runtime.client.get_screenshot)
+
+
 async def _get_clipboard(runtime: McpReadRuntime) -> ClipboardResponse:
     """Fetch clipboard state through the shared bounded executor."""
     return await runtime.executor.call(runtime.client.get_clipboard)
@@ -92,18 +122,262 @@ async def _get_metrics(runtime: McpReadRuntime) -> str:
     return await runtime.executor.call(runtime.client.get_metrics)
 
 
+def _png_error() -> ProtocolError:
+    """Return one payload-free error for malformed screenshot PNG data."""
+    return ProtocolError("screenshot response was not a valid controller PNG")
+
+
+def _parse_png_chunk(data: bytes, offset: int) -> tuple[bytes, memoryview, int]:
+    """Return one zero-copy CRC-validated PNG chunk and its next offset."""
+    if len(data) - offset < 12:
+        raise _png_error()
+    chunk_length = int.from_bytes(data[offset : offset + 4], "big")
+    chunk_type = data[offset + 4 : offset + 8]
+    data_start = offset + 8
+    data_end = data_start + chunk_length
+    chunk_end = data_end + 4
+    if chunk_end > len(data):
+        raise _png_error()
+
+    chunk_data = memoryview(data)[data_start:data_end]
+    expected_crc = int.from_bytes(data[data_end:chunk_end], "big")
+    observed_crc = zlib.crc32(chunk_type)
+    observed_crc = zlib.crc32(chunk_data, observed_crc) & 0xFFFFFFFF
+    if observed_crc != expected_crc:
+        raise _png_error()
+    return chunk_type, chunk_data, chunk_end
+
+
+def _validate_png_ihdr(chunk_type: bytes, chunk_data: memoryview) -> tuple[int, int]:
+    """Validate RGBA8 IHDR and return scanline width and decoded byte count."""
+    if chunk_type != _PNG_IHDR or len(chunk_data) != 13:
+        raise _png_error()
+    width = int.from_bytes(chunk_data[0:4], "big")
+    height = int.from_bytes(chunk_data[4:8], "big")
+    if width == 0 or height == 0 or chunk_data[8:13] != _PNG_RGBA8_IHDR_TAIL:
+        raise _png_error()
+    rgba_bytes = width * height * 4
+    if rgba_bytes > _CONTROLLER_MAX_FRAMEBUFFER_BYTES:
+        raise ProtocolError("screenshot PNG exceeded the controller framebuffer limit")
+    scanline_bytes = width * 4 + 1
+    return scanline_bytes, scanline_bytes * height
+
+
+def _validate_decoded_png_bytes(
+    decoded: bytes,
+    *,
+    decoded_before: int,
+    scanline_bytes: int,
+    expected_decoded_bytes: int,
+) -> int:
+    """Validate decoded length and scanline filters without retaining output."""
+    decoded_after = decoded_before + len(decoded)
+    if decoded_after > expected_decoded_bytes:
+        raise _png_error()
+    first_filter = (-decoded_before) % scanline_bytes
+    for index in range(first_filter, len(decoded), scanline_bytes):
+        if decoded[index] > 4:
+            raise _png_error()
+    return decoded_after
+
+
+def _consume_idat(
+    decompressor: Any,
+    chunk_data: memoryview,
+    *,
+    decoded_before: int,
+    scanline_bytes: int,
+    expected_decoded_bytes: int,
+) -> int:
+    """Consume one IDAT payload with fixed-size input/output working buffers."""
+    decoded_count = decoded_before
+    for offset in range(0, len(chunk_data), _DEFLATE_INPUT_CHUNK_BYTES):
+        pending: bytes | memoryview = chunk_data[
+            offset : offset + _DEFLATE_INPUT_CHUNK_BYTES
+        ]
+        while True:
+            try:
+                output = decompressor.decompress(pending, _DEFLATE_OUTPUT_CHUNK_BYTES)
+            except zlib.error as exc:
+                raise _png_error() from exc
+            decoded_count = _validate_decoded_png_bytes(
+                output,
+                decoded_before=decoded_count,
+                scanline_bytes=scanline_bytes,
+                expected_decoded_bytes=expected_decoded_bytes,
+            )
+            unconsumed = decompressor.unconsumed_tail
+            if unconsumed:
+                if not output and len(unconsumed) == len(pending):
+                    raise _png_error()
+                pending = unconsumed
+                continue
+            if len(output) == _DEFLATE_OUTPUT_CHUNK_BYTES:
+                pending = b""
+                continue
+            break
+    if decompressor.unused_data:
+        raise _png_error()
+    return decoded_count
+
+
+def _finish_idat(
+    decompressor: Any,
+    *,
+    decoded_before: int,
+    scanline_bytes: int,
+    expected_decoded_bytes: int,
+) -> None:
+    """Require one complete zlib stream with exactly the declared scanline bytes."""
+    try:
+        tail = decompressor.flush()
+    except zlib.error as exc:
+        raise _png_error() from exc
+    decoded_count = _validate_decoded_png_bytes(
+        tail,
+        decoded_before=decoded_before,
+        scanline_bytes=scanline_bytes,
+        expected_decoded_bytes=expected_decoded_bytes,
+    )
+    if (
+        not decompressor.eof
+        or decompressor.unused_data
+        or decoded_count != expected_decoded_bytes
+    ):
+        raise _png_error()
+
+
+def _validate_png(data: bytes) -> None:
+    """Validate the exact bounded PNG stream emitted by the controller."""
+    if len(data) > _MAX_MCP_SCREENSHOT_PNG_BYTES:
+        raise ProtocolError("screenshot response exceeded the MCP PNG byte limit")
+    if len(data) < 33 or not data.startswith(_PNG_SIGNATURE):
+        raise _png_error()
+
+    chunk_type, chunk_data, offset = _parse_png_chunk(data, len(_PNG_SIGNATURE))
+    scanline_bytes, expected_decoded_bytes = _validate_png_ihdr(chunk_type, chunk_data)
+    decompressor = zlib.decompressobj()
+    decoded_count = 0
+    saw_idat = False
+    while offset < len(data):
+        chunk_type, chunk_data, next_offset = _parse_png_chunk(data, offset)
+        if chunk_type == _PNG_IDAT:
+            saw_idat = True
+            decoded_count = _consume_idat(
+                decompressor,
+                chunk_data,
+                decoded_before=decoded_count,
+                scanline_bytes=scanline_bytes,
+                expected_decoded_bytes=expected_decoded_bytes,
+            )
+            offset = next_offset
+            continue
+        if chunk_type != _PNG_IEND or chunk_data or not saw_idat or next_offset != len(data):
+            raise _png_error()
+        _finish_idat(
+            decompressor,
+            decoded_before=decoded_count,
+            scanline_bytes=scanline_bytes,
+            expected_decoded_bytes=expected_decoded_bytes,
+        )
+        return
+    raise _png_error()
+
+
+def _is_safe_identifier(value: str, maximum: int) -> bool:
+    """Return whether value matches the controller's bounded identifier alphabet."""
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return (
+        0 < len(encoded) <= maximum
+        and all(
+            byte in b"._-"
+            or ord("0") <= byte <= ord("9")
+            or ord("A") <= byte <= ord("Z")
+            or ord("a") <= byte <= ord("z")
+            for byte in encoded
+        )
+    )
+
+
+def _sanitize_etag(value: str | None) -> str | None:
+    """Validate the controller's strong process-instance/revision ETag shape."""
+    if value is None:
+        return None
+    if len(value) < 20 or not value.startswith('"') or not value.endswith('"'):
+        raise ProtocolError("screenshot ETag metadata was invalid")
+    instance_and_revision = value[1:-1]
+    instance, separator, revision = instance_and_revision.rpartition("-")
+    if (
+        separator != "-"
+        or not _is_safe_identifier(instance, _MAX_PROCESS_INSTANCE_BYTES)
+        or len(revision) != 16
+        or any(character not in "0123456789abcdef" for character in revision)
+    ):
+        raise ProtocolError("screenshot ETag metadata was invalid")
+    return value
+
+
+def _sanitize_request_id(value: str | None) -> str | None:
+    """Validate request IDs against the controller's public identifier contract."""
+    if value is None:
+        return None
+    if not _is_safe_identifier(value, _MAX_REQUEST_ID_BYTES):
+        raise ProtocolError("screenshot request ID metadata was invalid")
+    return value
+
+
+def _screenshot_metadata(response: ScreenshotResponse) -> dict[str, str]:
+    """Return only bounded metadata safe to expose beside native image content."""
+    if response.cache_control not in (None, _EXPECTED_CACHE_CONTROL):
+        raise ProtocolError("screenshot cache-control metadata was invalid")
+    metadata: dict[str, str] = {}
+    etag = _sanitize_etag(response.etag)
+    request_id = _sanitize_request_id(response.request_id)
+    if etag is not None:
+        metadata["etag"] = etag
+    if request_id is not None:
+        metadata["request_id"] = request_id
+    return metadata
+
+
+def _native_screenshot_result(
+    response: ScreenshotResponse,
+    *,
+    image_factory: McpImageFactory,
+    call_tool_result_factory: McpCallToolResultFactory,
+) -> Any:
+    """Convert one fresh controller PNG to native MCP image content."""
+    if response.not_modified or response.data is None:
+        raise ProtocolError("unconditional screenshot response contained no PNG data")
+    _validate_png(response.data)
+    metadata = _screenshot_metadata(response)
+    image = image_factory(data=response.data, format="png")
+    to_image_content = getattr(image, "to_image_content", None)
+    if not callable(to_image_content):
+        raise ProtocolError("MCP image helper did not provide native image content")
+    return call_tool_result_factory(
+        content=[to_image_content()],
+        structured_content=metadata,
+    )
+
+
 def register_read_only_tools(
     tool: McpToolRegistrar,
     runtime: McpReadRuntime,
     *,
     annotations_factory: Any,
     positive_command_id_metadata: object,
+    image_factory: McpImageFactory,
+    call_tool_result_factory: McpCallToolResultFactory,
 ) -> None:
     """Register the initial bounded read-only MCP tool catalog.
 
-    ``annotations_factory`` and the Pydantic ``Field`` metadata are injected by
-    :mod:`mcp_server` only after the optional, exact-pinned MCP SDK has loaded.
-    This keeps importing the core client free of third-party runtime imports.
+    SDK/Pydantic factories are injected by :mod:`mcp_server` only after the
+    optional, exact-pinned MCP SDK has loaded. This keeps importing the core
+    client free of third-party runtime imports.
     """
     closed_world = annotations_factory(
         read_only_hint=True,
@@ -137,6 +411,21 @@ def register_read_only_tools(
     async def vnc_get_display() -> DisplayResponse:
         """Return current display metadata without capturing image bytes."""
         return await _get_display(runtime)
+
+    @tool(
+        name="vnc_get_screenshot",
+        description="Return the current desktop screenshot as native PNG image content.",
+        annotations=open_world,
+        structured_output=False,
+    )
+    async def vnc_get_screenshot() -> Any:
+        """Return one fresh screenshot without ETag optimization or mutation."""
+        response = await _get_screenshot(runtime)
+        return _native_screenshot_result(
+            response,
+            image_factory=image_factory,
+            call_tool_result_factory=call_tool_result_factory,
+        )
 
     @tool(
         name="vnc_get_clipboard",
