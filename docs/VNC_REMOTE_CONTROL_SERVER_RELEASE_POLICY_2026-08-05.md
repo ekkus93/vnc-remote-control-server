@@ -33,7 +33,7 @@ There are no implicit or silent exceptions. `--ignore-unfixed` is prohibited, wi
 
 A permitted determination must be either `not_affected` or `not_exploitable`, include a substantive reachability rationale, cite the Debian Security Tracker, link a repository tracking issue, and expire no more than 30 days after review. Risk-acceptance entries are not permitted for v0.1. Stale determinations that no longer appear in the scan also fail the gate so they cannot accumulate silently.
 
-Current determinations are stored in `security/trivy-critical-vex.json` and tracked by issue #7. They expire on 2026-09-04. Expiry, a new finding, a package-version change, a new application input path, or a mismatch between the report and the VEX file blocks release.
+Current determinations are stored in `security/trivy-critical-vex.json` and tracked by issue #7. They were re-reviewed on **2026-08-31** and expire on **2026-09-30**. Expiry, a new finding, a package-version change, a new application input path, or a mismatch between the report and the VEX file blocks release.
 
 ## Native-safety coverage and limitations
 
