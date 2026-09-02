@@ -45,7 +45,7 @@ class McpSdkComponents:
     field_factory: McpFieldFactory
 
 
-def _load_mcp_sdk_components() -> McpSdkComponents:
+def load_mcp_sdk_components() -> McpSdkComponents:
     """Load the reviewed optional SDK surface without compatibility fallbacks."""
     try:
         server_module = import_module(MCP_SERVER_MODULE)
@@ -95,7 +95,7 @@ def create_mcp_server(
     if config.allow_mutations:
         raise McpConfigError("mutation tools are not implemented until MCP-006")
 
-    sdk = components if components is not None else _load_mcp_sdk_components()
+    sdk = components if components is not None else load_mcp_sdk_components()
     runtime = McpReadRuntime(
         client=client if client is not None else config.build_client(),
         executor=(
