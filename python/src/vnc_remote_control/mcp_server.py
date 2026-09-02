@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import sys
 from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import (
+    AbstractAsyncContextManager,
+    ExitStack,
+    asynccontextmanager,
+)
 from dataclasses import dataclass
 from importlib import import_module
 from typing import Any, TypeAlias, cast
@@ -17,7 +21,11 @@ from typing import Any, TypeAlias, cast
 from .client import VncRemoteControlClient
 from .mcp_config import McpConfig, McpConfigError
 from .mcp_execution import BoundedControllerExecutor
-from .mcp_tools import McpReadRuntime, register_read_only_tools
+from .mcp_tools import (
+    McpCallExecutor,
+    McpReadRuntime,
+    register_read_only_tools,
+)
 
 MCP_EXTRA_REQUIREMENT = "mcp==2.1.1"
 MCP_INSTALL_HINT = 'pip install "vnc-remote-control-client[mcp]"'
@@ -89,7 +97,7 @@ def create_mcp_server(
     config: McpConfig,
     components: McpSdkComponents | None = None,
     client: VncRemoteControlClient | None = None,
-    executor: BoundedControllerExecutor | None = None,
+    executor: McpCallExecutor | None = None,
 ) -> Any:
     """Construct the configured MCP server without starting a transport."""
     if config.allow_mutations:
@@ -104,36 +112,41 @@ def create_mcp_server(
             else BoundedControllerExecutor(config.max_concurrent_calls)
         ),
     )
-    server = sdk.server_factory(
-        "VNC Remote Control Server",
-        lifespan=_runtime_lifespan(runtime),
-    )
-    if not callable(getattr(server, "tool", None)):
-        runtime.executor.close()
-        raise McpDependencyError(
-            f"installed MCP SDK does not provide the expected tool registration API for "
-            f"{MCP_EXTRA_REQUIREMENT}"
-        )
 
-    try:
-        positive_command_id_metadata = sdk.field_factory(
-            ge=1,
-            strict=True,
-            description="Positive process-local controller command identifier.",
+    # Until construction succeeds, this stack owns runtime cleanup. Successful
+    # construction transfers ownership to the MCP lifespan without relying on a
+    # broad exception handler or garbage collection to close worker threads.
+    with ExitStack() as cleanup:
+        cleanup.callback(runtime.executor.close)
+        server = sdk.server_factory(
+            "VNC Remote Control Server",
+            lifespan=_runtime_lifespan(runtime),
         )
-    except TypeError as exc:
-        runtime.executor.close()
-        raise McpDependencyError(
-            f"installed MCP SDK does not provide the expected schema Field API for "
-            f"{MCP_EXTRA_REQUIREMENT}"
-        ) from exc
+        if not callable(getattr(server, "tool", None)):
+            raise McpDependencyError(
+                f"installed MCP SDK does not provide the expected tool registration API for "
+                f"{MCP_EXTRA_REQUIREMENT}"
+            )
 
-    register_read_only_tools(
-        server,
-        runtime,
-        annotations_factory=sdk.annotations_factory,
-        positive_command_id_metadata=positive_command_id_metadata,
-    )
+        try:
+            positive_command_id_metadata = sdk.field_factory(
+                ge=1,
+                strict=True,
+                description="Positive process-local controller command identifier.",
+            )
+        except TypeError as exc:
+            raise McpDependencyError(
+                f"installed MCP SDK does not provide the expected schema Field API for "
+                f"{MCP_EXTRA_REQUIREMENT}"
+            ) from exc
+
+        register_read_only_tools(
+            server,
+            runtime,
+            annotations_factory=sdk.annotations_factory,
+            positive_command_id_metadata=positive_command_id_metadata,
+        )
+        cleanup.pop_all()
     return server
 
 
