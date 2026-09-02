@@ -59,15 +59,24 @@ class NativeContractTests(unittest.TestCase):
         self.assertIn("impl Drop for NativeClient", adapter)
         self.assertNotIn("pub fn raw", adapter)
 
-    def test_native_framebuffer_updates_use_library_incremental_rearm(self) -> None:
-        """Framebuffer updates must rely on libvncclient's automatic rearm, not manual resends."""
+    def test_native_framebuffer_updates_use_checked_library_incremental_rearm(self) -> None:
+        """Framebuffer updates must use libvncclient rearm plus checked revision advancement."""
         source = SHIM_SOURCE.read_text(encoding="utf-8")
-        callback_start = source.index("static void vrc_finished_framebuffer_update")
-        callback_end = source.index("static vrc_status vrc_store_clipboard", callback_start)
+        helper_start = source.index("static vrc_status vrc_advance_framebuffer_revision")
+        callback_start = source.index("static void vrc_finished_framebuffer_update", helper_start)
+        helper = source[helper_start:callback_start]
+        callback_end = source.index("static void vrc_clear_callback_failure", callback_start)
         callback = source[callback_start:callback_end]
+
+        self.assertIn("client->revision == UINT64_MAX", helper)
+        self.assertIn("VRC_STATUS_FRAMEBUFFER_REVISION_EXHAUSTED", helper)
+        self.assertIn("client->callback_status = VRC_STATUS_FRAMEBUFFER_REVISION_EXHAUSTED", helper)
+        self.assertIn("client->complete = 0;", helper)
+        self.assertIn("client->revision += 1U;", helper)
+        self.assertIn("client->complete = 1;", helper)
         self.assertNotIn("SendFramebufferUpdateRequest(", callback)
-        self.assertIn("client->revision += 1U;", callback)
-        self.assertIn("client->complete = 1;", callback)
+        self.assertIn("vrc_advance_framebuffer_revision(client)", callback)
+        self.assertNotIn("client->revision += 1U;", callback)
 
         connect_start = source.index("vrc_status vrc_client_connect")
         connect_end = source.index("vrc_status vrc_client_poll", connect_start)
@@ -152,8 +161,8 @@ class NativeContractTests(unittest.TestCase):
         )
         self.assertIn("requires one additional owned", source)
 
-    def test_clipboard_callback_failures_are_machine_readable_and_tested(self) -> None:
-        """Callback failures must propagate through poll and invalidate stale data."""
+    def test_callback_failures_are_machine_readable_and_tested(self) -> None:
+        """Clipboard/framebuffer callback failures must propagate through poll."""
         header = SHIM_HEADER.read_text(encoding="utf-8")
         source = SHIM_SOURCE.read_text(encoding="utf-8")
         smoke = NATIVE_SMOKE.read_text(encoding="utf-8")
@@ -162,6 +171,7 @@ class NativeContractTests(unittest.TestCase):
             "VRC_STATUS_CLIPBOARD_ALLOCATION_FAILED",
             "VRC_STATUS_CLIPBOARD_STATE_INVALID",
             "VRC_STATUS_CLIPBOARD_REVISION_EXHAUSTED",
+            "VRC_STATUS_FRAMEBUFFER_REVISION_EXHAUSTED",
         ):
             self.assertIn(status, header)
             self.assertIn(status, source)
