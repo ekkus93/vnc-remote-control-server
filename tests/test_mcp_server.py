@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
+from mcp_test_support import MUTATION_TOOL_NAMES
 from vnc_remote_control import mcp_server
 from vnc_remote_control.client import VncRemoteControlClient
 from vnc_remote_control.mcp_config import McpConfig, McpConfigError
@@ -21,18 +22,6 @@ from vnc_remote_control.mcp_execution import BoundedControllerExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON_ROOT = ROOT / "python"
-_MUTATION_TOOL_NAMES = {
-    "vnc_move_pointer",
-    "vnc_set_pointer_button",
-    "vnc_click_pointer",
-    "vnc_double_click_pointer",
-    "vnc_scroll_pointer",
-    "vnc_set_keyboard_key",
-    "vnc_send_keyboard_chord",
-    "vnc_type_keyboard_text",
-    "vnc_set_clipboard",
-    "vnc_request_reconnect",
-}
 
 
 def _fake_server_factory(name: str, **kwargs: Any) -> mock.Mock:
@@ -255,7 +244,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             client=mock.create_autospec(VncRemoteControlClient, instance=True),
             executor=executor,
         )
-        self.assertTrue(_registered_tool_names(server).isdisjoint(_MUTATION_TOOL_NAMES))
+        self.assertTrue(_registered_tool_names(server).isdisjoint(MUTATION_TOOL_NAMES))
         executor.close.assert_not_called()
 
     def test_mutation_opt_in_registers_exact_reviewed_catalog(self) -> None:
@@ -268,8 +257,8 @@ class McpServerScaffoldTests(unittest.TestCase):
             executor=executor,
         )
         self.assertEqual(
-            _registered_tool_names(server) & _MUTATION_TOOL_NAMES,
-            _MUTATION_TOOL_NAMES,
+            _registered_tool_names(server) & MUTATION_TOOL_NAMES,
+            MUTATION_TOOL_NAMES,
         )
         executor.close.assert_not_called()
 
