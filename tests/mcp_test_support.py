@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 RegisteredTool = tuple[Callable[..., Any], dict[str, Any]]
@@ -24,29 +24,24 @@ MUTATION_TOOL_NAMES = frozenset(
 )
 
 
-@dataclass(frozen=True, slots=True)
-class FakeAnnotations:
-    """Inspectable stand-in for the optional SDK ToolAnnotations model."""
-
-    read_only_hint: bool
-    destructive_hint: bool
-    idempotent_hint: bool
-    open_world_hint: bool
+def fake_annotations_factory(**kwargs: Any) -> SimpleNamespace:
+    """Return inspectable SDK-like annotation data."""
+    return SimpleNamespace(**kwargs)
 
 
-def recording_tool_registrar(
-    tools: dict[str, RegisteredTool],
-) -> Callable[..., Callable[[Callable[..., Any]], Callable[..., Any]]]:
-    """Return a dependency-free registrar that captures MCP tool metadata."""
+class RecordingToolRegistrar:
+    """Capture SDK-style tool registrations into one supplied catalog."""
 
-    def tool(**kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Capture one SDK-style tool registration."""
+    def __init__(self, tools: dict[str, RegisteredTool]) -> None:
+        self._tools = tools
 
-        def decorator(function: Callable[..., Any]) -> Callable[..., Any]:
-            """Store and return the registered function unchanged."""
-            tools[kwargs["name"]] = (function, kwargs)
+    def __call__(
+        self, **kwargs: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Return one decorator that records its registration metadata."""
+
+        def record(function: Callable[..., Any]) -> Callable[..., Any]:
+            self._tools[kwargs["name"]] = (function, kwargs)
             return function
 
-        return decorator
-
-    return tool
+        return record
