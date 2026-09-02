@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import io
 import sys
@@ -48,9 +49,22 @@ class McpServerScaffoldTests(unittest.TestCase):
         )
 
     def test_import_does_not_require_or_start_mcp_runtime(self) -> None:
-        """Importing the adapter is safe when the optional MCP SDK is absent."""
-        self.assertIsNone(importlib.util.find_spec("mcp"))
-        self.assertEqual(mcp_server.MCP_EXTRA_REQUIREMENT, "mcp==2.1.1")
+        """Importing the adapter never touches the optional MCP SDK."""
+        module_path = SRC_ROOT / "vnc_remote_control" / "mcp_server.py"
+        spec = importlib.util.spec_from_file_location("_isolated_vrc_mcp_server", module_path)
+        self.assertIsNotNone(spec)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        original_import = builtins.__import__
+
+        def guarded_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "mcp" or name.startswith("mcp."):
+                raise AssertionError("module import attempted to load optional MCP SDK")
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=guarded_import):
+            spec.loader.exec_module(module)
+        self.assertEqual(module.MCP_EXTRA_REQUIREMENT, "mcp==2.1.1")
 
     def test_create_mcp_server_uses_injected_factory_without_starting_it(self) -> None:
         """Construction is injectable and never starts a transport implicitly."""
