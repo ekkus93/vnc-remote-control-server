@@ -114,7 +114,7 @@ class McpOutcomeToolRegistrar:
         self._call_tool_result_factory = call_tool_result_factory
         self._text_content_factory = text_content_factory
         self._mutation_validation_errors = mutation_validation_errors
-        self._handled_errors = (
+        self._handled_errors: tuple[type[Exception], ...] = (
             ApiError,
             ProtocolError,
             TransportError,
