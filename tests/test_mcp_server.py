@@ -42,6 +42,11 @@ def _fake_field_factory(**kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(**kwargs)
 
 
+def _fake_text_content_factory(**kwargs: Any) -> SimpleNamespace:
+    """Return inspectable text content without importing MCP."""
+    return SimpleNamespace(**kwargs)
+
+
 def _config(*, transport: str = "stdio", allow_mutations: bool = False) -> McpConfig:
     """Return a typed stand-in for validated configuration."""
     client = mock.create_autospec(VncRemoteControlClient, instance=True)
@@ -62,6 +67,7 @@ def _components() -> mcp_server.McpSdkComponents:
         field_factory=_fake_field_factory,
         image_factory=mock.Mock,
         call_tool_result_factory=SimpleNamespace,
+        text_content_factory=_fake_text_content_factory,
     )
 
 
@@ -135,6 +141,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             field_factory=_fake_field_factory,
             image_factory=mock.Mock,
             call_tool_result_factory=SimpleNamespace,
+            text_content_factory=_fake_text_content_factory,
         )
         with self.assertRaisesRegex(RuntimeError, "annotation setup failed"):
             mcp_server.create_mcp_server(
@@ -155,6 +162,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             SimpleNamespace(
                 ToolAnnotations=_fake_annotations_factory,
                 CallToolResult=SimpleNamespace,
+                TextContent=_fake_text_content_factory,
             ),
             SimpleNamespace(Field=_fake_field_factory),
         ]
@@ -172,6 +180,7 @@ class McpServerScaffoldTests(unittest.TestCase):
         self.assertIs(components.server_factory, _fake_server_factory)
         self.assertIs(components.image_factory, image_factory)
         self.assertIs(components.call_tool_result_factory, SimpleNamespace)
+        self.assertIs(components.text_content_factory, _fake_text_content_factory)
 
     def test_exact_sdk_image_helper_produces_native_content(self) -> None:
         """The pinned SDK emits ImageContent and preserves structured metadata."""
@@ -216,7 +225,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             with self.assertRaises(mcp_server.McpDependencyError) as context:
                 mcp_server.load_mcp_sdk_components()
         self.assertIn(
-            "MCPServer/Image/ToolAnnotations/CallToolResult/Field",
+            "MCPServer/Image/ToolAnnotations/CallToolResult/TextContent/Field",
             str(context.exception),
         )
 
@@ -228,6 +237,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             SimpleNamespace(
                 ToolAnnotations=_fake_annotations_factory,
                 CallToolResult=SimpleNamespace,
+                TextContent=_fake_text_content_factory,
             ),
             SimpleNamespace(Field=_fake_field_factory),
         ]
@@ -271,6 +281,7 @@ class McpServerScaffoldTests(unittest.TestCase):
             field_factory=field_factory,
             image_factory=mock.Mock,
             call_tool_result_factory=SimpleNamespace,
+            text_content_factory=_fake_text_content_factory,
         )
         executor = _executor_mock()
         mcp_server.create_mcp_server(
