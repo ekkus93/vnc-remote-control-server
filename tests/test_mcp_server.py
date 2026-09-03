@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
+from mcp_test_support import MUTATION_TOOL_NAMES
 from vnc_remote_control import mcp_server
 from vnc_remote_control.client import VncRemoteControlClient
 from vnc_remote_control.mcp_config import McpConfig, McpConfigError
@@ -67,6 +68,11 @@ def _components() -> mcp_server.McpSdkComponents:
 def _executor_mock() -> Any:
     """Return an autospecced executor without allocating worker threads."""
     return mock.create_autospec(BoundedControllerExecutor, instance=True)
+
+
+def _registered_tool_names(server: mock.Mock) -> set[str]:
+    """Return tool names passed to the fake server's registrar."""
+    return {call.kwargs["name"] for call in server.tool.call_args_list}
 
 
 class McpServerScaffoldTests(unittest.TestCase):
@@ -229,14 +235,32 @@ class McpServerScaffoldTests(unittest.TestCase):
             with self.assertRaises(mcp_server.McpDependencyError):
                 mcp_server.load_mcp_sdk_components()
 
-    def test_mutation_opt_in_fails_until_mutation_catalog_exists(self) -> None:
-        """An explicit mutation request is never silently downgraded to read-only."""
-        with self.assertRaises(McpConfigError) as context:
-            mcp_server.create_mcp_server(
-                config=_config(allow_mutations=True),
-                components=_components(),
-            )
-        self.assertIn("MCP-006", str(context.exception))
+    def test_mutation_catalog_is_absent_without_explicit_opt_in(self) -> None:
+        """Default construction exposes no mutation capability."""
+        executor = _executor_mock()
+        server = mcp_server.create_mcp_server(
+            config=_config(allow_mutations=False),
+            components=_components(),
+            client=mock.create_autospec(VncRemoteControlClient, instance=True),
+            executor=executor,
+        )
+        self.assertTrue(_registered_tool_names(server).isdisjoint(MUTATION_TOOL_NAMES))
+        executor.close.assert_not_called()
+
+    def test_mutation_opt_in_registers_exact_reviewed_catalog(self) -> None:
+        """Explicit mutation opt-in registers all and only reviewed mutation tools."""
+        executor = _executor_mock()
+        server = mcp_server.create_mcp_server(
+            config=_config(allow_mutations=True),
+            components=_components(),
+            client=mock.create_autospec(VncRemoteControlClient, instance=True),
+            executor=executor,
+        )
+        self.assertEqual(
+            _registered_tool_names(server) & MUTATION_TOOL_NAMES,
+            MUTATION_TOOL_NAMES,
+        )
+        executor.close.assert_not_called()
 
     def test_schema_field_factory_receives_strict_positive_bound(self) -> None:
         """Command IDs request integer-only minimum-one SDK schema metadata."""

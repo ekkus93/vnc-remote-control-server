@@ -3,3 +3,6 @@ line-length = 100
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[lint.isort]
+known-first-party = ["mcp_test_support", "vnc_remote_control"]

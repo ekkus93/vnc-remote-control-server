@@ -21,6 +21,12 @@ from typing import Any, TypeAlias, cast
 from .client import VncRemoteControlClient
 from .mcp_config import McpConfig, McpConfigError
 from .mcp_execution import BoundedControllerExecutor
+from .mcp_mutation_tools import (
+    McpMutationRuntime,
+    McpMutationSchemaMetadata,
+    build_mutation_schema_metadata,
+    register_mutation_tools,
+)
 from .mcp_tools import (
     McpCallExecutor,
     McpReadRuntime,
@@ -111,6 +117,29 @@ def _runtime_lifespan(runtime: McpReadRuntime) -> McpLifespan:
     return lifespan
 
 
+def _build_schema_metadata(
+    field_factory: McpFieldFactory,
+    *,
+    allow_mutations: bool,
+) -> tuple[object, McpMutationSchemaMetadata | None]:
+    """Build reviewed Pydantic Field metadata without compatibility fallbacks."""
+    try:
+        positive_command_id = field_factory(
+            ge=1,
+            strict=True,
+            description="Positive process-local controller command identifier.",
+        )
+        mutation_schema = (
+            build_mutation_schema_metadata(field_factory) if allow_mutations else None
+        )
+    except TypeError as exc:
+        raise McpDependencyError(
+            "installed MCP SDK does not provide the expected schema Field API for "
+            f"{MCP_EXTRA_REQUIREMENT}"
+        ) from exc
+    return positive_command_id, mutation_schema
+
+
 def create_mcp_server(
     *,
     config: McpConfig,
@@ -119,17 +148,16 @@ def create_mcp_server(
     executor: McpCallExecutor | None = None,
 ) -> Any:
     """Construct the configured MCP server without starting a transport."""
-    if config.allow_mutations:
-        raise McpConfigError("mutation tools are not implemented until MCP-006")
-
     sdk = components if components is not None else load_mcp_sdk_components()
+    controller_client = client if client is not None else config.build_client()
+    controller_executor = (
+        executor
+        if executor is not None
+        else BoundedControllerExecutor(config.max_concurrent_calls)
+    )
     runtime = McpReadRuntime(
-        client=client if client is not None else config.build_client(),
-        executor=(
-            executor
-            if executor is not None
-            else BoundedControllerExecutor(config.max_concurrent_calls)
-        ),
+        client=controller_client,
+        executor=controller_executor,
     )
 
     # Until construction succeeds, this stack owns runtime cleanup. Successful
@@ -148,18 +176,10 @@ def create_mcp_server(
                 f"{MCP_EXTRA_REQUIREMENT}"
             )
 
-        try:
-            positive_command_id_metadata = sdk.field_factory(
-                ge=1,
-                strict=True,
-                description="Positive process-local controller command identifier.",
-            )
-        except TypeError as exc:
-            raise McpDependencyError(
-                f"installed MCP SDK does not provide the expected schema Field API for "
-                f"{MCP_EXTRA_REQUIREMENT}"
-            ) from exc
-
+        positive_command_id_metadata, mutation_schema = _build_schema_metadata(
+            sdk.field_factory,
+            allow_mutations=config.allow_mutations,
+        )
         register_read_only_tools(
             tool_registrar,
             runtime,
@@ -168,6 +188,16 @@ def create_mcp_server(
             image_factory=sdk.image_factory,
             call_tool_result_factory=sdk.call_tool_result_factory,
         )
+        if mutation_schema is not None:
+            register_mutation_tools(
+                tool_registrar,
+                McpMutationRuntime(
+                    client=controller_client,
+                    executor=controller_executor,
+                ),
+                annotations_factory=sdk.annotations_factory,
+                schema=mutation_schema,
+            )
         cleanup.pop_all()
     return server
 

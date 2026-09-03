@@ -9,6 +9,18 @@ init-hook=
     sys.path.insert(0, "python/src")
     sys.path.insert(0, ".")
 
+[IMPORTS]
+# Pylint 4.0.5 delegates import grouping to isort but does not expose the
+# newer known-first-party option. When run from the repository root it
+# classifies the editable-installed vnc_remote_control package as third-party
+# while classifying the root-level mcp_test_support module as first-party,
+# which conflicts with Ruff's explicit first-party source-root configuration.
+# Keep C0411 enabled and make Pylint's ordering classification deterministic by
+# placing both names in the same group. This affects import ordering only; it
+# does not change packaging, dependency ownership, import resolution, or any
+# runtime behavior.
+known-third-party=enchant,mcp_test_support,vnc_remote_control
+
 [DESIGN]
 # Deliberate, documented widenings of pylint's default design-metric
 # thresholds — not per-line suppressions. Each covers a class of legitimate
