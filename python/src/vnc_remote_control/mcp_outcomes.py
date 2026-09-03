@@ -210,7 +210,7 @@ class McpOutcomeToolRegistrar:
             )
         if isinstance(error, ApiError):
             return self._result("Controller rejected the read-only request.", _api_context(error))
-        if isinstance(error, (McpCallCapacityError, McpExecutorClosedError)):
+        if isinstance(error, McpCallCapacityError | McpExecutorClosedError):
             return self._result(
                 "MCP adapter could not admit the read-only controller call.",
                 {"kind": "adapter_internal_error"},
@@ -235,9 +235,9 @@ class McpOutcomeToolRegistrar:
             return self._command_unknown(error)
         if isinstance(error, ApiError):
             return self._mutation_api_error(error)
-        if isinstance(error, (TransportError, ProtocolError)):
+        if isinstance(error, TransportError | ProtocolError):
             return self._mutation_unknown()
-        if isinstance(error, (McpCallCapacityError, McpExecutorClosedError)):
+        if isinstance(error, McpCallCapacityError | McpExecutorClosedError):
             return self._result(
                 "MCP adapter could not admit the mutation controller call; no request was issued.",
                 {"kind": "adapter_internal_error"},
