@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
 from .errors import ApiError, CommandOutcomeUnknownError, ProtocolError, TransportError
-from .mcp_execution import McpCallCapacityError, McpExecutorClosedError
+from .mcp_execution import (
+    McpCallCapacityError,
+    McpExecutorClosedError,
+    McpUnexpectedControllerError,
+)
 from .mcp_tools import McpToolRegistrar
 
 McpCallToolResultFactory = Callable[..., Any]
 McpTextContentFactory = Callable[..., Any]
 
 _MAX_IDENTIFIER_BYTES = 64
+_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$", re.ASCII)
 _COMMAND_UNKNOWN_INSTRUCTION = (
     "Use vnc_get_command_status(command_id) before deciding on any further mutation; "
     "automatic replay is unsafe."
@@ -42,13 +48,7 @@ def _safe_identifier(value: object) -> str | None:
         return None
     if not 0 < len(encoded) <= _MAX_IDENTIFIER_BYTES:
         return None
-    if not all(
-        byte in b"._-"
-        or ord("0") <= byte <= ord("9")
-        or ord("A") <= byte <= ord("Z")
-        or ord("a") <= byte <= ord("z")
-        for byte in encoded
-    ):
+    if _IDENTIFIER_PATTERN.fullmatch(value) is None:
         return None
     return value
 
@@ -114,6 +114,15 @@ class McpOutcomeToolRegistrar:
         self._call_tool_result_factory = call_tool_result_factory
         self._text_content_factory = text_content_factory
         self._mutation_validation_errors = mutation_validation_errors
+        self._handled_errors = (
+            ApiError,
+            ProtocolError,
+            TransportError,
+            McpCallCapacityError,
+            McpExecutorClosedError,
+            McpUnexpectedControllerError,
+            *mutation_validation_errors,
+        )
 
     def _result(self, text: str, context: dict[str, object]) -> Any:
         """Build one classified tool error through exact injected SDK factories."""
@@ -215,14 +224,16 @@ class McpOutcomeToolRegistrar:
                 "MCP adapter could not admit the read-only controller call.",
                 {"kind": "adapter_internal_error"},
             )
-        _LOGGER.error(
-            "MCP read-only tool %s raised an unexpected adapter failure",
-            tool_name,
-        )
-        return self._result(
-            "MCP adapter failed while handling the read-only controller call.",
-            {"kind": "adapter_internal_error"},
-        )
+        if isinstance(error, McpUnexpectedControllerError):
+            _LOGGER.error(
+                "MCP read-only tool %s received an unexpected controller failure",
+                tool_name,
+            )
+            return self._result(
+                "MCP adapter failed while handling the read-only controller call.",
+                {"kind": "adapter_internal_error"},
+            )
+        raise McpOutcomeRegistrationError("unhandled read-only MCP error classification")
 
     def _mutation_error(self, error: Exception, *, tool_name: str) -> Any:
         """Classify one mutation failure conservatively after local preflight."""
@@ -235,21 +246,30 @@ class McpOutcomeToolRegistrar:
             return self._command_unknown(error)
         if isinstance(error, ApiError):
             return self._mutation_api_error(error)
-        if isinstance(error, TransportError | ProtocolError):
+        if isinstance(error, TransportError | ProtocolError | McpUnexpectedControllerError):
+            if isinstance(error, McpUnexpectedControllerError):
+                _LOGGER.error(
+                    "MCP mutation tool %s received an unexpected controller failure; "
+                    "classifying outcome unknown",
+                    tool_name,
+                )
             return self._mutation_unknown()
         if isinstance(error, McpCallCapacityError | McpExecutorClosedError):
             return self._result(
                 "MCP adapter could not admit the mutation controller call; no request was issued.",
                 {"kind": "adapter_internal_error"},
             )
-        _LOGGER.error(
-            "MCP mutation tool %s raised an unexpected adapter failure; "
-            "classifying outcome unknown",
-            tool_name,
-        )
-        return self._mutation_unknown()
+        raise McpOutcomeRegistrationError("unhandled mutation MCP error classification")
 
-    def __call__(self, **registration: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def __call__(
+        self, **registration: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Support the SDK registrar callable protocol."""
+        return self.register(**registration)
+
+    def register(
+        self, **registration: Any
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Return a registrar decorator that preserves schema/signature metadata."""
         annotations = registration.get("annotations")
         read_only_hint = getattr(annotations, "read_only_hint", None)
@@ -266,7 +286,7 @@ class McpOutcomeToolRegistrar:
                 "MCP SDK tool registrar did not return a decorator"
             )
 
-        def register(function: Callable[..., Any]) -> Callable[..., Any]:
+        def install(function: Callable[..., Any]) -> Callable[..., Any]:
             if not inspect.iscoroutinefunction(function):
                 raise McpOutcomeRegistrationError(
                     "MCP outcome classification requires asynchronous tool handlers"
@@ -276,11 +296,11 @@ class McpOutcomeToolRegistrar:
             async def classified(*args: Any, **kwargs: Any) -> Any:
                 try:
                     return await function(*args, **kwargs)
-                except Exception as error:  # Tool failures become explicit MCP error results.
+                except self._handled_errors as error:
                     if read_only_hint:
                         return self._read_error(error, tool_name=tool_name)
                     return self._mutation_error(error, tool_name=tool_name)
 
             return decorator(classified)
 
-        return register
+        return install
