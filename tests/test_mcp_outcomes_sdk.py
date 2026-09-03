@@ -209,7 +209,7 @@ class McpOutcomePinnedSdkTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(context["command_id"])
                 self.assertEqual(context["outcome"], "unknown")
                 self.assertIs(context["retry_safe"], False)
-                self.assertIn("automatic replay is unsafe", context["instruction"])
+                self.assertIn("automatic replay is unsafe", context["instruction"].lower())
                 self.assertEqual(self.executor.calls, ["click_pointer"])
                 self.assertEqual(
                     self.client.calls,
