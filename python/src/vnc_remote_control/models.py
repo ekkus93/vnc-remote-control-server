@@ -52,7 +52,13 @@ class HealthResponse:
     status: str
 
 
-@dataclass(frozen=True, slots=True)
+# MCP 2.1.1 derives structured-output schemas from annotated classes by reading
+# class attributes as potential defaults. Python slot descriptors are class
+# attributes but are not JSON-serializable defaults, so the response classes
+# used directly as MCP structured outputs intentionally remain non-slotted.
+# They stay frozen dataclasses with the same public fields/equality semantics.
+# Keep the pinned-SDK list_tools() regression green before changing this shape.
+@dataclass(frozen=True)
 class StatusResponse:
     """Body of a `/v1/status` response."""
 
@@ -69,7 +75,7 @@ class StatusResponse:
     shutting_down: bool
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class DisplayResponse:
     """Body of a `/v1/display` response."""
 
@@ -82,7 +88,7 @@ class DisplayResponse:
     complete: bool
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class CommandResponse:
     """Terminal-success response for a synchronous mutation command."""
 
@@ -95,7 +101,7 @@ class CommandResponse:
 CommandAcceptedResponse = CommandResponse
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class CommandStatusResponse:
     """Retained lifecycle status for one process-local command identifier."""
 
@@ -105,7 +111,7 @@ class CommandStatusResponse:
     retry_safe: bool
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ClipboardResponse:
     """Body of a `/v1/clipboard` GET response."""
 
