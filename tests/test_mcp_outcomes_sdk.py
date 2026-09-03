@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, ParamSpec, TypeVar, cast
 
@@ -16,13 +16,7 @@ from vnc_remote_control.errors import (
 )
 from vnc_remote_control.mcp_config import McpConfig
 from vnc_remote_control.mcp_server import create_mcp_server, load_mcp_sdk_components
-from vnc_remote_control.models import (
-    CommandResponse,
-    CommandStatusResponse,
-    KeyAction,
-    MouseButton,
-    StatusResponse,
-)
+from vnc_remote_control.models import CommandResponse, CommandStatusResponse, StatusResponse
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -52,18 +46,17 @@ class ImmediateExecutor:
         """Provide the lifespan cleanup interface without owned resources."""
 
 
-class OutcomeClient(VncRemoteControlClient):
-    """Concrete typed client fake exposing selectable mutation/read outcomes."""
+class OutcomeClient:
+    """Minimal fake implementing only methods actually invoked by this suite."""
 
     def __init__(self) -> None:
-        super().__init__(token="outcome-test-token")
         self.mutation_mode = "success"
         self.read_mode = "success"
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
-    def _mutation_result(self, name: str, *args: Any) -> CommandResponse:
-        """Record and return/raise one selected mutation outcome."""
-        self.calls.append((name, args))
+    def click_pointer(self, x: int, y: int, button: str = "left") -> CommandResponse:
+        """Record and return/raise one selected pointer mutation outcome."""
+        self.calls.append(("click_pointer", (x, y, button)))
         if self.mutation_mode == "success":
             return CommandResponse(command_id=70, status="succeeded")
         if self.mutation_mode == "known_unknown":
@@ -88,71 +81,6 @@ class OutcomeClient(VncRemoteControlClient):
                 retry_safe=False,
             )
         raise RuntimeError("SENSITIVE_UNEXPECTED_MUTATION_FAILURE")
-
-    def click_pointer(
-        self,
-        x: int,
-        y: int,
-        button: MouseButton = "left",
-    ) -> CommandResponse:
-        """Expose one mutation used by pinned-SDK outcome tests."""
-        return self._mutation_result("click_pointer", x, y, button)
-
-    def move_pointer(self, x: int, y: int) -> CommandResponse:
-        """Satisfy the mutation client protocol without being called in this suite."""
-        return self._mutation_result("move_pointer", x, y)
-
-    def set_pointer_button(
-        self,
-        x: int,
-        y: int,
-        button: MouseButton,
-        pressed: bool,
-    ) -> CommandResponse:
-        """Satisfy the mutation client protocol."""
-        return self._mutation_result("set_pointer_button", x, y, button, pressed)
-
-    def double_click_pointer(
-        self,
-        x: int,
-        y: int,
-        button: MouseButton = "left",
-        *,
-        interval_ms: int = 100,
-    ) -> CommandResponse:
-        """Satisfy the mutation client protocol."""
-        return self._mutation_result("double_click_pointer", x, y, button, interval_ms)
-
-    def scroll_pointer(
-        self,
-        x: int,
-        y: int,
-        delta_y: int,
-        *,
-        delta_x: int = 0,
-    ) -> CommandResponse:
-        """Satisfy the mutation client protocol."""
-        return self._mutation_result("scroll_pointer", x, y, delta_y, delta_x)
-
-    def set_keyboard_key(self, key: str, action: KeyAction) -> CommandResponse:
-        """Satisfy the mutation client protocol."""
-        return self._mutation_result("set_keyboard_key", key, action)
-
-    def send_keyboard_chord(self, keys: Sequence[str]) -> CommandResponse:
-        """Satisfy the mutation client protocol."""
-        return self._mutation_result("send_keyboard_chord", tuple(keys))
-
-    def type_keyboard_text(self, text: str) -> CommandResponse:
-        """Satisfy the mutation client protocol without exposing text in diagnostics."""
-        return self._mutation_result("type_keyboard_text", text)
-
-    def set_clipboard(self, text: str) -> CommandResponse:
-        """Satisfy the mutation client protocol without exposing text in diagnostics."""
-        return self._mutation_result("set_clipboard", text)
-
-    def request_reconnect(self) -> CommandResponse:
-        """Satisfy the mutation client protocol."""
-        return self._mutation_result("request_reconnect")
 
     def get_command_status(self, command_id: int) -> CommandStatusResponse:
         """Return one terminal status for explicit recovery inspection."""
@@ -194,7 +122,7 @@ def _config() -> McpConfig:
             allow_mutations=True,
             max_concurrent_calls=1,
             transport="stdio",
-            build_client=lambda: OutcomeClient(),
+            build_client=lambda: cast(VncRemoteControlClient, OutcomeClient()),
         ),
     )
 
@@ -209,7 +137,7 @@ class McpOutcomePinnedSdkTests(unittest.IsolatedAsyncioTestCase):
         self.server = create_mcp_server(
             config=_config(),
             components=load_mcp_sdk_components(),
-            client=self.client,
+            client=cast(VncRemoteControlClient, self.client),
             executor=self.executor,
         )
 
