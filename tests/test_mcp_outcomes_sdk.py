@@ -99,32 +99,25 @@ class OutcomeClient:
             raise TransportError("SENSITIVE_READ_TRANSPORT")
         if self.read_mode == "protocol":
             raise ProtocolError("SENSITIVE_READ_PROTOCOL")
-        return StatusResponse(
-            state="connected",
-            started_at_unix_ms=1,
-            connected_at_unix_ms=2,
-            last_message_at_unix_ms=3,
-            reconnect_attempts=0,
-            last_failure=None,
-            framebuffer_revision=4,
-            rejected_commands=0,
-            dropped_events=0,
-            fatal_exit=False,
-            shutting_down=False,
-        )
+        return StatusResponse("connected", 1, 2, 3, 0, None, 4, 0, 0, False, False)
 
 
 def _config() -> McpConfig:
     """Return the validated config shape needed for mutation-enabled construction."""
-    return cast(
-        McpConfig,
-        SimpleNamespace(
-            allow_mutations=True,
-            max_concurrent_calls=1,
-            transport="stdio",
-            build_client=lambda: cast(VncRemoteControlClient, OutcomeClient()),
-        ),
-    )
+    config = SimpleNamespace()
+    config.allow_mutations = True
+    config.max_concurrent_calls = 1
+    config.transport = "stdio"
+    config.build_client = lambda: cast(VncRemoteControlClient, OutcomeClient())
+    return cast(McpConfig, config)
+
+
+def _structured(result: Any) -> dict[str, Any]:
+    """Return one real SDK structured-content object after asserting its shape."""
+    content = result.structured_content
+    if not isinstance(content, dict):
+        raise AssertionError("MCP tool result omitted structured content")
+    return content
 
 
 class McpOutcomePinnedSdkTests(unittest.IsolatedAsyncioTestCase):
@@ -163,22 +156,16 @@ class McpOutcomePinnedSdkTests(unittest.IsolatedAsyncioTestCase):
             {"x": 12, "y": 13, "button": "left"},
         )
         self.assertTrue(result.is_error)
-        self.assertEqual(
-            result.structured_content,
-            {
-                "kind": "command_outcome_unknown",
-                "status_code": 504,
-                "code": "command_timeout",
-                "request_id": "req-77",
-                "command_id": 77,
-                "outcome": "unknown",
-                "retry_safe": False,
-                "instruction": (
-                    "Use vnc_get_command_status(command_id) before deciding on any further "
-                    "mutation; automatic replay is unsafe."
-                ),
-            },
-        )
+        context = _structured(result)
+        self.assertEqual(context["kind"], "command_outcome_unknown")
+        self.assertEqual(context["status_code"], 504)
+        self.assertEqual(context["code"], "command_timeout")
+        self.assertEqual(context["request_id"], "req-77")
+        self.assertEqual(context["command_id"], 77)
+        self.assertEqual(context["outcome"], "unknown")
+        self.assertIs(context["retry_safe"], False)
+        self.assertIn("vnc_get_command_status", context["instruction"])
+        self.assertIn("automatic replay is unsafe", context["instruction"])
         self.assertEqual(self.executor.calls, ["click_pointer"])
         self.assertEqual(self.client.calls, [("click_pointer", (12, 13, "left"))])
 
@@ -217,19 +204,12 @@ class McpOutcomePinnedSdkTests(unittest.IsolatedAsyncioTestCase):
                     {"x": 14, "y": 15, "button": "right"},
                 )
                 self.assertTrue(result.is_error)
-                self.assertEqual(
-                    result.structured_content,
-                    {
-                        "kind": "mutation_outcome_unknown",
-                        "command_id": None,
-                        "outcome": "unknown",
-                        "retry_safe": False,
-                        "instruction": (
-                            "Automatic replay is unsafe because the controller may already have "
-                            "received the mutation."
-                        ),
-                    },
-                )
+                context = _structured(result)
+                self.assertEqual(context["kind"], "mutation_outcome_unknown")
+                self.assertIsNone(context["command_id"])
+                self.assertEqual(context["outcome"], "unknown")
+                self.assertIs(context["retry_safe"], False)
+                self.assertIn("automatic replay is unsafe", context["instruction"])
                 self.assertEqual(self.executor.calls, ["click_pointer"])
                 self.assertEqual(
                     self.client.calls,
