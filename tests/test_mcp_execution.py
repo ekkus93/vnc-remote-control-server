@@ -8,10 +8,12 @@ import time
 import unittest
 from collections.abc import Callable
 
+from vnc_remote_control.errors import TransportError
 from vnc_remote_control.mcp_execution import (
     BoundedControllerExecutor,
     McpCallCapacityError,
     McpExecutorClosedError,
+    McpUnexpectedControllerError,
 )
 
 
@@ -78,8 +80,8 @@ class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await first, "done")
         self.assertEqual(await second, "done")
 
-    async def test_failure_releases_capacity_without_retry(self) -> None:
-        """Verify one failed operation runs once and the slot becomes reusable."""
+    async def test_typed_client_failure_passes_through_without_retry(self) -> None:
+        """Verify typed client failures remain classified and release capacity."""
         executor = BoundedControllerExecutor(1)
         self.addAsyncCleanup(executor.aclose)
         calls = 0
@@ -87,11 +89,29 @@ class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
         def failing_call() -> None:
             nonlocal calls
             calls += 1
-            raise RuntimeError("sentinel failure")
+            raise TransportError("typed transport failure")
 
-        with self.assertRaisesRegex(RuntimeError, "sentinel failure"):
+        with self.assertRaisesRegex(TransportError, "typed transport failure"):
             await executor.call(failing_call)
         self.assertEqual(calls, 1)
+        self.assertEqual(await executor.call(lambda: "recovered"), "recovered")
+
+    async def test_unexpected_worker_failure_is_normalized_once_without_payload(self) -> None:
+        """An untyped controller exception becomes one explicit adapter error."""
+        executor = BoundedControllerExecutor(1)
+        self.addAsyncCleanup(executor.aclose)
+        calls = 0
+
+        def failing_call() -> None:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("SENSITIVE_UNEXPECTED_WORKER_DETAIL")
+
+        with self.assertRaises(McpUnexpectedControllerError) as captured:
+            await executor.call(failing_call)
+        self.assertEqual(calls, 1)
+        self.assertNotIn("SENSITIVE_UNEXPECTED_WORKER_DETAIL", str(captured.exception))
+        self.assertIsInstance(captured.exception.__cause__, RuntimeError)
         self.assertEqual(await executor.call(lambda: "recovered"), "recovered")
 
     async def test_cancelled_waiter_does_not_release_active_worker_capacity(self) -> None:
