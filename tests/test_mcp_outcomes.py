@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -96,6 +97,20 @@ def _context(result: FakeCallToolResult) -> dict[str, object]:
     if result.structured_content is None:
         raise AssertionError("classified tool error omitted structured content")
     return result.structured_content
+
+
+def _raising_handler(
+    error: Exception,
+    calls: list[int] | None = None,
+) -> Callable[[], Awaitable[CommandResponse]]:
+    """Return one stable raising coroutine without closing over loop variables."""
+
+    async def handler() -> CommandResponse:
+        if calls is not None:
+            calls[0] += 1
+        raise error
+
+    return handler
 
 
 class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
@@ -201,17 +216,15 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
             lambda: RuntimeError("SENSITIVE_INTERNAL_DETAIL"),
         )
         for factory in error_factories:
-            calls = 0
-
-            async def mutation() -> CommandResponse:
-                nonlocal calls
-                calls += 1
-                raise factory()
-
-            classified, _ = _register_tool(read_only=False, function=mutation)
-            with self.subTest(error_type=type(factory()).__name__):
+            error = factory()
+            calls = [0]
+            classified, _ = _register_tool(
+                read_only=False,
+                function=_raising_handler(error, calls),
+            )
+            with self.subTest(error_type=type(error).__name__):
                 result = await classified()
-                self.assertEqual(calls, 1)
+                self.assertEqual(calls[0], 1)
                 self.assertEqual(
                     _context(result),
                     {
@@ -228,7 +241,9 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("automatic replay is unsafe", result.content[0].text)
                 self.assertNotIn("SENSITIVE", result.content[0].text)
 
-    async def test_invalid_accepted_command_context_fails_closed_without_fabricated_id(self) -> None:
+    async def test_invalid_accepted_command_context_fails_closed_without_fabricated_id(
+        self,
+    ) -> None:
         """Inconsistent command metadata is downgraded to conservative no-ID ambiguity."""
 
         async def mutation() -> CommandResponse:
@@ -256,11 +271,10 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
             (McpExecutorClosedError("closed"), "adapter_internal_error"),
         )
         for error, expected_kind in cases:
-
-            async def mutation() -> CommandResponse:
-                raise error
-
-            classified, _ = _register_tool(read_only=False, function=mutation)
+            classified, _ = _register_tool(
+                read_only=False,
+                function=_raising_handler(error),
+            )
             with self.subTest(error_type=type(error).__name__):
                 result = await classified()
                 self.assertEqual(_context(result), {"kind": expected_kind})
@@ -283,25 +297,24 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         for error, expected_kind in cases:
-            calls = 0
-
-            async def read() -> CommandResponse:
-                nonlocal calls
-                calls += 1
-                raise error
-
-            classified, _ = _register_tool(read_only=True, function=read)
+            calls = [0]
+            classified, _ = _register_tool(
+                read_only=True,
+                function=_raising_handler(error, calls),
+            )
             with self.subTest(error_type=type(error).__name__):
                 result = await classified()
-                self.assertEqual(calls, 1)
+                self.assertEqual(calls[0], 1)
                 self.assertEqual(_context(result)["kind"], expected_kind)
                 self.assertNotEqual(expected_kind, "mutation_outcome_unknown")
                 self.assertNotIn("SENSITIVE", result.content[0].text)
 
-        api_context = _context(await _register_tool(
-            read_only=True,
-            function=_read_api_failure,
-        )[0]())
+        api_context = _context(
+            await _register_tool(
+                read_only=True,
+                function=_read_api_failure,
+            )[0]()
+        )
         self.assertEqual(api_context["status_code"], 503)
         self.assertEqual(api_context["code"], "unavailable")
         self.assertEqual(api_context["request_id"], "req-read")
@@ -344,7 +357,10 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
 
         classified, _ = _register_tool(read_only=True, function=read)
         result = await classified()
-        self.assertEqual(_context(result), {"kind": "controller_api_error", "status_code": 400})
+        self.assertEqual(
+            _context(result),
+            {"kind": "controller_api_error", "status_code": 400},
+        )
         self.assertNotIn("bad code", result.content[0].text)
         self.assertNotIn("header-injection", result.content[0].text)
 
