@@ -24,9 +24,11 @@ from .mcp_execution import BoundedControllerExecutor
 from .mcp_mutation_tools import (
     McpMutationRuntime,
     McpMutationSchemaMetadata,
+    McpMutationValidationError,
     build_mutation_schema_metadata,
     register_mutation_tools,
 )
+from .mcp_outcomes import McpOutcomeToolRegistrar
 from .mcp_tools import (
     McpCallExecutor,
     McpReadRuntime,
@@ -50,6 +52,7 @@ McpAnnotationsFactory: TypeAlias = Callable[..., Any]
 McpFieldFactory: TypeAlias = Callable[..., Any]
 McpImageFactory: TypeAlias = Callable[..., Any]
 McpCallToolResultFactory: TypeAlias = Callable[..., Any]
+McpTextContentFactory: TypeAlias = Callable[..., Any]
 McpLifespan: TypeAlias = Callable[[Any], AbstractAsyncContextManager[McpReadRuntime]]
 
 
@@ -62,6 +65,7 @@ class McpSdkComponents:
     field_factory: McpFieldFactory
     image_factory: McpImageFactory
     call_tool_result_factory: McpCallToolResultFactory
+    text_content_factory: McpTextContentFactory
 
 
 def load_mcp_sdk_components() -> McpSdkComponents:
@@ -80,12 +84,14 @@ def load_mcp_sdk_components() -> McpSdkComponents:
     image_factory = getattr(image_module, "Image", None)
     annotations_factory = getattr(types_module, "ToolAnnotations", None)
     call_tool_result_factory = getattr(types_module, "CallToolResult", None)
+    text_content_factory = getattr(types_module, "TextContent", None)
     field_factory = getattr(pydantic_module, "Field", None)
     required_callables = (
         server_factory,
         image_factory,
         annotations_factory,
         call_tool_result_factory,
+        text_content_factory,
         field_factory,
     )
     if not all(callable(item) for item in required_callables) or not callable(
@@ -93,7 +99,8 @@ def load_mcp_sdk_components() -> McpSdkComponents:
     ):
         raise McpDependencyError(
             "installed MCP SDK does not provide the expected "
-            f"MCPServer/Image/ToolAnnotations/CallToolResult/Field API for {MCP_EXTRA_REQUIREMENT}"
+            "MCPServer/Image/ToolAnnotations/CallToolResult/TextContent/Field API for "
+            f"{MCP_EXTRA_REQUIREMENT}"
         )
     return McpSdkComponents(
         server_factory=cast(McpServerFactory, server_factory),
@@ -101,6 +108,7 @@ def load_mcp_sdk_components() -> McpSdkComponents:
         field_factory=cast(McpFieldFactory, field_factory),
         image_factory=cast(McpImageFactory, image_factory),
         call_tool_result_factory=cast(McpCallToolResultFactory, call_tool_result_factory),
+        text_content_factory=cast(McpTextContentFactory, text_content_factory),
     )
 
 
@@ -175,13 +183,19 @@ def create_mcp_server(
                 f"installed MCP SDK does not provide the expected tool registration API for "
                 f"{MCP_EXTRA_REQUIREMENT}"
             )
+        classified_tool_registrar = McpOutcomeToolRegistrar(
+            tool_registrar,
+            call_tool_result_factory=sdk.call_tool_result_factory,
+            text_content_factory=sdk.text_content_factory,
+            mutation_validation_errors=(McpMutationValidationError,),
+        )
 
         positive_command_id_metadata, mutation_schema = _build_schema_metadata(
             sdk.field_factory,
             allow_mutations=config.allow_mutations,
         )
         register_read_only_tools(
-            tool_registrar,
+            classified_tool_registrar,
             runtime,
             annotations_factory=sdk.annotations_factory,
             positive_command_id_metadata=positive_command_id_metadata,
@@ -190,7 +204,7 @@ def create_mcp_server(
         )
         if mutation_schema is not None:
             register_mutation_tools(
-                tool_registrar,
+                classified_tool_registrar,
                 McpMutationRuntime(
                     client=controller_client,
                     executor=controller_executor,

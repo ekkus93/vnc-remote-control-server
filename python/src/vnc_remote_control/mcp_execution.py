@@ -10,6 +10,8 @@ from contextlib import ExitStack, contextmanager
 from functools import partial
 from typing import ParamSpec, TypeVar
 
+from .errors import VncRemoteControlError
+
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -20,6 +22,10 @@ class McpCallCapacityError(RuntimeError):
 
 class McpExecutorClosedError(RuntimeError):
     """Raised when a controller call is submitted after executor shutdown starts."""
+
+
+class McpUnexpectedControllerError(RuntimeError):
+    """Raised when one admitted controller operation fails outside the typed client API."""
 
 
 @contextmanager
@@ -87,6 +93,22 @@ class BoundedControllerExecutor:
         finally:
             self._release_slot()
 
+    @staticmethod
+    def _completed_result(future: asyncio.Future[R]) -> R:
+        """Return one completed result while normalizing only untyped worker failures."""
+        if future.cancelled():
+            raise McpUnexpectedControllerError(
+                "controller call future was unexpectedly cancelled"
+            )
+        error = future.exception()
+        if error is not None:
+            if isinstance(error, VncRemoteControlError):
+                raise error
+            raise McpUnexpectedControllerError(
+                "controller call failed with an unexpected exception"
+            ) from error
+        return future.result()
+
     async def call(
         self,
         operation: Callable[P, R],
@@ -105,10 +127,13 @@ class BoundedControllerExecutor:
                 "controller executor closed before call submission"
             ) from exc
 
-        # Shield prevents coroutine cancellation from cancelling a queued
-        # concurrent Future before its worker wrapper runs and releases the
-        # already-reserved slot. The caller still receives CancelledError.
-        return await asyncio.shield(asyncio.wrap_future(concurrent_future))
+        # Wait for completion without awaiting the wrapped Future directly. This
+        # lets us inspect worker exceptions without a broad exception handler.
+        # Shield preserves the existing cancellation guarantee: cancelling the
+        # caller never cancels the admitted worker or releases its slot early.
+        wrapped_future = asyncio.wrap_future(concurrent_future)
+        await asyncio.shield(asyncio.wait((wrapped_future,)))
+        return self._completed_result(wrapped_future)
 
     def close(self) -> None:
         """Stop new admission and wait for all already-admitted calls to finish."""
