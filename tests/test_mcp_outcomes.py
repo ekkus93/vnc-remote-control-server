@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import inspect
 import unittest
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -16,7 +15,11 @@ from vnc_remote_control.errors import (
     ProtocolError,
     TransportError,
 )
-from vnc_remote_control.mcp_execution import McpCallCapacityError, McpExecutorClosedError
+from vnc_remote_control.mcp_execution import (
+    McpCallCapacityError,
+    McpExecutorClosedError,
+    McpUnexpectedControllerError,
+)
 from vnc_remote_control.mcp_outcomes import (
     McpOutcomeRegistrationError,
     McpOutcomeToolRegistrar,
@@ -99,15 +102,11 @@ def _context(result: FakeCallToolResult) -> dict[str, object]:
     return result.structured_content
 
 
-def _raising_handler(
-    error: Exception,
-    calls: list[int] | None = None,
-) -> Callable[[], Awaitable[CommandResponse]]:
-    """Return one stable raising coroutine without closing over loop variables."""
+def _raising_handler(error: Exception, calls: list[str], label: str) -> Any:
+    """Return one async handler bound to an explicit error rather than a loop cell."""
 
     async def handler() -> CommandResponse:
-        if calls is not None:
-            calls[0] += 1
+        calls.append(label)
         raise error
 
     return handler
@@ -210,21 +209,20 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_transport_protocol_and_unexpected_mutation_failures_are_unknown(self) -> None:
         """No-ID post-issuance failures all prohibit blind mutation replay."""
-        error_factories = (
-            lambda: TransportError("SENSITIVE_TRANSPORT_DETAIL"),
-            lambda: ProtocolError("SENSITIVE_PROTOCOL_BODY"),
-            lambda: RuntimeError("SENSITIVE_INTERNAL_DETAIL"),
+        errors = (
+            TransportError("SENSITIVE_TRANSPORT_DETAIL"),
+            ProtocolError("SENSITIVE_PROTOCOL_BODY"),
+            McpUnexpectedControllerError("SENSITIVE_INTERNAL_DETAIL"),
         )
-        for factory in error_factories:
-            error = factory()
-            calls = [0]
+        for error in errors:
+            calls: list[str] = []
             classified, _ = _register_tool(
                 read_only=False,
-                function=_raising_handler(error, calls),
+                function=_raising_handler(error, calls, "mutation"),
             )
             with self.subTest(error_type=type(error).__name__):
                 result = await classified()
-                self.assertEqual(calls[0], 1)
+                self.assertEqual(calls, ["mutation"])
                 self.assertEqual(
                     _context(result),
                     {
@@ -271,12 +269,14 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
             (McpExecutorClosedError("closed"), "adapter_internal_error"),
         )
         for error, expected_kind in cases:
+            calls: list[str] = []
             classified, _ = _register_tool(
                 read_only=False,
-                function=_raising_handler(error),
+                function=_raising_handler(error, calls, "mutation"),
             )
             with self.subTest(error_type=type(error).__name__):
                 result = await classified()
+                self.assertEqual(calls, ["mutation"])
                 self.assertEqual(_context(result), {"kind": expected_kind})
                 self.assertNotIn("outcome", _context(result))
                 self.assertNotIn("command_id", _context(result))
@@ -297,14 +297,14 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         for error, expected_kind in cases:
-            calls = [0]
+            calls: list[str] = []
             classified, _ = _register_tool(
                 read_only=True,
-                function=_raising_handler(error, calls),
+                function=_raising_handler(error, calls, "read"),
             )
             with self.subTest(error_type=type(error).__name__):
                 result = await classified()
-                self.assertEqual(calls[0], 1)
+                self.assertEqual(calls, ["read"])
                 self.assertEqual(_context(result)["kind"], expected_kind)
                 self.assertNotEqual(expected_kind, "mutation_outcome_unknown")
                 self.assertNotIn("SENSITIVE", result.content[0].text)
@@ -320,10 +320,10 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(api_context["request_id"], "req-read")
 
     async def test_unexpected_read_failure_is_sanitized_adapter_error(self) -> None:
-        """Unexpected read exceptions are observable without exposing exception text."""
+        """Unexpected controller exceptions are observable without exposing cause text."""
 
         async def read() -> CommandResponse:
-            raise RuntimeError("SENSITIVE_INTERNAL_DETAIL")
+            raise McpUnexpectedControllerError("SENSITIVE_INTERNAL_DETAIL")
 
         classified, _ = _register_tool(read_only=True, function=read)
         with self.assertLogs("vnc_remote_control.mcp_outcomes", level="ERROR") as logs:
@@ -336,7 +336,7 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
         """Unexpected mutation diagnostics use fixed context rather than exception text."""
 
         async def mutation() -> CommandResponse:
-            raise RuntimeError("SENSITIVE_MUTATION_PAYLOAD")
+            raise McpUnexpectedControllerError("SENSITIVE_MUTATION_PAYLOAD")
 
         classified, _ = _register_tool(read_only=False, function=mutation)
         with self.assertLogs("vnc_remote_control.mcp_outcomes", level="ERROR") as logs:
