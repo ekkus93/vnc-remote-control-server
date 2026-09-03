@@ -129,7 +129,7 @@ class McpOutcomeRegistrarTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, CommandResponse(command_id=7, status="succeeded"))
         self.assertEqual(calls, 1)
         self.assertEqual(inspect.signature(classified), inspect.signature(mutation))
-        self.assertIs(inspect.signature(classified).return_annotation, CommandResponse)
+        self.assertIs(inspect.unwrap(classified), mutation)
         self.assertTrue(metadata["structured_output"])
 
     async def test_known_command_timeout_is_explicit_and_non_retryable(self) -> None:
