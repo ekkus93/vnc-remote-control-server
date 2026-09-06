@@ -47,13 +47,21 @@ def _fake_text_content_factory(**kwargs: Any) -> SimpleNamespace:
     return SimpleNamespace(**kwargs)
 
 
-def _config(*, transport: str = "stdio", allow_mutations: bool = False) -> McpConfig:
+def _config(
+    *,
+    transport: str = "stdio",
+    allow_mutations: bool = False,
+    http_host: str = "127.0.0.1",
+    http_port: int = 8765,
+) -> McpConfig:
     """Return a typed stand-in for validated configuration."""
     client = mock.create_autospec(VncRemoteControlClient, instance=True)
     value = SimpleNamespace(
         transport=transport,
         allow_mutations=allow_mutations,
         max_concurrent_calls=2,
+        http_host=http_host,
+        http_port=http_port,
         build_client=mock.Mock(return_value=client),
     )
     return cast(McpConfig, value)
@@ -333,20 +341,42 @@ class McpServerScaffoldTests(unittest.TestCase):
         self.assertIn("invalid MCP config", stderr.getvalue())
         create_server.assert_not_called()
 
-    def test_main_rejects_http_transport_until_mcp_009(self) -> None:
-        """HTTP configuration cannot accidentally create an unreviewed listener."""
-        stderr = io.StringIO()
+    def test_main_runs_streamable_http_with_sdk_security_and_stateless_sessions(self) -> None:
+        """HTTP startup preserves SDK security defaults and avoids persistent sessions."""
+        server = mock.Mock()
         config = _config(transport="streamable-http")
         with (
             mock.patch.object(McpConfig, "load", return_value=config),
-            mock.patch.object(mcp_server, "create_mcp_server") as create_server,
-            redirect_stderr(stderr),
-            self.assertRaises(SystemExit) as context,
+            mock.patch.object(mcp_server, "create_mcp_server", return_value=server) as create,
         ):
             mcp_server.main()
-        self.assertEqual(context.exception.code, 2)
-        self.assertIn("not implemented until MCP-009", stderr.getvalue())
-        create_server.assert_not_called()
+        create.assert_called_once_with(config=config)
+        server.run.assert_called_once_with(
+            transport="streamable-http",
+            host="127.0.0.1",
+            port=8765,
+            stateless_http=True,
+        )
+
+    def test_main_forwards_ipv6_loopback_without_rewriting(self) -> None:
+        """The supported IPv6 loopback reaches the exact SDK listener unchanged."""
+        server = mock.Mock()
+        config = _config(
+            transport="streamable-http",
+            http_host="::1",
+            http_port=9876,
+        )
+        with (
+            mock.patch.object(McpConfig, "load", return_value=config),
+            mock.patch.object(mcp_server, "create_mcp_server", return_value=server),
+        ):
+            mcp_server.main()
+        server.run.assert_called_once_with(
+            transport="streamable-http",
+            host="::1",
+            port=9876,
+            stateless_http=True,
+        )
 
     def test_main_runs_stdio_once(self) -> None:
         """Validated stdio startup has one explicit non-network transport."""

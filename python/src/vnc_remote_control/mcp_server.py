@@ -216,28 +216,38 @@ def create_mcp_server(
     return server
 
 
-def main() -> None:
-    """Load validated configuration and run the initial MCP server over stdio.
+def _run_configured_transport(server: Any, config: McpConfig) -> None:
+    """Run exactly the validated MCP transport without compatibility fallback."""
+    if config.transport == "stdio":
+        # The pinned SDK owns stdio lifecycle and follows the MCP shutdown contract:
+        # the host closes stdin/EOF first, then applies its bounded escalation policy.
+        # Do not install adapter signal handlers here; mcp==2.1.1 can have a worker
+        # blocked on its private stdin duplicate, so signal-only unwinding can hang.
+        server.run(transport="stdio")
+        return
 
-    Streamable HTTP configuration is parsed now so invalid/public binds fail
-    closed, but the transport itself is intentionally unavailable until MCP-009
-    implements and tests the HTTP lifecycle and SDK protections.
-    """
+    # Config accepts only the three exact loopback spellings for which mcp==2.1.1
+    # auto-enables its DNS-rebinding middleware. Deliberately omit
+    # ``transport_security`` so the official Host/Origin policy is not replaced or
+    # disabled here. Stateless mode prevents persistent HTTP session accumulation;
+    # controller calls remain independently bounded by the shared executor.
+    server.run(
+        transport="streamable-http",
+        host=config.http_host,
+        port=config.http_port,
+        stateless_http=True,
+    )
+
+
+def main() -> None:
+    """Load validated configuration and run the selected MCP transport."""
     try:
         config = McpConfig.load()
-        if config.transport != "stdio":
-            raise McpConfigError(
-                "streamable-http transport is not implemented until MCP-009"
-            )
         server = create_mcp_server(config=config)
     except (McpConfigError, McpDependencyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
-    # The pinned SDK owns stdio lifecycle and follows the MCP shutdown contract:
-    # the host closes stdin/EOF first, then applies its bounded escalation policy.
-    # Do not install adapter signal handlers here; mcp==2.1.1 can have a worker
-    # blocked on its private stdin duplicate, so signal-only unwinding can hang.
-    server.run(transport="stdio")
+    _run_configured_transport(server, config)
 
 
 if __name__ == "__main__":
