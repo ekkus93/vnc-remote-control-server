@@ -233,6 +233,10 @@ def main() -> None:
     except (McpConfigError, McpDependencyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2) from exc
+    # The pinned SDK owns stdio lifecycle and follows the MCP shutdown contract:
+    # the host closes stdin/EOF first, then applies its bounded escalation policy.
+    # Do not install adapter signal handlers here; mcp==2.1.1 can have a worker
+    # blocked on its private stdin duplicate, so signal-only unwinding can hang.
     server.run(transport="stdio")
 
 
