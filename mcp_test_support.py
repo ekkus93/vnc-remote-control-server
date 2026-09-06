@@ -8,6 +8,17 @@ from typing import Any
 
 RegisteredTool = tuple[Callable[..., Any], dict[str, Any]]
 
+READ_ONLY_TOOL_NAMES = frozenset(
+    {
+        "vnc_get_status",
+        "vnc_get_display",
+        "vnc_get_screenshot",
+        "vnc_get_clipboard",
+        "vnc_get_command_status",
+        "vnc_get_metrics",
+    }
+)
+
 MUTATION_TOOL_NAMES = frozenset(
     {
         "vnc_move_pointer",
