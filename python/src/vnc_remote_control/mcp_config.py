@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import math
 import os
 import stat
@@ -26,6 +25,7 @@ MIN_MAX_CONCURRENT_CALLS = 1
 MAX_MAX_CONCURRENT_CALLS = 64
 MIN_HTTP_PORT = 1
 MAX_HTTP_PORT = 65_535
+SDK_PROTECTED_HTTP_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 McpTransport = Literal["stdio", "streamable-http"]
 
@@ -98,7 +98,7 @@ class McpConfig:
         transport = cast(McpTransport, transport_value)
 
         http_host = _value_or(source, "VRC_MCP_HTTP_HOST", DEFAULT_HTTP_HOST)
-        _require_loopback_host(http_host)
+        _require_sdk_protected_loopback_host(http_host)
         http_port = _parse_int(
             source,
             "VRC_MCP_HTTP_PORT",
@@ -217,15 +217,14 @@ def _parse_float(
     return value
 
 
-def _require_loopback_host(host: str) -> None:
-    if host == "localhost":
-        return
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError as exc:
-        raise McpConfigError("invalid VRC_MCP_HTTP_HOST; loopback address required") from exc
-    if not address.is_loopback:
-        raise McpConfigError("invalid VRC_MCP_HTTP_HOST; loopback address required")
+def _require_sdk_protected_loopback_host(host: str) -> None:
+    # mcp==2.1.1 auto-enables its Host/Origin DNS-rebinding middleware only for
+    # these exact loopback spellings. Reject other 127/8 aliases rather than
+    # silently starting an HTTP listener with the SDK protection disabled.
+    if host not in SDK_PROTECTED_HTTP_LOOPBACK_HOSTS:
+        raise McpConfigError(
+            "invalid VRC_MCP_HTTP_HOST; SDK-protected loopback host required"
+        )
 
 
 def _secret_error(path: Path, reason: str) -> McpConfigError:

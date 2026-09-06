@@ -205,14 +205,15 @@ class McpConfigTests(unittest.TestCase):
                 with self.assertRaises(McpConfigError):
                     McpConfig.load(self._environment(VRC_MCP_TRANSPORT=value))
 
-    def test_http_host_is_loopback_only(self) -> None:
-        """Verify http host is loopback only."""
-        for value in ("127.0.0.1", "127.42.7.9", "::1", "localhost"):
+    def test_http_host_is_sdk_protected_loopback_only(self) -> None:
+        """Accept only loopback spellings protected automatically by mcp==2.1.1."""
+        for value in ("127.0.0.1", "::1", "localhost"):
             with self.subTest(value=value):
                 config = McpConfig.load(self._environment(VRC_MCP_HTTP_HOST=value))
                 self.assertEqual(config.http_host, value)
 
         invalid = (
+            "127.42.7.9",
             "0.0.0.0",
             "::",
             "192.168.1.10",
