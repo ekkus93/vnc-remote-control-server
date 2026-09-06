@@ -1,6 +1,6 @@
 # Deployment
 
-For the complete operator lifecycle, API examples, tuning, recovery, and troubleshooting, see [`../docs/OPERATOR_GUIDE.md`](../docs/OPERATOR_GUIDE.md). The machine-readable HTTP contract is [`../docs/openapi.json`](../docs/openapi.json). For replacing the stock desktop with a project-owned customized VNC desktop, see [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md). The documentation index in [`../docs/README.md`](../docs/README.md) distinguishes current operational documentation from historical milestone artifacts.
+For the complete operator lifecycle, API examples, tuning, recovery, and troubleshooting, see [`../docs/OPERATOR_GUIDE.md`](../docs/OPERATOR_GUIDE.md). The machine-readable HTTP contract is [`../docs/openapi.json`](../docs/openapi.json). For the optional MCP adapter, see [`../docs/MCP_SERVER.md`](../docs/MCP_SERVER.md). For replacing the stock desktop with a project-owned customized VNC desktop, see [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md). The documentation index in [`../docs/README.md`](../docs/README.md) distinguishes current operational documentation from historical milestone artifacts.
 
 `compose.yaml` is the production topology. It builds a non-root controller image and the Debian/TigerVNC desktop image. Both services share an internal desktop-control network; only the controller also joins a separate API-ingress bridge so Docker can publish the controller API. The default API binding is loopback-only at `127.0.0.1:8080`.
 
@@ -27,6 +27,8 @@ chmod 0444 deploy/secrets/api_token.txt deploy/secrets/vnc_password.txt
 ```
 
 The secret directory ignores credential files. Keep the directory at mode `0700`; the files use mode `0444` because local Docker Compose mounts file-backed secrets read-only while preserving their host ownership, and both services run as dedicated non-root UIDs. The private parent directory prevents other host users from traversing to the files. The controller reads both credentials from `/run/secrets`; the desktop reads the VNC password from `/run/secrets`. The generated TigerVNC credential file is stored only in `/tmp/vnc-runtime/passwd`, never under the persistent home directory.
+
+The MCP adapter also uses file-only controller-token ingress. `VRC_MCP_CONTROLLER_TOKEN_FILE` contains a host-visible path to the controller bearer-token file; it must never contain the raw token. When the adapter runs directly on the Compose host, `deploy/secrets/api_token.txt` is the normal source path. If the adapter is placed in a separately reviewed container/process boundary, mount the same secret as a file rather than copying its value into an environment variable or command line.
 
 ## Disposable production mode
 
@@ -114,6 +116,37 @@ After the controller is healthy, the hosted documentation is available at:
 - `http://127.0.0.1:8080/openapi.json` — raw OpenAPI 3.1 JSON.
 
 The Python client connects to the controller API rather than directly to the VNC desktop. Installing the Python package also installs `vnc-remote-control-demo`. See [`../python/README.md`](../python/README.md) for direct GitHub installation, token-file setup, and runnable demo commands.
+
+## MCP adapter deployment boundary
+
+The current production Compose files do **not** add an MCP service or publish an MCP port. `vnc-remote-control-mcp` is an optional Python process that runs beside a reachable controller and calls its authenticated API through `VncRemoteControlClient`.
+
+Install it on the trusted host/process boundary with:
+
+```bash
+python -m pip install './python[mcp]'
+```
+
+The preferred transport is stdio, which creates no listener:
+
+```bash
+VRC_MCP_CONTROLLER_TOKEN_FILE="$PWD/deploy/secrets/api_token.txt" \
+vnc-remote-control-mcp
+```
+
+When Streamable HTTP is explicitly required:
+
+```bash
+VRC_MCP_CONTROLLER_TOKEN_FILE="$PWD/deploy/secrets/api_token.txt" \
+VRC_MCP_TRANSPORT=streamable-http \
+vnc-remote-control-mcp
+```
+
+The default endpoint is `http://127.0.0.1:8765/mcp`. The adapter accepts only SDK-protected loopback hosts; it cannot be configured to bind publicly and has no project-specific MCP client-authentication layer. For remote access, keep the backend on loopback and use a trusted authenticated tunnel/proxy boundary. Do not disable the official SDK Host/Origin/DNS-rebinding protection to make a proxy work.
+
+Mutation tools are absent by default. Setting `VRC_MCP_ALLOW_MUTATIONS=true` grants the complete reviewed mutation catalog to every client that can access that MCP process, so the transport boundary must be fully trusted.
+
+See [`../docs/MCP_SERVER.md`](../docs/MCP_SERVER.md) for the complete config table, token-file validation, Python token-memory limitation, bounded execution, shutdown behavior, and non-retry-safe mutation recovery.
 
 ## Health
 

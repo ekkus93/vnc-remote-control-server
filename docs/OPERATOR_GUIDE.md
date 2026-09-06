@@ -8,6 +8,8 @@ The controller is a remote-desktop primitive, not a general-purpose automation p
 
 Treat every API client as fully trusted to observe and control the desktop. The v0.1 bearer token is process-wide; it does not provide per-user roles or per-operation authorization.
 
+The optional MCP adapter is also a trusted-client surface. Its default catalog is read-only, but screenshots and clipboard reads still expose sensitive desktop data; mutation-enabled MCP access grants the reviewed pointer/keyboard/text/clipboard/reconnect controls process-wide. See [`MCP_SERVER.md`](MCP_SERVER.md).
+
 For the distinction between current living documentation and historical milestone artifacts, see [`README.md`](README.md).
 
 ## 2. Architecture
@@ -26,6 +28,15 @@ flowchart TB
 The `desktop_control` network is `internal: true`. The desktop service does not publish port `5901` in production. The controller joins both `desktop_control` and `api_ingress`, and the host API binding defaults to `127.0.0.1:8080`.
 
 The controller's VNC target is configured independently from the API client. A supported project-owned custom desktop can replace the stock image without changing the Python application when the controller API address is unchanged. See [`CUSTOM_DESKTOP_IMAGES.md`](CUSTOM_DESKTOP_IMAGES.md).
+
+The MCP adapter sits outside the Rust service and uses the same authenticated controller API:
+
+```text
+MCP host/client -> vnc-remote-control-mcp -> VncRemoteControlClient
+                -> Rust controller -> native worker -> VNC desktop
+```
+
+It never connects directly to raw VNC.
 
 ## 3. Prerequisites
 
@@ -72,6 +83,8 @@ Do not put either secret value in an environment variable. The supported environ
 - `VRC_API_TOKEN_SOURCE` for the Compose source file;
 - `VRC_VNC_PASSWORD_SOURCE` for the Compose source file;
 - `VRC_API_TOKEN_FILE` and `VRC_VNC_PASSWORD_FILE` inside the controller process.
+
+The MCP adapter follows the same file-only rule for the controller bearer token: `VRC_MCP_CONTROLLER_TOKEN_FILE` contains a path, never the raw token value.
 
 The desktop converts the plaintext VNC source secret into `/tmp/vnc-runtime/passwd` at startup. That generated file is mode `0600`, is deleted at shutdown, and is never stored in the persistent home volume.
 
@@ -185,6 +198,31 @@ A running controller serves the repository-owned API reference at:
 These documentation routes are public. Every `/v1/*` operation still requires the normal bearer token. Swagger UI does not persist authorization across reloads and its external validator is disabled. The exact-version UI assets (`swagger-ui-dist` 5.32.11, ReDoc 2.5.3) are vendored into the repository and served locally by the controller with no CDN or other third-party runtime script/style dependency; the OpenAPI document itself is likewise served by the controller from the repository-owned `docs/openapi.json` source.
 
 The installable Python client points at the Rust controller, not at the VNC desktop. Installing the package also installs the small `vnc-remote-control-demo` CLI. See [`../python/README.md`](../python/README.md) for direct GitHub installation, token-file handling, screenshots, pointer/keyboard input, clipboard, reconnect, metrics, and WebSocket event examples.
+
+### MCP adapter
+
+Install the optional MCP extra with the exact reviewed SDK pin:
+
+```bash
+python -m pip install './python[mcp]'
+```
+
+The adapter requires the controller bearer-token file path and defaults to stdio/read-only operation:
+
+```bash
+VRC_MCP_CONTROLLER_TOKEN_FILE="$PWD/deploy/secrets/api_token.txt" \
+vnc-remote-control-mcp
+```
+
+`VRC_MCP_ALLOW_MUTATIONS=false` is the default, so mutation tools are absent from discovery. Setting it to `true` is a process-wide capability grant and should be done only when every MCP client with transport access is trusted for desktop control.
+
+Explicit Streamable HTTP uses `VRC_MCP_TRANSPORT=streamable-http` and defaults to `http://127.0.0.1:8765/mcp`. The adapter accepts only the SDK-protected loopback spellings `127.0.0.1`, `localhost`, and `::1`; it has no project-specific MCP client authentication and cannot bind publicly. Remote use must keep the MCP backend on loopback behind a trusted authenticated tunnel/proxy. Do not disable the official SDK Host/Origin/DNS-rebinding checks as a deployment workaround.
+
+Every controller call is admitted through the shared bounded MCP executor. Saturation is explicit rather than an unbounded waiting queue, and the adapter has no mutation retry/replay loop.
+
+If a mutation returns `kind="command_outcome_unknown"`, preserve its real `command_id` and call `vnc_get_command_status(command_id)` before deciding on another mutation. If it returns `kind="mutation_outcome_unknown"` with no trustworthy command ID, `retry_safe=false` still applies: the controller may already have received the operation. Never blindly replay either case.
+
+The complete MCP configuration table, secret-file validation, Python token-memory limitation, tool catalog, transport shutdown behavior, and remote-access boundary are in [`MCP_SERVER.md`](MCP_SERVER.md).
 
 ## 7. Health and readiness
 
@@ -361,6 +399,8 @@ The registry is process-local and bounded. Nonterminal records are never evicted
 
 Known failures after worker admission include the stable `command_id`, `outcome: "failed"`, and `retry_safe: false`. Pre-admission validation, shutdown, queue-capacity, or outcome-registry-capacity failures do not pretend that remote work was accepted. Queue saturation, shutdown, timeouts, and transport failures therefore remain visible rather than being silently dropped or converted to success.
 
+The MCP adapter preserves these semantics. `command_outcome_unknown` retains a trustworthy command ID for `vnc_get_command_status`; `mutation_outcome_unknown` is used conservatively when no trustworthy ID exists. Neither is retry-safe, and neither is automatically replayed.
+
 ## 11. WebSocket events
 
 With `websocat` installed:
@@ -464,6 +504,8 @@ Important controller defaults:
 
 Tune one limit at a time and rerun the real integration suite. Increasing queue, WebSocket, HTTP-connection, or screenshot capacities increases worst-case memory, file-descriptor, or task use. Increasing timeouts can increase shutdown and client-visible latency. Invalid settings fail startup closed. Controller-owned millisecond durations are bounded to 1 ms through 24 hours unless a narrower downstream representation applies. The native connect/read settings keep their historical `_MS` environment names but LibVNCClient represents them as whole seconds, so values such as 1500 ms are rejected rather than rounded. The poll interval is converted to a native `u32` microsecond field and is rejected above 4,294,967 ms. `VRC_SHUTDOWN_TIMEOUT_MS` must also cover the longest configured connect/read/poll blocking window plus a 500 ms cleanup margin. `VRC_STARTUP_TIMEOUT_MS` bounds the complete startup operation: acknowledgement wait, shutdown-flag publication, the permit-counted compatibility nudge, exit observation, and cleanup all consume the same deadline rather than separate full timeout windows.
 
+MCP has a separate controller-call bound, `VRC_MCP_MAX_CONCURRENT_CALLS`, default 8 and valid range 1–64. It is fail-fast admission, not an unbounded waiting queue. The full MCP configuration table is in [`MCP_SERVER.md`](MCP_SERVER.md).
+
 ## 15. Troubleshooting
 
 ### Desktop does not start
@@ -559,6 +601,16 @@ Do not serve a cached pre-disconnect screenshot as current.
 
 Back off on pre-admission overload. For an admitted command with unknown or failed outcome, preserve its command ID and inspect status rather than issuing a duplicate mutation. Do not hide any of these states as successful input.
 
+### MCP startup or transport fails
+
+- missing `VRC_MCP_CONTROLLER_TOKEN_FILE` is a configuration error; provide a valid secret-file path rather than a raw token;
+- malformed booleans, out-of-range timeout/concurrency/port values, and non-loopback `VRC_MCP_HTTP_HOST` values fail startup instead of falling back to defaults;
+- if the MCP extra is not installed, install `./python[mcp]`; do not add a fallback implementation;
+- HTTP `421`/`403` during direct probing can indicate the pinned SDK's Host/Origin security rejection; repair the request/tunnel/proxy contract rather than disabling the middleware;
+- if an MCP mutation reports an unknown outcome, follow its `retry_safe=false` instruction and inspect command status when an ID exists; do not replay automatically.
+
+See [`MCP_SERVER.md`](MCP_SERVER.md) for the exact configuration and transport boundary.
+
 ## 16. Validation commands
 
 Repository quality:
@@ -576,9 +628,10 @@ Real Compose integration:
 make integration-test
 ```
 
-All first-party Python, documentation, client/demo, and workflow contract tests:
+All first-party Python, MCP, documentation, client/demo, and workflow contract tests:
 
 ```bash
+python -m pip install -e './python[mcp]'
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
@@ -588,4 +641,10 @@ For the narrower documentation-only contract module:
 python3 -m unittest tests.test_documentation_contract -v
 ```
 
-The complete authoritative `CI` workflow runs the full quality, native, desktop, API, Compose, and integration surface. Release acceptance additionally requires the permanent `Release Gates` workflow on the same exact candidate SHA.
+For the focused MCP living-document contract:
+
+```bash
+python3 -m unittest tests.test_mcp_documentation_contract -v
+```
+
+The complete authoritative `CI` workflow runs the full quality, native, desktop, API, Compose, integration, MCP, and documentation surface. Release acceptance additionally requires the permanent `Release Gates` workflow on the same exact candidate SHA.

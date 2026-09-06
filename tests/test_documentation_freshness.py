@@ -12,6 +12,7 @@ CURRENT_MARKDOWN_DOCUMENTS = (
     ROOT / "README.md",
     ROOT / "docs" / "README.md",
     ROOT / "docs" / "OPERATOR_GUIDE.md",
+    ROOT / "docs" / "MCP_SERVER.md",
     ROOT / "docs" / "WEBSOCKET_EVENTS.md",
     ROOT / "docs" / "CUSTOM_DESKTOP_IMAGES.md",
     ROOT / "docs" / "CI_STATUS_BRIDGE.md",
@@ -45,6 +46,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
             "point-in-time records",
             "VNC_REMOTE_CONTROL_SERVER_V01_SPEC.md",
             "VNC_REMOTE_CONTROL_SERVER_REBASE_*_2026-08-03.md",
+            "MCP_SERVER.md",
             "openapi.json",
             "WEBSOCKET_EVENTS.md",
             "CUSTOM_DESKTOP_IMAGES.md",
@@ -67,7 +69,9 @@ class DocumentationFreshnessTests(unittest.TestCase):
         """The root README points at current docs and drops stale milestone references."""
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/README.md", readme)
+        self.assertIn("docs/MCP_SERVER.md", readme)
         self.assertIn("vnc-remote-control-demo", readme)
+        self.assertIn("vnc-remote-control-mcp", readme)
         self.assertIn("both permanent `CI` and `Release Gates`", readme)
         self.assertNotIn("The authoritative plan remains", readme)
         self.assertNotIn("dd3b14917ad5e239573d584238ff67ded8138203", readme)
@@ -80,6 +84,8 @@ class DocumentationFreshnessTests(unittest.TestCase):
             "http://127.0.0.1:8080/redoc",
             "http://127.0.0.1:8080/openapi.json",
             "vnc-remote-control-demo",
+            "vnc-remote-control-mcp",
+            "MCP_SERVER.md",
             "without waiting for the next heartbeat",
             "python3 -m unittest discover -s tests -p 'test_*.py' -v",
             "Release Gates",
@@ -112,6 +118,7 @@ class DocumentationFreshnessTests(unittest.TestCase):
         self.assertIn("libvncclient1", dockerfile)
         self.assertIn("0.9.15+dfsg-1+deb13u2", security)
         self.assertIn("third-party-owned", security)
+        self.assertIn("docs/MCP_SERVER.md", security)
         self.assertNotIn("0.9.14+dfsg-1ubuntu0.2", security)
 
     def test_python_and_deployment_docs_expose_current_entry_points(self) -> None:
@@ -120,6 +127,8 @@ class DocumentationFreshnessTests(unittest.TestCase):
         deploy_readme = (ROOT / "deploy" / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("vnc-remote-control-demo", python_readme)
+        self.assertIn("vnc-remote-control-mcp", python_readme)
+        self.assertIn("../docs/MCP_SERVER.md", python_readme)
         self.assertIn("#subdirectory=python", python_readme)
         self.assertIn("http://127.0.0.1:8080/docs", python_readme)
         pins = FULL_SHA.findall(python_readme)
@@ -130,6 +139,8 @@ class DocumentationFreshnessTests(unittest.TestCase):
             "openssl rand -hex 32",
             "http://127.0.0.1:8080/docs",
             "vnc-remote-control-demo",
+            "vnc-remote-control-mcp",
+            "../docs/MCP_SERVER.md",
             "CUSTOM_DESKTOP_IMAGES.md",
         ):
             self.assertIn(required, deploy_readme)
@@ -185,10 +196,12 @@ class DocumentationFreshnessTests(unittest.TestCase):
         claude = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
         for document in (contributing, claude):
             self.assertIn("docs/README.md", document)
+            self.assertIn("docs/MCP_SERVER.md", document)
             self.assertIn("historical", document.lower())
             self.assertIn("python3 -m unittest discover -s tests -p 'test_*.py' -v", document)
         self.assertIn("Ordinary focused changes do not require", contributing)
         self.assertIn("vnc-remote-control-demo", claude)
+        self.assertIn("vnc-remote-control-mcp", claude)
 
     def test_contributing_quality_tools_match_current_workflows(self) -> None:
         """CONTRIBUTING.md lists the quality tools that the current CI workflows actually run."""

@@ -23,6 +23,11 @@ The maintainer will acknowledge a complete report, assess severity, coordinate a
 - The controller is designed for the project-owned desktop container, not arbitrary untrusted VNC servers.
 - Typed text, clipboard contents, framebuffer pixels, bearer tokens, and VNC passwords must never be logged.
 - The controller does not terminate TLS; exposure beyond localhost requires a trusted TLS reverse proxy and a reviewed network boundary.
+- The MCP adapter authenticates to the controller with a file-backed bearer token; it does not accept a raw controller-token environment variable or command-line argument.
+- MCP Streamable HTTP has no project-specific client-authentication layer and is restricted to SDK-protected loopback hosts. Never patch it to bind publicly as an authentication workaround.
+- MCP mutation tools are absent by default and require explicit process-wide opt-in. Transport access to a mutation-enabled MCP process is equivalent to trusted desktop-control access.
+
+The current MCP transport, secret, logging, and mutation-outcome security model is documented in [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md).
 
 ## VNC password lifecycle
 
@@ -37,6 +42,22 @@ Classic VNC authentication uses at most the protocol-relevant first eight passwo
 The process-wide API token is held by an explicit `ApiToken` handle backed by `Arc<SecretString>`. Cloning controller or router state clones only the shared owner; it does not clone token bytes into an ordinary `String` or `Arc<str>`. The token type implements neither `Debug` nor `Display`, and the HTTP authentication boundary exposes only borrowed bytes for constant-time comparison. When the final owner is dropped, `SecretString` overwrites its live string bytes with volatile writes before releasing the allocation.
 
 This is a project-owned live-buffer guarantee, not a claim that process crashes, core dumps, kernel memory, allocator metadata, reverse proxies, clients, or request-header storage contain no residual token bytes. Operators must still disable core dumps where appropriate, protect process memory, terminate TLS at a trusted boundary, and prevent authorization-header logging outside the controller.
+
+## MCP controller-token lifecycle
+
+`VRC_MCP_CONTROLLER_TOKEN_FILE` is the only supported controller-token ingress for the MCP adapter. The environment contains a file path, not the bearer-token value. The MCP secret reader validates metadata, regular-file status, a 1-byte through 4-KiB size bound, Unix permissions, strict UTF-8, trailing CR/LF handling, nonempty content, and NUL rejection before the typed Python controller client is constructed. Errors do not echo secret bytes.
+
+The Python process cannot inherit the Rust `SecretString` volatile-zeroization guarantee. After decoding, the controller token exists in ordinary Python objects including a Python `str`; immutable Python string/bytes objects and copies made by the runtime or HTTP stack cannot be reliably scrubbed through a supported API. The MCP adapter therefore **does not guarantee zeroization** of controller-token bytes in Python process memory. Protect the MCP process as secret-bearing: restrict local process access, consider disabling core dumps, protect swap/process inspection where appropriate, and terminate the process when it no longer needs the token.
+
+This limitation is not a reason to move the token to a raw environment variable, command line, URL, or source constant. File-only secret ingress still reduces disclosure through shell history, process argument lists, inherited environments, and configuration dumps.
+
+## MCP transport and mutation boundary
+
+stdio is the default MCP transport and is preferred when the MCP host can launch the child directly. Streamable HTTP is an explicit opt-in and accepts only `127.0.0.1`, `localhost`, or `::1`, the exact host spellings for which the pinned `mcp==2.1.1` SDK installs its DNS-rebinding Host/Origin protection. The adapter does not replace or disable that middleware. Remote access must use a trusted authenticated tunnel or a reviewed proxy boundary while the backend listener remains loopback-only.
+
+The MCP HTTP listener itself does not authenticate clients. Any local process able to reach it must be treated as potentially able to invoke every registered tool. Because screenshots and clipboard reads return sensitive desktop data, read-only mode is still a trusted-client surface. When `VRC_MCP_ALLOW_MUTATIONS=true`, the same transport grants the exposed pointer, keyboard, text, clipboard-set, and reconnect capabilities process-wide.
+
+A mutation transport/protocol failure is not proof that the controller received nothing. If a trustworthy command ID exists, MCP reports `command_outcome_unknown`, preserves the ID, sets `retry_safe=false`, and directs the caller to `vnc_get_command_status`. Without a trustworthy ID it reports conservative `mutation_outcome_unknown` with `retry_safe=false`. The adapter never fabricates an ID and never automatically retries or replays an ambiguous mutation.
 
 ## Secret-file rejection lifecycle
 
