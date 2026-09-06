@@ -9,13 +9,16 @@ The intended branch-protection policy is documented even though direct-owner dev
 ## Prerequisites
 
 - Rust 1.97.1 through `rustup`;
-- Python 3.12 for first-party client, documentation, workflow, and policy contract tests;
+- Python 3.12 for first-party client, MCP, documentation, workflow, and policy contract tests;
+- the Python package installed with the exact MCP test extra (`pip install -e './python[mcp]'`) before running the complete first-party Python test suite; the core package remains valid without the extra for dependency-free client-only use;
 - `ruff`, `pylint`, and `mypy` for `make lint-python` (configs: `ruff.toml`, `.pylintrc`, `mypy.ini`);
 - GNU Make;
 - Docker Engine with Compose v2 for container milestones;
 - a C compiler, `pkg-config`, and Debian's `libvncserver-dev` package for native development;
 - `cargo-deny` for `make security-scan`;
 - `shellcheck` and `actionlint` for reproducing the release-policy lint checks; Docker BuildKit provides Dockerfile validation through `docker build --check`.
+
+The optional MCP package dependency is intentionally pinned to the reviewed `mcp==2.1.1`. Do not relax that pin or add a compatibility fallback without a separate dependency/API review. Current MCP architecture, configuration, transports, and security semantics are documented in [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md).
 
 ## Quality policy
 
@@ -38,20 +41,28 @@ make e2e-test
 make security-scan
 ```
 
-Run all first-party Python, documentation, client/demo, workflow, and policy contracts with:
+Run all first-party Python, MCP, documentation, client/demo, workflow, and policy contracts with:
 
 ```bash
-pip install -e python/
+pip install -e './python[mcp]'
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ```
+
+Run the focused MCP living-document contract with:
+
+```bash
+python3 -m unittest tests.test_mcp_documentation_contract -v
+```
+
+The full suite requires the MCP extra because the permanent transport acceptance tests import and exercise the exact pinned SDK. Do not make those tests silently skip merely because a developer installed only the core package; use a deliberately narrower client-only test invocation when testing the zero-third-party core boundary.
 
 Every command uses fail-fast behavior where applicable and must avoid printing secret contents.
 
 ## Documentation discipline
 
-[`docs/README.md`](docs/README.md) separates living/current documentation from historical engineering artifacts.
+[`docs/README.md`](docs/README.md) separates living/current documentation from historical engineering artifacts. [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) is the living authority for the MCP adapter and must track source whenever its SDK pin, configuration variables/defaults/ranges, transport behavior, tool capabilities, secret policy, or mutation-outcome semantics change.
 
-When behavior, API, deployment, security, or Python-client behavior changes, update the corresponding living documentation in the same change and strengthen contract tests when useful. Do not leave current behavior documented only in a dated TODO or implementation note.
+When behavior, API, deployment, security, Python-client, or MCP behavior changes, update the corresponding living documentation in the same change and strengthen contract tests when useful. Do not leave current behavior documented only in a dated TODO or implementation note.
 
 Dated specs, TODOs, review notes, implementation notes, and evidence files are point-in-time project records. Preserve old commit SHAs, run IDs, failures, and then-current implementation descriptions in those records rather than rewriting history to match present `master`.
 
