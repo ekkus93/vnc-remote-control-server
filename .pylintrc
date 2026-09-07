@@ -13,13 +13,13 @@ init-hook=
 # Pylint 4.0.5 delegates import grouping to isort but does not expose the
 # newer known-first-party option. When run from the repository root it
 # classifies the editable-installed vnc_remote_control package as third-party
-# while classifying the root-level mcp_test_support module as first-party,
-# which conflicts with Ruff's explicit first-party source-root configuration.
-# Keep C0411 enabled and make Pylint's ordering classification deterministic by
-# placing both names in the same group. This affects import ordering only; it
-# does not change packaging, dependency ownership, import resolution, or any
-# runtime behavior.
-known-third-party=enchant,mcp_test_support,vnc_remote_control
+# while classifying root/test support modules as first-party, which conflicts
+# with Ruff's explicit first-party source-root configuration. Keep C0411
+# enabled and make Pylint's ordering classification deterministic by placing
+# those repository-owned names in the same ordering group. This affects import
+# ordering only; it does not change packaging, dependency ownership, import
+# resolution, or any runtime behavior.
+known-third-party=enchant,mcp_test_support,r13_checks_abuse,r13_checks_auth,r13_checks_shutdown,r13_checks_state,r13_config,r13_harness,r13_helpers,r13_integration,r13_types,vnc_remote_control
 
 [DESIGN]
 # Deliberate, documented widenings of pylint's default design-metric

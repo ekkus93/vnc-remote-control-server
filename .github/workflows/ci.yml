@@ -118,6 +118,7 @@ jobs:
             tests/worker-e2e/run.sh \
             tests/worker-text-clipboard-e2e/run.sh \
             tests/http-e2e/run.sh \
+            tests/mcp-e2e/run.sh \
             controller/healthcheck.sh \
             tests/compose/run.sh \
             tests/integration/run.sh
@@ -177,6 +178,14 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Python for MCP E2E
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install exact MCP E2E Python extra
+        run: pip install -e './python[mcp]'
 
       - name: Install desktop and native smoke dependencies
         shell: bash
@@ -284,6 +293,21 @@ jobs:
 
       - name: Run controller image, Compose, and persistence smoke test
         run: bash tests/compose/run.sh
+
+      - name: Run MCP production controller/TigerVNC E2E
+        id: mcp_e2e
+        env:
+          MCP_E2E_FAILURE_ARTIFACT_DIR: artifacts/mcp-e2e-failure
+        run: bash tests/mcp-e2e/run.sh
+
+      - name: Upload MCP E2E failure diagnostics
+        if: ${{ failure() && steps.mcp_e2e.outcome == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mcp-e2e-failure-${{ github.run_id }}
+          path: artifacts/mcp-e2e-failure
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run R13 Compose integration and E2E validation
         id: r13_integration
