@@ -1,7 +1,8 @@
 # v0.1 Release Security and Native-Safety Policy
 
-Date: 2026-08-05
-Repository: `ekkus93/vnc-remote-control-server`
+Date: 2026-08-05  
+MCP Python supply-chain amendment: 2026-09-07  
+Repository: `ekkus93/vnc-remote-control-server`  
 Scope: the v0.1 release candidate and every later release unless superseded by a stricter policy.
 
 ## Fail-closed release gates
@@ -11,11 +12,12 @@ Both the authoritative `CI` workflow and the `Release Gates` workflow must compl
 The following findings block release:
 
 - any Rust advisory, prohibited license, wildcard dependency, or unapproved registry/source rejected by `cargo deny check`;
+- any Python MCP runtime package, version, target, direct requirement, or license signal that differs from the explicitly reviewed MCP runtime policy;
 - any secret finding from Gitleaks across the complete reachable Git history that is not an explicitly reviewed exact false-positive fingerprint;
 - any CRITICAL image finding that is not matched by an exact, current reachability determination;
 - any ShellCheck warning/error, actionlint error, BuildKit Dockerfile check, or Compose validation failure;
 - any AddressSanitizer, ThreadSanitizer, or Miri failure;
-- any ordinary formatting, Clippy, unit, documentation, desktop, native-adapter, Compose, integration, API, or end-to-end failure.
+- any ordinary formatting, Clippy, unit, documentation, desktop, native-adapter, Compose, integration, API, MCP transport, MCP real-controller/TigerVNC, or other end-to-end failure.
 
 HIGH image vulnerabilities are retained in JSON evidence and must be reviewed. They are not automatic v0.1 blockers unless they are exploitable in the shipped configuration, affect a security boundary, or are escalated by the release reviewer.
 
@@ -35,6 +37,27 @@ A permitted determination must be either `not_affected` or `not_exploitable`, in
 
 Current determinations are stored in `security/trivy-critical-vex.json` and tracked by issue #7. They were re-reviewed on **2026-08-31** and expire on **2026-09-30**. Expiry, a new finding, a package-version change, a new application input path, or a mismatch between the report and the VEX file blocks release.
 
+## Python MCP runtime dependency and license policy
+
+The core Python client intentionally has zero hard third-party runtime dependencies. Regular CI installs the core package by itself in a clean virtual environment and fails if the MCP SDK or any other third-party runtime distribution appears. The MCP adapter remains an explicit optional extra whose direct requirement is exactly `mcp==2.1.1`.
+
+The reviewed release-validation closure for that extra is committed in `security/python-mcp-runtime-constraints.txt` and `security/python-mcp-runtime-policy.json`. This closure is deliberately scoped to **CPython 3.12 on Linux**, matching the permanent CI and release-validation target. It is not represented as a universal lock for Windows, Emscripten, Python 3.14+, or other marker-dependent environments. A target change requires a separate reviewed closure rather than silently reusing this one.
+
+The constraints freeze every installed third-party MCP runtime distribution at the exact generation validated when the policy was reviewed. This is stricter than the MCP SDK's own lower-bounded transitive requirements: a newly published transitive release cannot enter CI or Release Gates merely because it still satisfies an upstream `>=` requirement. Dependency updates must change the committed constraints and policy in review and then pass the complete permanent workflows on the new exact generation.
+
+Release Gates create a fresh virtual environment, install `./python[mcp]` under the committed constraints, run `pip check`, and execute `scripts/verify_python_mcp_runtime.py`. The verifier fails closed unless all of the following are true:
+
+- the interpreter is CPython 3.12 on Linux;
+- the core project metadata still has zero hard dependencies and the MCP extra still contains only the reviewed direct requirement;
+- the installed third-party runtime package-name/version set exactly matches the committed policy and constraints;
+- each installed package exposes a license metadata signal explicitly approved for that exact reviewed package;
+- the policy's reviewed license families exactly match the package-level reviews;
+- the only excluded distributions are the named local project itself and the virtual environment's `pip` bootstrap distribution.
+
+The reviewed MCP runtime license families are `MIT`, `MIT-0`, `BSD-3-Clause`, `Apache-2.0`, `Apache-2.0 OR BSD-3-Clause`, and `PSF-2.0`. The package-level policy is authoritative: there is no wildcard “OSI approved” fallback and no acceptance of a new license merely because another package already uses the same family. An unknown, missing, changed, or otherwise unreviewed license signal blocks the release until the exact package policy is reviewed and deliberately updated.
+
+The release artifact includes the exact pip install report, deterministic runtime inventory, reviewed constraints, reviewed policy, and Python/pip versions. The pip install report preserves the resolver's selected distribution source and hashes as evidence; it does not replace the committed exact package/version and license review.
+
 ## Native-safety coverage and limitations
 
 AddressSanitizer instruments the Rust LibVNCClient adapter and its boundary tests. ThreadSanitizer executes the complete `controller-api --lib` target, including worker, shutdown, event-bridge, framebuffer, observability, and HTTP library tests, and separately executes `remote-desktop-core --lib`. No skip list, suppression file, `continue-on-error`, or native-adapter exclusion feature is used. The distribution Debian LibVNCClient shared library is not rebuilt with sanitizers, so upstream native-library defects remain outside this repository's instrumentation boundary. Rust does not expose a general UBSan mode; Miri is the pure-Rust undefined-behavior and provenance gate.
@@ -45,11 +68,11 @@ Miri runs only `remote-desktop-core --lib` with `-Zmiri-disable-isolation` becau
 
 ## Image and artifact evidence
 
-Release Gates builds the controller and desktop release images from the candidate commit, scans both images, and generates CycloneDX SBOMs. Static-policy, native-safety, raw vulnerability, exact VEX evaluation, and image-security artifacts are retained for 30 days. Failure artifacts must remain sanitized and must not contain bearer tokens, VNC passwords, typed text, clipboard payloads, or framebuffer screenshots.
+Release Gates builds the controller and desktop release images from the candidate commit, scans both images, and generates CycloneDX SBOMs. Static-policy, Python MCP dependency/license, native-safety, raw vulnerability, exact VEX evaluation, and image-security artifacts are retained for 30 days. Failure artifacts must remain sanitized and must not contain bearer tokens, VNC passwords, typed text, clipboard payloads, or framebuffer screenshots.
 
-## Tool pinning
+## Tool and dependency pinning
 
-The release gate pins the Rust stable and nightly toolchains, cargo-deny, actionlint, Gitleaks, Trivy, and GitHub Actions by immutable version or commit. Downloaded release archives are checked against the publisher-provided checksum manifest before installation.
+The release gate pins the Rust stable and nightly toolchains, cargo-deny, actionlint, Gitleaks, Trivy, and GitHub Actions by immutable version or commit. Downloaded release archives are checked against the publisher-provided checksum manifest before installation. The Python MCP direct requirement is exact and its CPython-3.12/Linux runtime transitive closure is constrained to the committed reviewed package/version generation. The release gate records pip's install report so selected distribution origins and hashes remain auditable evidence.
 
 Every permanent third-party GitHub Action reference under `.github/workflows/*.yml` or `.yaml` must use a full 40-hex commit SHA. Mutable tags, branches, aliases such as `@stable`, and major-version refs such as `@v4` are prohibited even when an action input separately pins the tool it installs. Repository-local actions referenced through `./...` are exempt because their implementation is already fixed by the candidate commit. The release-policy contract scans every permanent workflow file and fails closed on any non-local mutable `uses:` reference.
 

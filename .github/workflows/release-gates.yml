@@ -112,6 +112,7 @@ jobs:
           tests/worker-e2e/run.sh
           tests/worker-text-clipboard-e2e/run.sh
           tests/http-e2e/run.sh
+          tests/mcp-e2e/run.sh
           controller/healthcheck.sh
           tests/compose/run.sh
           tests/integration/run.sh
@@ -152,6 +153,56 @@ jobs:
           name: static-policy-${{ github.run_id }}
           path: artifacts/static-policy
           if-no-files-found: warn
+          retention-days: 30
+
+  python_mcp_supply_chain:
+    name: Release Python MCP dependency and license gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Set up reviewed Python target
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Create isolated MCP runtime audit environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/python-mcp-supply-chain
+          python -m venv .venv-mcp-audit
+          .venv-mcp-audit/bin/python -m pip install \
+            --constraint security/python-mcp-runtime-constraints.txt \
+            --report artifacts/python-mcp-supply-chain/pip-install-report.json \
+            -e './python[mcp]'
+          .venv-mcp-audit/bin/python -m pip check
+
+      - name: Verify reviewed MCP runtime dependency and license closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-mcp-audit/bin/python scripts/verify_python_mcp_runtime.py \
+            --output artifacts/python-mcp-supply-chain/runtime-inventory.json
+          .venv-mcp-audit/bin/python --version \
+            > artifacts/python-mcp-supply-chain/python-version.txt
+          .venv-mcp-audit/bin/python -m pip --version \
+            > artifacts/python-mcp-supply-chain/pip-version.txt
+          cp security/python-mcp-runtime-constraints.txt \
+            artifacts/python-mcp-supply-chain/reviewed-constraints.txt
+          cp security/python-mcp-runtime-policy.json \
+            artifacts/python-mcp-supply-chain/reviewed-policy.json
+
+      - name: Upload Python MCP supply-chain evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: python-mcp-supply-chain-${{ github.run_id }}
+          path: artifacts/python-mcp-supply-chain
+          if-no-files-found: error
           retention-days: 30
 
   native_safety:
