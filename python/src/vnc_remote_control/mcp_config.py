@@ -26,6 +26,19 @@ MAX_MAX_CONCURRENT_CALLS = 64
 MIN_HTTP_PORT = 1
 MAX_HTTP_PORT = 65_535
 SDK_PROTECTED_HTTP_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_MCP_ENVIRONMENT_PREFIX = "VRC_MCP_"
+_MCP_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "VRC_MCP_CONTROLLER_URL",
+        "VRC_MCP_CONTROLLER_TOKEN_FILE",
+        "VRC_MCP_CONTROLLER_TIMEOUT_SECONDS",
+        "VRC_MCP_ALLOW_MUTATIONS",
+        "VRC_MCP_MAX_CONCURRENT_CALLS",
+        "VRC_MCP_TRANSPORT",
+        "VRC_MCP_HTTP_HOST",
+        "VRC_MCP_HTTP_PORT",
+    }
+)
 
 McpTransport = Literal["stdio", "streamable-http"]
 
@@ -52,6 +65,7 @@ class McpConfig:
     def load(cls, environment: Mapping[str, str] | None = None) -> McpConfig:
         """Load and validate MCP configuration from environment and filesystem."""
         source = os.environ if environment is None else environment
+        _reject_unknown_mcp_environment(source)
         controller_url = _value_or(
             source, "VRC_MCP_CONTROLLER_URL", DEFAULT_CONTROLLER_URL
         )
@@ -93,12 +107,7 @@ class McpConfig:
             MAX_MAX_CONCURRENT_CALLS,
         )
         transport_value = _value_or(source, "VRC_MCP_TRANSPORT", DEFAULT_TRANSPORT)
-        if transport_value not in {"stdio", "streamable-http"}:
-            raise McpConfigError("invalid VRC_MCP_TRANSPORT")
-        transport = cast(McpTransport, transport_value)
-
         http_host = _value_or(source, "VRC_MCP_HTTP_HOST", DEFAULT_HTTP_HOST)
-        _require_sdk_protected_loopback_host(http_host)
         http_port = _parse_int(
             source,
             "VRC_MCP_HTTP_PORT",
@@ -106,6 +115,8 @@ class McpConfig:
             MIN_HTTP_PORT,
             MAX_HTTP_PORT,
         )
+        validate_mcp_transport_configuration(transport_value, http_host, http_port)
+        transport = cast(McpTransport, transport_value)
 
         return cls(
             controller_url=controller_url,
@@ -142,6 +153,50 @@ class McpConfig:
             f"transport={self.transport!r}, http_host={self.http_host!r}, "
             f"http_port={self.http_port!r}, token_set={self.token_set!r})"
         )
+
+
+def _reject_unknown_mcp_environment(environment: Mapping[str, str]) -> None:
+    """Reject unsupported MCP-prefixed variables instead of silently ignoring them."""
+    if "VRC_MCP_CONTROLLER_TOKEN" in environment:
+        raise McpConfigError(
+            "unsupported VRC_MCP_* environment variable; "
+            "VRC_MCP_CONTROLLER_TOKEN_FILE is the only controller token source"
+        )
+    if any(
+        name.startswith(_MCP_ENVIRONMENT_PREFIX)
+        and name not in _MCP_ENVIRONMENT_VARIABLES
+        for name in environment
+    ):
+        raise McpConfigError(
+            "unsupported VRC_MCP_* environment variable; "
+            "only documented MCP variables are accepted"
+        )
+
+
+def validate_mcp_transport_configuration(
+    transport: object,
+    http_host: object,
+    http_port: object,
+) -> None:
+    """Fail closed on transport/bind values before any MCP listener can start."""
+    if not isinstance(transport, str) or transport not in (
+        "stdio",
+        "streamable-http",
+    ):
+        raise McpConfigError("invalid VRC_MCP_TRANSPORT")
+    if (
+        not isinstance(http_host, str)
+        or http_host not in SDK_PROTECTED_HTTP_LOOPBACK_HOSTS
+    ):
+        raise McpConfigError(
+            "invalid VRC_MCP_HTTP_HOST; SDK-protected loopback host required"
+        )
+    if (
+        not isinstance(http_port, int)
+        or isinstance(http_port, bool)
+        or not MIN_HTTP_PORT <= http_port <= MAX_HTTP_PORT
+    ):
+        raise McpConfigError("invalid VRC_MCP_HTTP_PORT")
 
 
 def _environment_value(environment: Mapping[str, str], name: str) -> str | None:
@@ -215,16 +270,6 @@ def _parse_float(
     if not math.isfinite(value) or value < minimum or value > maximum:
         raise McpConfigError(f"invalid {name}")
     return value
-
-
-def _require_sdk_protected_loopback_host(host: str) -> None:
-    # mcp==2.1.1 auto-enables its Host/Origin DNS-rebinding middleware only for
-    # these exact loopback spellings. Reject other 127/8 aliases rather than
-    # silently starting an HTTP listener with the SDK protection disabled.
-    if host not in SDK_PROTECTED_HTTP_LOOPBACK_HOSTS:
-        raise McpConfigError(
-            "invalid VRC_MCP_HTTP_HOST; SDK-protected loopback host required"
-        )
 
 
 def _secret_error(path: Path, reason: str) -> McpConfigError:

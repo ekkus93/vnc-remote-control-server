@@ -110,6 +110,15 @@ class McpOutcomeToolRegistrar:
         text_content_factory: McpTextContentFactory,
         mutation_validation_errors: tuple[type[Exception], ...],
     ) -> None:
+        if any(
+            not isinstance(error_type, type)
+            or not issubclass(error_type, Exception)
+            or error_type is Exception
+            for error_type in mutation_validation_errors
+        ):
+            raise McpOutcomeRegistrationError(
+                "mutation validation errors must be narrow Exception subclasses"
+            )
         self._registrar = registrar
         self._call_tool_result_factory = call_tool_result_factory
         self._text_content_factory = text_content_factory
