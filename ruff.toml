@@ -5,4 +5,16 @@ line-length = 100
 select = ["E", "F", "I", "UP", "B"]
 
 [lint.isort]
-known-first-party = ["mcp_test_support", "vnc_remote_control"]
+known-first-party = [
+    "mcp_test_support",
+    "r13_checks_abuse",
+    "r13_checks_auth",
+    "r13_checks_shutdown",
+    "r13_checks_state",
+    "r13_config",
+    "r13_harness",
+    "r13_helpers",
+    "r13_integration",
+    "r13_types",
+    "vnc_remote_control",
+]
