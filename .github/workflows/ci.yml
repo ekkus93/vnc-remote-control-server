@@ -15,6 +15,68 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  core_python:
+    name: Core Python client without MCP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Install core Python package without MCP extra
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv .venv-core
+          .venv-core/bin/python -m pip install -e ./python
+
+      - name: Prove core install has no third-party runtime dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-core/bin/python - <<'PY'
+          import importlib
+          import importlib.metadata
+          import importlib.util
+          import re
+
+          def normalized(name: str) -> str:
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+          installed = {
+              normalized(distribution.metadata["Name"])
+              for distribution in importlib.metadata.distributions()
+          }
+          expected = {"pip", "vnc-remote-control-client"}
+          if installed != expected:
+              raise SystemExit(
+                  f"core Python install dependency drift: expected={sorted(expected)} "
+                  f"actual={sorted(installed)}"
+              )
+          if importlib.util.find_spec("mcp") is not None:
+              raise SystemExit("core Python install unexpectedly exposes the MCP SDK")
+
+          module = importlib.import_module("vnc_remote_control")
+          if module.__name__ != "vnc_remote_control":
+              raise SystemExit("core Python package import resolved unexpectedly")
+          PY
+
+      - name: Run core Python client contract tests without MCP installed
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-core/bin/python -m unittest -v \
+            tests.test_python_client \
+            tests.test_python_client_openapi_contract \
+            tests.test_python_command_outcomes \
+            tests.test_python_demo
+
   quality:
     name: Repository quality gates
     runs-on: ubuntu-24.04
@@ -87,8 +149,14 @@ jobs:
       - name: Compile first-party Python
         run: python -m compileall -q tools/ci_status tests desktop/test-app
 
-      - name: Install Python client package with exact MCP test extra
-        run: pip install -e './python[mcp]'
+      - name: Install Python client package with reviewed MCP runtime closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install \
+            --constraint security/python-mcp-runtime-constraints.txt \
+            -e './python[mcp]'
+          python -m pip check
 
       - name: Install Python lint tools
         run: pip install ruff==0.12.0 pylint==4.0.5 mypy==1.19.1
@@ -184,8 +252,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install exact MCP E2E Python extra
-        run: pip install -e './python[mcp]'
+      - name: Install reviewed MCP E2E Python runtime closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install \
+            --constraint security/python-mcp-runtime-constraints.txt \
+            -e './python[mcp]'
+          python -m pip check
 
       - name: Install desktop and native smoke dependencies
         shell: bash
