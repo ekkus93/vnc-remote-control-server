@@ -273,24 +273,26 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ## MCP-012 — CI, supply-chain, and permanent-gate integration
 
+**Validated:** exact candidate SHA `6d2d41fc0a14f85992c4125f39472fad15aba203`; CI `34141589371` and Release Gates `34141589310` both passed. PR #40 merged that candidate to exact `master` SHA `38f83f5a950392b8464e8b5c98d5f2df945c41ec`; merged-master CI `34145291715` and Release Gates `34145291678` both passed.
+
 ### Regular CI
 
-- [ ] Install Python MCP extra at the reviewed dependency pin in the MCP test job/path.
-- [ ] Keep core-client test path capable of running without MCP installed where practical.
-- [ ] Run MCP unit/contract tests in permanent CI.
-- [ ] Run stdio transport smoke in permanent CI.
-- [ ] Run loopback Streamable HTTP smoke in permanent CI.
-- [ ] Ensure Ruff/Pylint/mypy cover new modules/tests.
+- [x] Install Python MCP extra at the reviewed dependency pin in the MCP test job/path.
+- [x] Keep core-client test path capable of running without MCP installed where practical.
+- [x] Run MCP unit/contract tests in permanent CI.
+- [x] Run stdio transport smoke in permanent CI.
+- [x] Run loopback Streamable HTTP smoke in permanent CI.
+- [x] Ensure Ruff/Pylint/mypy cover new modules/tests.
 
 ### Release/security
 
-- [ ] Determine whether current dependency/license inventory covers Python MCP runtime dependencies.
-- [ ] If not, add explicit auditable Python MCP dependency/license inventory rather than silently excluding it.
-- [ ] Review MCP SDK/transitive licenses against project release policy.
-- [ ] Preserve immutable third-party GitHub Action pins.
-- [ ] Preserve Gitleaks/Trivy/VEX/SBOM/cargo-deny/sanitizer/Miri gates.
-- [ ] Add MCP E2E to an appropriate permanent workflow before final sign-off.
-- [ ] Do not add `continue-on-error` to MCP gates.
+- [x] Determine whether current dependency/license inventory covers Python MCP runtime dependencies.
+- [x] If not, add explicit auditable Python MCP dependency/license inventory rather than silently excluding it.
+- [x] Review MCP SDK/transitive licenses against project release policy.
+- [x] Preserve immutable third-party GitHub Action pins.
+- [x] Preserve Gitleaks/Trivy/VEX/SBOM/cargo-deny/sanitizer/Miri gates.
+- [x] Add MCP E2E to an appropriate permanent workflow before final sign-off.
+- [x] Do not add `continue-on-error` to MCP gates.
 
 ## MCP-013 — Cross-cutting unsafe-fallback and silent-failure audit
 
