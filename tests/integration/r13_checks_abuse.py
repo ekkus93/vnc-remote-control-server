@@ -116,41 +116,26 @@ def _wait_desktop_restart_health(
     harness: Harness,
     deadline_seconds: float = 120,
 ) -> None:
-    """Wait through only the expected SIGTERM-stopped state during desktop restart."""
+    """Skip only the clean SIGTERM stop snapshot, then use strict health semantics."""
     deadline = time.monotonic() + deadline_seconds
-    last = "missing"
     while time.monotonic() < deadline:
         state = harness.service_state("desktop")
-        if state is not None:
-            status = str(state.get("Status", "unknown"))
-            health = state.get("Health")
-            health_status = (
-                str(health.get("Status", "unknown"))
-                if isinstance(health, dict)
-                else None
-            )
-            last = f"status={status}, health={health_status or 'none'}"
-            details = (
-                f"{last}, exit_code={state.get('ExitCode')}, "
-                f"oom_killed={state.get('OOMKilled')}, error={state.get('Error')!r}"
-            )
-            if health_status == "healthy":
-                return
-            expected_stopped_generation = (
-                status == "exited"
-                and state.get("ExitCode") == 143
-                and state.get("OOMKilled") is False
-                and state.get("Error") == ""
-            )
-            if expected_stopped_generation:
-                time.sleep(0.25)
-                continue
-            if status in {"exited", "dead"}:
-                raise Failure(f"desktop entered terminal state during restart: {details}")
-            if health_status == "unhealthy":
-                raise Failure(f"desktop became unhealthy during restart: {details}")
-        time.sleep(0.25)
-    raise Failure(f"timed out waiting for desktop restart health; last={last}")
+        expected_stopped_generation = (
+            state is not None
+            and state.get("Status") == "exited"
+            and state.get("ExitCode") == 143
+            and state.get("OOMKilled") is False
+            and state.get("Error") == ""
+        )
+        if expected_stopped_generation:
+            time.sleep(0.25)
+            continue
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        harness.wait_service_health("desktop", remaining)
+        return
+    raise Failure("timed out waiting for desktop restart to leave expected stopped state")
 
 
 def assert_abuse_and_concurrency(harness: Harness) -> None:
