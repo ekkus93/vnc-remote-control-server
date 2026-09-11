@@ -15,10 +15,7 @@ sys.path.insert(0, str(INTEGRATION_DIR))
 R13_CHECKS_ABUSE = importlib.import_module("r13_checks_abuse")
 R13_HARNESS = importlib.import_module("r13_harness")
 R13_TYPES = importlib.import_module("r13_types")
-WAIT_DESKTOP_RESTART_HEALTH = getattr(
-    R13_CHECKS_ABUSE,
-    "_wait_desktop_restart_health",
-)
+WAIT_DESKTOP_RESTART_HEALTH = R13_CHECKS_ABUSE._wait_desktop_restart_health
 FAILURE = R13_TYPES.Failure
 
 
