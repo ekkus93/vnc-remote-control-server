@@ -9,7 +9,7 @@ import time
 from r13_config import MAX_JSON_BYTES
 from r13_harness import Harness
 from r13_helpers import error_code, post_json, require
-from r13_types import HttpResult
+from r13_types import Failure, HttpResult
 
 
 def _assert_body_and_coordinate_bounds(harness: Harness) -> None:
@@ -112,6 +112,47 @@ def _assert_concurrent_screenshot_overload(harness: Harness) -> None:
             require(error_code(result) == "screenshot_busy", "screenshot overload used wrong error")
 
 
+def _wait_desktop_restart_health(
+    harness: Harness,
+    deadline_seconds: float = 120,
+) -> None:
+    """Wait through only the expected SIGTERM-stopped state during desktop restart."""
+    deadline = time.monotonic() + deadline_seconds
+    last = "missing"
+    while time.monotonic() < deadline:
+        state = harness.service_state("desktop")
+        if state is not None:
+            status = str(state.get("Status", "unknown"))
+            health = state.get("Health")
+            health_status = (
+                str(health.get("Status", "unknown"))
+                if isinstance(health, dict)
+                else None
+            )
+            last = f"status={status}, health={health_status or 'none'}"
+            details = (
+                f"{last}, exit_code={state.get('ExitCode')}, "
+                f"oom_killed={state.get('OOMKilled')}, error={state.get('Error')!r}"
+            )
+            if health_status == "healthy":
+                return
+            expected_stopped_generation = (
+                status == "exited"
+                and state.get("ExitCode") == 143
+                and state.get("OOMKilled") is False
+                and state.get("Error") == ""
+            )
+            if expected_stopped_generation:
+                time.sleep(0.25)
+                continue
+            if status in {"exited", "dead"}:
+                raise Failure(f"desktop entered terminal state during restart: {details}")
+            if health_status == "unhealthy":
+                raise Failure(f"desktop became unhealthy during restart: {details}")
+        time.sleep(0.25)
+    raise Failure(f"timed out waiting for desktop restart health; last={last}")
+
+
 def assert_abuse_and_concurrency(harness: Harness) -> None:
     """Verify body/coordinate/scroll, queue, reconnect, and screenshot bounds."""
     harness.log("verifying body, coordinate, scroll, queue, reconnect, and screenshot bounds")
@@ -153,9 +194,11 @@ def assert_reconnect_and_resource_bounds(harness: Harness) -> None:
         )
         saw_unavailable = True
         # Reconcile the service to its configured running state rather than trusting
-        # `compose start` to have transitioned an existing stopped container.
+        # `compose start` to have transitioned an existing stopped container. During
+        # that handoff Docker can briefly report the intentionally stopped generation
+        # (SIGTERM -> 143) before the same service becomes running and healthy again.
         harness.compose("up", "-d", "--no-deps", "desktop")
-        harness.wait_service_health("desktop")
+        _wait_desktop_restart_health(harness)
         harness.wait_ready()
         connected = harness.request("GET", "/v1/status").json()
         require(connected.get("state") == "connected", f"cycle {cycle} did not reconnect")
