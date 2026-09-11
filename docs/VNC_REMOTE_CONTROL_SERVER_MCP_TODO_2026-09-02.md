@@ -7,7 +7,7 @@
 
 This TODO is evidence-driven. A checkbox closes only when source, tests, workflow configuration, documentation, or external validation proves it. Do not close tasks from commit messages alone. Do not weaken an existing gate to make the MCP phase green.
 
-Closeout reconciliation on 2026-09-11 reviewed the current implementation, permanent test suite, living documentation, MCP/TigerVNC E2E, and exact-generation CI evidence. MCP-001 through MCP-013 are now reconciled against actual behavior rather than historical task status. MCP-014 and MCP-015 remain open until exact candidate/merged-master validation and final evidence are recorded.
+Final closeout reconciliation on 2026-09-11 reviewed the implementation, permanent test suite, living documentation, MCP/TigerVNC E2E, unsafe-fallback audit, exact candidate validation, exact merged-master validation, supply-chain policy, VEX status, and final evidence. MCP-001 through MCP-015 are reconciled against actual behavior and exact-generation validation evidence.
 
 ## MCP-001 — Establish the MCP package and executable
 
@@ -329,43 +329,59 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ## MCP-014 — Exact candidate and merged-master validation
 
+**Final validation:** PR #43 exact final candidate `446bfcf09a4a69b523b0352ff573f34b5a62dd61` passed CI `34647222799` and Release Gates `34647222812`. It was merged through the repository's policy-approved squash path to exact implementation `master` `a31e2f3fdf77085292fe65648d8741613f91cb38`, which passed fresh CI `34658956284` and fresh Release Gates `34658956281`.
+
+A prior merged generation `bb4178455a727f7baaebac46a31157f1c3713baa` exposed a race-sensitive R13 restart test in CI `34644165866` even though MCP E2E and Release Gates `34644166258` passed. The root cause was investigated and fixed rather than rerun or gate-weakened: the deliberate restart can briefly expose the intentionally SIGTERM-stopped desktop generation (`exit 143`). The final restart helper tolerates only that exact clean intentional-stop snapshot, then delegates to the existing strict health waiter; unexpected terminal/unhealthy states remain fail-closed.
+
 ### Candidate freeze
 
 - [x] Reconcile all MCP-001 through MCP-013 checkboxes against actual source/tests/docs/workflows.
-- [ ] Record exact final candidate SHA.
-- [ ] Run regular CI on that exact SHA.
-- [ ] Record CI run ID/conclusion.
-- [ ] Run Release Gates on that exact SHA.
-- [ ] Record Release Gates run ID/conclusion.
-- [ ] Inspect every failure and fix root cause without weakening gates.
-- [ ] If any fix changes candidate SHA, require both permanent workflows again on the new exact generation.
-- [ ] Require both workflows green on one exact candidate SHA before merge/sign-off.
+- [x] Record exact final candidate SHA.
+- [x] Run regular CI on that exact SHA.
+- [x] Record CI run ID/conclusion.
+- [x] Run Release Gates on that exact SHA.
+- [x] Record Release Gates run ID/conclusion.
+- [x] Inspect every failure and fix root cause without weakening gates.
+- [x] If any fix changes candidate SHA, require both permanent workflows again on the new exact generation.
+- [x] Require both workflows green on one exact candidate SHA before merge/sign-off.
 
 ### Exact merged master
 
-- [ ] Record exact merged `master` SHA.
-- [ ] Require fresh regular CI on exact merged `master`.
-- [ ] Record final master CI run ID/conclusion.
-- [ ] Require fresh Release Gates on exact merged `master`.
-- [ ] Record final master Release Gates run ID/conclusion.
-- [ ] Re-review current VEX status/expiry at final validation time.
+- [x] Record exact merged `master` SHA.
+- [x] Require fresh regular CI on exact merged `master`.
+- [x] Record final master CI run ID/conclusion.
+- [x] Require fresh Release Gates on exact merged `master`.
+- [x] Record final master Release Gates run ID/conclusion.
+- [x] Re-review current VEX status/expiry at final validation time.
+
+VEX re-review on 2026-09-11 confirmed repository metadata `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`, tracking issue `7`. The metadata was unexpired and exact final candidate/master Release Gates both passed exact CRITICAL VEX enforcement.
 
 ## MCP-015 — Final evidence and completion
 
-- [ ] Create `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md`.
-- [ ] Record starting baseline and V2 prerequisite completion.
-- [ ] Record final MCP architecture and tool catalog.
-- [ ] Record exact SDK version and protocol target.
-- [ ] Record config defaults/bounds and mutation-disabled default.
-- [ ] Record controller-token secret-file policy and Python memory limitation.
-- [ ] Record tool annotations.
-- [ ] Record unknown-outcome/no-retry policy and regression evidence.
-- [ ] Record both transport validation results.
-- [ ] Record real controller/TigerVNC MCP E2E evidence.
-- [ ] Record dependency/license/supply-chain review.
-- [ ] Record unsafe-fallback/silent-failure audit and surviving intentional ignores.
-- [ ] Record exact final candidate SHA plus CI/Release Gates IDs/conclusions.
-- [ ] Record exact final merged-master SHA plus CI/Release Gates IDs/conclusions.
-- [ ] Re-review every TODO checkbox against final source/tests/workflows/docs/evidence.
-- [ ] Confirm no checkbox is closed solely because a commit message says so.
-- [ ] Declare MCP phase complete only when all applicable MCP-001 through MCP-015 requirements are genuinely satisfied.
+**Evidence:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md` records the final architecture, catalog, configuration/security model, SDK/protocol target, transport/E2E validation, dependency/license closure, unsafe-fallback audit, exact-generation validation history, VEX review, and completion rationale.
+
+- [x] Create `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md`.
+- [x] Record starting baseline and V2 prerequisite completion.
+- [x] Record final MCP architecture and tool catalog.
+- [x] Record exact SDK version and protocol target.
+- [x] Record config defaults/bounds and mutation-disabled default.
+- [x] Record controller-token secret-file policy and Python memory limitation.
+- [x] Record tool annotations.
+- [x] Record unknown-outcome/no-retry policy and regression evidence.
+- [x] Record both transport validation results.
+- [x] Record real controller/TigerVNC MCP E2E evidence.
+- [x] Record dependency/license/supply-chain review.
+- [x] Record unsafe-fallback/silent-failure audit and surviving intentional ignores.
+- [x] Record exact final candidate SHA plus CI/Release Gates IDs/conclusions.
+- [x] Record exact final merged-master SHA plus CI/Release Gates IDs/conclusions.
+- [x] Re-review every TODO checkbox against final source/tests/workflows/docs/evidence.
+- [x] Confirm no checkbox is closed solely because a commit message says so.
+- [x] Declare MCP phase complete only when all applicable MCP-001 through MCP-015 requirements are genuinely satisfied.
+
+## MCP completion declaration
+
+The MCP implementation phase is complete. Every applicable MCP-001 through MCP-015 checkbox has been reconciled against source, tests, workflow configuration, living documentation, audit records, and exact-generation CI evidence. No item is closed solely from a commit message or historical green run, and no release/security gate was weakened for sign-off.
+
+The authoritative validated implementation generation is `a31e2f3fdf77085292fe65648d8741613f91cb38`, with CI `34658956284` and Release Gates `34658956281` both successful. The final MCP/TigerVNC E2E and the corrected R13 restart/resource validation both passed on that exact `master` SHA.
+
+The CRITICAL VEX metadata remains `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`; exact CRITICAL VEX enforcement passed the final candidate and merged-master Release Gates. This documentation-only closeout change must itself remain green under the permanent workflows before merge.
