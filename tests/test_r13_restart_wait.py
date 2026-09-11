@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import sys
 import unittest
 from pathlib import Path
@@ -11,9 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 INTEGRATION_DIR = ROOT / "tests" / "integration"
 sys.path.insert(0, str(INTEGRATION_DIR))
 
-from r13_checks_abuse import _wait_desktop_restart_health  # noqa: E402
-from r13_harness import Harness  # noqa: E402
-from r13_types import Failure  # noqa: E402
+R13_CHECKS_ABUSE = importlib.import_module("r13_checks_abuse")
+R13_HARNESS = importlib.import_module("r13_harness")
+R13_TYPES = importlib.import_module("r13_types")
+WAIT_DESKTOP_RESTART_HEALTH = getattr(
+    R13_CHECKS_ABUSE,
+    "_wait_desktop_restart_health",
+)
+FAILURE = R13_TYPES.Failure
 
 
 def _state(
@@ -37,47 +43,49 @@ class R13DesktopRestartWaitTests(unittest.TestCase):
     """Keep the restart race fix narrow and fail closed for other terminal states."""
 
     def setUp(self) -> None:
-        self.harness = mock.Mock(spec=Harness)
+        self.harness = mock.Mock(spec=R13_HARNESS.Harness)
 
     def test_expected_sigterm_stopped_generation_can_transition_to_healthy(self) -> None:
         """An intentional stop may remain observable briefly after `compose up`."""
         self.harness.service_state.side_effect = [
             _state("exited", "unhealthy", exit_code=143),
             _state("running", "starting"),
-            _state("running", "healthy"),
         ]
         with mock.patch("r13_checks_abuse.time.sleep", return_value=None):
-            _wait_desktop_restart_health(self.harness, deadline_seconds=1)
-        self.assertEqual(self.harness.service_state.call_count, 3)
+            WAIT_DESKTOP_RESTART_HEALTH(self.harness, deadline_seconds=1)
+        self.assertEqual(self.harness.service_state.call_count, 2)
+        self.harness.wait_service_health.assert_called_once()
+        args = self.harness.wait_service_health.call_args.args
+        self.assertEqual(args[0], "desktop")
+        self.assertGreater(args[1], 0)
+        self.assertLessEqual(args[1], 1)
 
-    def test_unexpected_terminal_exit_still_fails_immediately(self) -> None:
-        """The restart waiter must not convert arbitrary process failure into a retry."""
+    def test_unexpected_terminal_exit_delegates_to_strict_waiter(self) -> None:
+        """Arbitrary process failure is never reclassified as an expected restart stop."""
         self.harness.service_state.return_value = _state(
             "exited",
             "unhealthy",
             exit_code=1,
         )
-        with (
-            mock.patch("r13_checks_abuse.time.sleep", return_value=None),
-            self.assertRaisesRegex(Failure, "terminal state during restart"),
-        ):
-            _wait_desktop_restart_health(self.harness, deadline_seconds=1)
+        self.harness.wait_service_health.side_effect = FAILURE("unexpected exit")
+        with self.assertRaisesRegex(FAILURE, "unexpected exit"):
+            WAIT_DESKTOP_RESTART_HEALTH(self.harness, deadline_seconds=1)
         self.harness.service_state.assert_called_once_with("desktop")
+        self.harness.wait_service_health.assert_called_once()
 
-    def test_oom_killed_sigterm_code_is_not_tolerated(self) -> None:
-        """Exit 143 is tolerated only when Docker reports a clean intentional stop."""
+    def test_oom_killed_sigterm_code_delegates_to_strict_waiter(self) -> None:
+        """Exit 143 is skipped only when Docker reports a clean intentional stop."""
         self.harness.service_state.return_value = _state(
             "exited",
             "unhealthy",
             exit_code=143,
             oom_killed=True,
         )
-        with (
-            mock.patch("r13_checks_abuse.time.sleep", return_value=None),
-            self.assertRaisesRegex(Failure, "terminal state during restart"),
-        ):
-            _wait_desktop_restart_health(self.harness, deadline_seconds=1)
+        self.harness.wait_service_health.side_effect = FAILURE("oom-killed exit")
+        with self.assertRaisesRegex(FAILURE, "oom-killed exit"):
+            WAIT_DESKTOP_RESTART_HEALTH(self.harness, deadline_seconds=1)
         self.harness.service_state.assert_called_once_with("desktop")
+        self.harness.wait_service_health.assert_called_once()
 
 
 if __name__ == "__main__":
