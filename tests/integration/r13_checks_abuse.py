@@ -112,7 +112,7 @@ def _assert_concurrent_screenshot_overload(harness: Harness) -> None:
             require(error_code(result) == "screenshot_busy", "screenshot overload used wrong error")
 
 
-def _wait_desktop_restart_health(
+def wait_desktop_restart_health(
     harness: Harness,
     deadline_seconds: float = 120,
 ) -> None:
@@ -183,7 +183,7 @@ def assert_reconnect_and_resource_bounds(harness: Harness) -> None:
         # that handoff Docker can briefly report the intentionally stopped generation
         # (SIGTERM -> 143) before the same service becomes running and healthy again.
         harness.compose("up", "-d", "--no-deps", "desktop")
-        _wait_desktop_restart_health(harness)
+        wait_desktop_restart_health(harness)
         harness.wait_ready()
         connected = harness.request("GET", "/v1/status").json()
         require(connected.get("state") == "connected", f"cycle {cycle} did not reconnect")
