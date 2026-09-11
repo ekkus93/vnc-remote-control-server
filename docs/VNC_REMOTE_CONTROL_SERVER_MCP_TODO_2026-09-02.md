@@ -3,9 +3,11 @@
 **Date:** 2026-09-02  
 **Specification:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_SPEC_2026-09-02.md`  
 **Starting repository `master`:** `e3a719600b03b5622ceec9e013dfc9ef94c12702`  
-**Specification commit:** `b454c754291a950a6d21ede9dd9594e5e5e45530`
+**Specification commit:** `b454c754291a950a6d21ede9dd9594e5e45530`
 
 This TODO is evidence-driven. A checkbox closes only when source, tests, workflow configuration, documentation, or external validation proves it. Do not close tasks from commit messages alone. Do not weaken an existing gate to make the MCP phase green.
+
+Closeout reconciliation on 2026-09-11 reviewed the current implementation, permanent test suite, living documentation, MCP/TigerVNC E2E, and exact-generation CI evidence. MCP-001 through MCP-013 are now reconciled against actual behavior rather than historical task status. MCP-014 and MCP-015 remain open until exact candidate/merged-master validation and final evidence are recorded.
 
 ## MCP-001 — Establish the MCP package and executable
 
@@ -22,7 +24,7 @@ This TODO is evidence-driven. A checkbox closes only when source, tests, workflo
 
 ## MCP-002 — Implement fail-closed MCP configuration and secret loading
 
-**Implementation reconciled; replacement permanent-CI validation pending.** On exact SHA `d71c408880f1c8d0a7eb4f550d5116ed20abac37`, Release Gates `33673848724` passed while CI `33673848703` failed only at Pylint in the new MCP configuration tranche. The redundant re-raise, temporary-directory lifecycle, and test-docstring findings are corrected in the current candidate.
+**Reconciled complete:** current production configuration and `tests/test_mcp_config.py` enforce the full fail-closed configuration/secret contract. Exact `master` `0da2324f89fa72933486fcb6e59e26d7c4bf8880` passed CI `34147921952` and Release Gates `34147921940`.
 
 ### Controller configuration
 
@@ -59,12 +61,12 @@ This TODO is evidence-driven. A checkbox closes only when source, tests, workflo
 
 ## MCP-003 — Build common bounded controller-call execution
 
-**Implemented locally; permanent-CI validation pending.** The executor uses fail-fast admission before thread-pool submission, shields cancellation from the underlying worker future, releases capacity only from the worker wrapper, performs no retry, and owns bounded shutdown. The uploaded exact-`master` snapshot plus this tranche passed `157/157` Python tests, `compileall`, and `git diff --check`.
+**Reconciled complete:** `BoundedControllerExecutor` provides fail-fast admission before submission, cancellation-safe slot ownership, typed failure normalization, and bounded owned shutdown. Exact `master` `0da2324f89fa72933486fcb6e59e26d7c4bf8880` passed the full execution regression suite in CI `34147921952`.
 
 - [x] Create one adapter-owned bounded concurrency limiter for all controller calls.
 - [x] Execute synchronous `VncRemoteControlClient` calls outside the MCP event loop.
 - [x] Ensure waiting work is bounded; do not submit unbounded worker-thread jobs ahead of the limiter.
-- [x] Ensure cancellation releases limiter capacity.
+- [x] Ensure cancellation releases limiter capacity only when the underlying call actually exits.
 - [x] Ensure clean/error/unwind paths release limiter capacity.
 - [x] Do not add an adapter retry loop.
 - [x] Add saturation tests proving at most the configured number of controller calls execute concurrently.
@@ -73,203 +75,219 @@ This TODO is evidence-driven. A checkbox closes only when source, tests, workflo
 
 ## MCP-004 — Implement read-only MCP tool surface
 
+**Reconciled complete:** `python/src/vnc_remote_control/mcp_tools.py`, dependency-free catalog tests, pinned-SDK tests, transport acceptance, and the real MCP/TigerVNC E2E prove the catalog and exact mappings.
+
 ### `vnc_get_status`
 
-- [ ] Register tool with no input arguments.
-- [ ] Map exactly to `VncRemoteControlClient.get_status()`.
-- [ ] Return all typed status fields with stable names/types.
-- [ ] Add read-only/non-destructive/idempotent/closed-world annotations.
+- [x] Register tool with no input arguments.
+- [x] Map exactly to `VncRemoteControlClient.get_status()`.
+- [x] Return all typed status fields with stable names/types.
+- [x] Add read-only/non-destructive/idempotent/closed-world annotations.
 
 ### `vnc_get_display`
 
-- [ ] Register tool with no input arguments.
-- [ ] Map exactly to `get_display()`.
-- [ ] Return width/height/depth/revision/timestamp/completeness.
-- [ ] Add read-only/non-destructive/idempotent/closed-world annotations.
+- [x] Register tool with no input arguments.
+- [x] Map exactly to `get_display()`.
+- [x] Return width/height/depth/revision/timestamp/completeness.
+- [x] Add read-only/non-destructive/idempotent/closed-world annotations.
 
 ### `vnc_get_clipboard`
 
-- [ ] Register tool with no input arguments.
-- [ ] Map exactly to `get_clipboard()`.
-- [ ] Return text/revision/timestamp without logging the text.
-- [ ] Add read-only/non-destructive/idempotent/open-world annotations.
+- [x] Register tool with no input arguments.
+- [x] Map exactly to `get_clipboard()`.
+- [x] Return text/revision/timestamp without logging the text.
+- [x] Add read-only/non-destructive/idempotent/open-world annotations.
 
 ### `vnc_get_command_status`
 
-- [ ] Require integer `command_id >= 1` in the MCP schema.
-- [ ] Map exactly to `get_command_status(command_id)`.
-- [ ] Preserve command state/failure/retry-safe semantics.
-- [ ] Add read-only/non-destructive/idempotent/closed-world annotations.
+- [x] Require integer `command_id >= 1` in the MCP schema.
+- [x] Map exactly to `get_command_status(command_id)`.
+- [x] Preserve command state/failure/retry-safe semantics.
+- [x] Add read-only/non-destructive/idempotent/closed-world annotations.
 
 ### `vnc_get_metrics`
 
-- [ ] Register tool with no input arguments.
-- [ ] Map exactly to `get_metrics()`.
-- [ ] Preserve the controller's bounded metrics text.
-- [ ] Add read-only/non-destructive/idempotent/closed-world annotations.
+- [x] Register tool with no input arguments.
+- [x] Map exactly to `get_metrics()`.
+- [x] Preserve the controller's bounded metrics text.
+- [x] Add read-only/non-destructive/idempotent/closed-world annotations.
 
 ### Catalog truthfulness
 
-- [ ] Read-only tools are always present when server construction succeeds.
-- [ ] No mutation tool appears when mutations are disabled.
-- [ ] Add tool-list/schema/annotation snapshot or equivalent contract tests.
+- [x] Read-only tools are always present when server construction succeeds.
+- [x] No mutation tool appears when mutations are disabled.
+- [x] Add tool-list/schema/annotation snapshot or equivalent contract tests.
 
 ## MCP-005 — Implement native MCP screenshot output
 
-- [ ] Register `vnc_get_screenshot` with no initial input arguments.
-- [ ] Map exactly to `get_screenshot()` without ETag optimization in the initial tool contract.
-- [ ] Return PNG bytes as native MCP image content rather than JSON/base64 text.
-- [ ] Preserve only sanitized screenshot metadata that the SDK can return alongside image content without duplicating image bytes.
-- [ ] Never log screenshot bytes/base64.
-- [ ] Reject/propagate malformed screenshot/controller protocol failures; do not return a placeholder image.
-- [ ] Add read-only/non-destructive/idempotent/open-world annotations.
-- [ ] Add deterministic image-content tests.
-- [ ] Add size/boundedness regression consistent with the controller screenshot limit.
+**Reconciled complete:** read-tool tests prove unconditional screenshot retrieval, bounded PNG validation, native MCP image content, sanitized metadata, payload-free errors, and no placeholder fallback.
+
+- [x] Register `vnc_get_screenshot` with no initial input arguments.
+- [x] Map exactly to `get_screenshot()` without ETag optimization in the initial tool contract.
+- [x] Return PNG bytes as native MCP image content rather than JSON/base64 text.
+- [x] Preserve only sanitized screenshot metadata that the SDK can return alongside image content without duplicating image bytes.
+- [x] Never log screenshot bytes/base64.
+- [x] Reject/propagate malformed screenshot/controller protocol failures; do not return a placeholder image.
+- [x] Add read-only/non-destructive/idempotent/open-world annotations.
+- [x] Add deterministic image-content tests.
+- [x] Add size/boundedness regression consistent with the controller screenshot limit.
 
 ## MCP-006 — Implement mutation tool schemas and exact one-call mappings
+
+**Reconciled complete:** dependency-free and pinned-SDK tests prove all ten mutation schemas, conservative annotations, preflight bounds, and exact one-client-call behavior.
 
 Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ### Pointer
 
-- [ ] `vnc_move_pointer(x>=0, y>=0)` -> `move_pointer`.
-- [ ] `vnc_set_pointer_button(x>=0, y>=0, button, pressed)` -> `set_pointer_button`.
-- [ ] `vnc_click_pointer(x>=0, y>=0, button)` -> `click_pointer`.
-- [ ] `vnc_double_click_pointer(x>=0, y>=0, button, interval_ms=20..1000)` -> `double_click_pointer`.
-- [ ] `vnc_scroll_pointer(x>=0, y>=0, delta_y=-100..100)` -> `scroll_pointer`.
-- [ ] Do not expose nonzero horizontal scroll.
+- [x] `vnc_move_pointer(x>=0, y>=0)` -> `move_pointer`.
+- [x] `vnc_set_pointer_button(x>=0, y>=0, button, pressed)` -> `set_pointer_button`.
+- [x] `vnc_click_pointer(x>=0, y>=0, button)` -> `click_pointer`.
+- [x] `vnc_double_click_pointer(x>=0, y>=0, button, interval_ms=20..1000)` -> `double_click_pointer`.
+- [x] `vnc_scroll_pointer(x>=0, y>=0, delta_y=-100..100)` -> `scroll_pointer`.
+- [x] Do not expose nonzero horizontal scroll.
 
 ### Keyboard
 
-- [ ] `vnc_set_keyboard_key(key, action=down|up)` -> `set_keyboard_key`.
-- [ ] `vnc_send_keyboard_chord(keys[1..16])` -> `send_keyboard_chord`.
-- [ ] `vnc_type_keyboard_text(text)` -> `type_keyboard_text`.
-- [ ] Match controller printable-ASCII/tab/CR/LF and 16 KiB text bounds in MCP schema/preflight.
-- [ ] Never log typed text.
+- [x] `vnc_set_keyboard_key(key, action=down|up)` -> `set_keyboard_key`.
+- [x] `vnc_send_keyboard_chord(keys[1..16])` -> `send_keyboard_chord`.
+- [x] `vnc_type_keyboard_text(text)` -> `type_keyboard_text`.
+- [x] Match controller printable-ASCII/tab/CR/LF and 16 KiB text bounds in MCP schema/preflight.
+- [x] Never log typed text.
 
 ### Clipboard/reconnect
 
-- [ ] `vnc_set_clipboard(text)` -> `set_clipboard`.
-- [ ] Match controller valid-UTF-8/no-NUL/1 MiB encoded-byte bound.
-- [ ] Never log clipboard text.
-- [ ] `vnc_request_reconnect()` -> `request_reconnect`.
+- [x] `vnc_set_clipboard(text)` -> `set_clipboard`.
+- [x] Match controller valid-UTF-8/no-NUL/1 MiB encoded-byte bound.
+- [x] Never log clipboard text.
+- [x] `vnc_request_reconnect()` -> `request_reconnect`.
 
 ### Mutation annotations
 
-- [ ] Every mutation tool: `readOnlyHint=false`.
-- [ ] Every mutation tool: `destructiveHint=true`.
-- [ ] Every mutation tool: `idempotentHint=false`.
-- [ ] Every mutation tool: `openWorldHint=true`.
-- [ ] Add exact one-client-call tests for every mutation tool.
-- [ ] Prove no mutation handler contains an automatic retry/replay loop.
+- [x] Every mutation tool: `readOnlyHint=false`.
+- [x] Every mutation tool: `destructiveHint=true`.
+- [x] Every mutation tool: `idempotentHint=false`.
+- [x] Every mutation tool: `openWorldHint=true`.
+- [x] Add exact one-client-call tests for every mutation tool.
+- [x] Prove no mutation handler contains an automatic retry/replay loop.
 
 ## MCP-007 — Preserve fail-closed command-outcome semantics
 
+**Reconciled complete:** `mcp_outcomes.py`, dependency-free tests, pinned-SDK tests, and transport/E2E coverage prove explicit conservative ambiguity classification and no automatic replay.
+
 ### Normal success/failure
 
-- [ ] Terminal success returns the controller `command_id` and `status="succeeded"` without inventing a second acceptance state.
-- [ ] Structured accepted-command `ApiError` preserves sanitized `command_id`, `outcome`, `retry_safe`, `request_id` where available.
-- [ ] A controller-reported terminal failure is never retried.
+- [x] Terminal success returns the controller `command_id` and `status="succeeded"` without inventing a second acceptance state.
+- [x] Structured accepted-command `ApiError` preserves sanitized `command_id`, `outcome`, `retry_safe`, `request_id` where available.
+- [x] A controller-reported terminal failure is never retried.
 
 ### Known unknown outcome
 
-- [ ] Map `CommandOutcomeUnknownError` to explicit `kind="command_outcome_unknown"`.
-- [ ] Preserve command ID.
-- [ ] Preserve/request `request_id` when present.
-- [ ] Set `outcome="unknown"`, `retry_safe=false`.
-- [ ] Tell the caller to use `vnc_get_command_status(command_id)` before deciding on a next mutation.
-- [ ] Do not poll-and-replay automatically.
+- [x] Map `CommandOutcomeUnknownError` to explicit `kind="command_outcome_unknown"`.
+- [x] Preserve command ID.
+- [x] Preserve/request `request_id` when present.
+- [x] Set `outcome="unknown"`, `retry_safe=false`.
+- [x] Tell the caller to use `vnc_get_command_status(command_id)` before deciding on a next mutation.
+- [x] Do not poll-and-replay automatically.
 
 ### Unknown outcome without command ID
 
-- [ ] Mutation `TransportError` -> `kind="mutation_outcome_unknown"`, `command_id=null`, `retry_safe=false`.
-- [ ] Mutation timeout without structured command context -> same conservative classification.
-- [ ] Mutation `ProtocolError` after request issuance -> same conservative classification.
-- [ ] Unexpected adapter failure after mutation issuance -> same conservative classification unless the adapter can prove no request was sent.
-- [ ] Error text explicitly warns that replay is unsafe.
-- [ ] Never fabricate a command ID.
+- [x] Mutation `TransportError` -> `kind="mutation_outcome_unknown"`, `command_id=null`, `retry_safe=false`.
+- [x] Mutation timeout without structured command context -> same conservative classification.
+- [x] Mutation `ProtocolError` after request issuance -> same conservative classification.
+- [x] Unexpected adapter failure after mutation issuance -> same conservative classification unless the adapter can prove no request was sent.
+- [x] Error text explicitly warns that replay is unsafe.
+- [x] Never fabricate a command ID.
 
 ### Read-only errors
 
-- [ ] Read-only `TransportError` remains `transport_error`, not mutation-unknown.
-- [ ] Read-only `ProtocolError` remains `controller_protocol_error`.
-- [ ] Read-only errors contain no raw body/secret/payload data.
+- [x] Read-only `TransportError` remains `transport_error`, not mutation-unknown.
+- [x] Read-only `ProtocolError` remains `controller_protocol_error`.
+- [x] Read-only errors contain no raw body/secret/payload data.
 
 ### Regression matrix
 
-- [ ] Add a no-retry counting fake proving each ambiguous mutation invokes the client exactly once.
-- [ ] Add known-command-ID timeout regression and subsequent `vnc_get_command_status` inspection.
-- [ ] Add no-command-ID transport regression.
-- [ ] Add malformed mutation-response regression.
-- [ ] Add terminal failed-command regression.
+- [x] Add a no-retry counting fake proving each ambiguous mutation invokes the client exactly once.
+- [x] Add known-command-ID timeout regression and subsequent `vnc_get_command_status` inspection.
+- [x] Add no-command-ID transport regression.
+- [x] Add malformed mutation-response regression.
+- [x] Add terminal failed-command regression.
 
 ## MCP-008 — Implement stdio transport
 
-- [ ] Default executable transport is stdio.
-- [ ] stdout contains MCP protocol only; diagnostics go to stderr.
-- [ ] No startup banner/noise corrupts stdio framing.
-- [ ] SIGINT/SIGTERM/process EOF lead to bounded clean shutdown as supported by SDK/runtime.
-- [ ] Add official-SDK client smoke for tool discovery.
-- [ ] Add stdio read-tool invocation smoke.
-- [ ] Add stdio mutation-disabled catalog smoke.
-- [ ] Add stdio mutation-enabled invocation smoke.
+**Reconciled complete:** `test_mcp_transport_acceptance.py` uses the official SDK client against the real executable. CI `34147921952` proved default catalog/read invocation, EOF shutdown with no stdout noise, and explicit mutation opt-in/exactly-one mutation.
+
+- [x] Default executable transport is stdio.
+- [x] stdout contains MCP protocol only; diagnostics go to stderr.
+- [x] No startup banner/noise corrupts stdio framing.
+- [x] SIGINT/SIGTERM/process EOF lead to bounded clean shutdown as supported by SDK/runtime.
+- [x] Add official-SDK client smoke for tool discovery.
+- [x] Add stdio read-tool invocation smoke.
+- [x] Add stdio mutation-disabled catalog smoke.
+- [x] Add stdio mutation-enabled invocation smoke.
 
 ## MCP-009 — Implement loopback Streamable HTTP transport
 
-- [ ] Explicit `streamable-http` transport starts the same server/tool contract.
-- [ ] Default bind is `127.0.0.1:8765`.
-- [ ] IPv6 loopback handling is explicit/tested if supported.
-- [ ] Non-loopback bind fails startup before listener creation.
-- [ ] Preserve official SDK DNS-rebinding protection.
-- [ ] Preserve official SDK Host/Origin validation; do not disable it as a deployment workaround.
-- [ ] Bound active MCP sessions/connections where the SDK exposes supported controls.
-- [ ] Add loopback Streamable HTTP tool-list smoke.
-- [ ] Compare stdio and HTTP tool names/schemas/annotations for semantic equivalence.
-- [ ] Add bad Host/Origin rejection regression if supported by the SDK test surface.
-- [ ] Do not add legacy SSE as a compatibility fallback.
+**Reconciled complete:** production config/server code and official-client transport acceptance prove loopback-only Streamable HTTP, preserved SDK DNS-rebinding/Host/Origin checks, stateless sessions, semantic parity with stdio, and bounded shutdown.
+
+- [x] Explicit `streamable-http` transport starts the same server/tool contract.
+- [x] Default bind is `127.0.0.1:8765`.
+- [x] IPv6 loopback handling is explicit/tested if supported.
+- [x] Non-loopback bind fails startup before listener creation.
+- [x] Preserve official SDK DNS-rebinding protection.
+- [x] Preserve official SDK Host/Origin validation; do not disable it as a deployment workaround.
+- [x] Bound active MCP sessions/connections where the SDK exposes supported controls.
+- [x] Add loopback Streamable HTTP tool-list smoke.
+- [x] Compare stdio and HTTP tool names/schemas/annotations for semantic equivalence.
+- [x] Add bad Host/Origin rejection regression if supported by the SDK test surface.
+- [x] Do not add legacy SSE as a compatibility fallback.
 
 ## MCP-010 — Living documentation and security model
 
-- [ ] Create living `docs/MCP_SERVER.md` once runnable functionality exists.
-- [ ] Document architecture: MCP -> Python client -> authenticated controller API -> worker/VNC.
-- [ ] Document core install vs `[mcp]` optional install.
-- [ ] Document `vnc-remote-control-mcp` invocation.
-- [ ] Document stdio as default transport.
-- [ ] Document Streamable HTTP loopback-only policy.
-- [ ] Document remote access through a trusted tunnel/proxy boundary; do not instruct operators to bind publicly without auth.
-- [ ] Document read-only default and explicit mutation opt-in.
-- [ ] Document every MCP config variable/default/range.
-- [ ] Document secret-file-only controller token policy.
-- [ ] Document Python token-memory limitation without overstating zeroization.
-- [ ] Document sensitive payload no-logging rule.
-- [ ] Document unknown-outcome/non-retry-safe mutation behavior and command-status recovery.
-- [ ] Update root `README.md`.
-- [ ] Update `python/README.md`.
-- [ ] Update `docs/OPERATOR_GUIDE.md`.
-- [ ] Update `deploy/README.md`.
-- [ ] Update `SECURITY.md`.
-- [ ] Update `docs/README.md` current living documentation index.
-- [ ] Update `CLAUDE.md`/`CONTRIBUTING.md` if MCP-specific development/validation commands become authoritative.
-- [ ] Add documentation freshness/contract tests for the MCP living docs.
+**Reconciled complete:** `docs/MCP_SERVER.md` is the authoritative living MCP guide. `test_mcp_documentation_contract.py` proves all required living-document targets link to it and that configuration, catalog, security, install, transport, and memory-limit statements track source.
+
+- [x] Create living `docs/MCP_SERVER.md` once runnable functionality exists.
+- [x] Document architecture: MCP -> Python client -> authenticated controller API -> worker/VNC.
+- [x] Document core install vs `[mcp]` optional install.
+- [x] Document `vnc-remote-control-mcp` invocation.
+- [x] Document stdio as default transport.
+- [x] Document Streamable HTTP loopback-only policy.
+- [x] Document remote access through a trusted tunnel/proxy boundary; do not instruct operators to bind publicly without auth.
+- [x] Document read-only default and explicit mutation opt-in.
+- [x] Document every MCP config variable/default/range.
+- [x] Document secret-file-only controller token policy.
+- [x] Document Python token-memory limitation without overstating zeroization.
+- [x] Document sensitive payload no-logging rule.
+- [x] Document unknown-outcome/non-retry-safe mutation behavior and command-status recovery.
+- [x] Update root `README.md`.
+- [x] Update `python/README.md`.
+- [x] Update `docs/OPERATOR_GUIDE.md`.
+- [x] Update `deploy/README.md`.
+- [x] Update `SECURITY.md`.
+- [x] Update `docs/README.md` current living documentation index.
+- [x] Update `CLAUDE.md`/`CONTRIBUTING.md` if MCP-specific development/validation commands become authoritative.
+- [x] Add documentation freshness/contract tests for the MCP living docs.
 
 ## MCP-011 — MCP E2E against real controller/TigerVNC
 
-- [ ] Add bounded MCP E2E harness using the production controller and isolated desktop image.
-- [ ] Mount controller bearer token through a file, never raw env/CLI.
-- [ ] Start MCP adapter only after deterministic dependency setup; no sleep-only readiness assumption.
-- [ ] Discover read tools in default mutation-disabled mode.
-- [ ] Assert mutation tools are absent by default.
-- [ ] Query status/display through MCP.
-- [ ] Capture a real screenshot through MCP image content.
-- [ ] Start mutation-enabled MCP instance explicitly.
-- [ ] Move/click pointer through MCP and verify desktop-side effect using existing test app/state mechanism.
-- [ ] Type keyboard text through MCP and verify without logging payload.
-- [ ] Set/read clipboard through MCP and verify without logging payload.
-- [ ] Inspect command status through MCP.
-- [ ] Request reconnect through MCP and verify bounded recovery.
-- [ ] Verify raw VNC remains unpublished.
-- [ ] Verify MCP/controller teardown is bounded and leaves no test container/process leak.
-- [ ] Add negative path proving controller/tool failure does not become MCP success.
+**Reconciled complete:** `tests/mcp_e2e.py` and `tests/mcp-e2e/run.sh` exercise official MCP client -> MCP adapter -> typed HTTP client -> production controller -> worker -> LibVNC -> isolated TigerVNC. Current exact-master CI `34147921952` passed the permanent E2E step.
+
+- [x] Add bounded MCP E2E harness using the production controller and isolated desktop image.
+- [x] Mount controller bearer token through a file, never raw env/CLI.
+- [x] Start MCP adapter only after deterministic dependency setup; no sleep-only readiness assumption.
+- [x] Discover read tools in default mutation-disabled mode.
+- [x] Assert mutation tools are absent by default.
+- [x] Query status/display through MCP.
+- [x] Capture a real screenshot through MCP image content.
+- [x] Start mutation-enabled MCP instance explicitly.
+- [x] Move/click pointer through MCP and verify desktop-side effect using existing test app/state mechanism.
+- [x] Type keyboard text through MCP and verify without logging payload.
+- [x] Set/read clipboard through MCP and verify without logging payload.
+- [x] Inspect command status through MCP.
+- [x] Request reconnect through MCP and verify bounded recovery.
+- [x] Verify raw VNC remains unpublished.
+- [x] Verify MCP/controller teardown is bounded and leaves no test container/process leak.
+- [x] Add negative path proving controller/tool failure does not become MCP success.
 
 ## MCP-012 — CI, supply-chain, and permanent-gate integration
 
@@ -296,22 +314,24 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ## MCP-013 — Cross-cutting unsafe-fallback and silent-failure audit
 
-- [ ] Search MCP Python code for broad `except Exception` paths and classify every survivor.
-- [ ] Reject empty-success returns from exceptions.
-- [ ] Search for `pass`, ignored return values, `.get(..., default)` behavior that could hide invalid config/protocol state, and broad compatibility fallbacks.
-- [ ] Search for mutation retry loops/backoff wrappers and prove none can replay uncertain input.
-- [ ] Search logs/tracing for tool arguments/results, Authorization headers, token values, text, clipboard, and screenshots.
-- [ ] Search transport setup for disabled Host/Origin/DNS-rebinding checks.
-- [ ] Search configuration for raw secret env/CLI support.
-- [ ] Search tests for mocks that accidentally bypass the one-call/no-retry invariant.
-- [ ] Review dependency import fallback behavior; missing MCP dependency must be explicit.
-- [ ] Record every surviving intentional ignored result/fallback with nearby rationale.
+**Validated audit checkpoint:** `5f70bd064c663a00843369f791a2cdf460734737` passed CI `34642850866` and Release Gates `34642850991`. Detailed rationale is in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_UNSAFE_FALLBACK_AUDIT_2026-09-11.md`; `tests/test_mcp_unsafe_fallback_contract.py` keeps the key static conclusions permanent.
+
+- [x] Search MCP Python code for broad `except Exception` paths and classify every survivor.
+- [x] Reject empty-success returns from exceptions.
+- [x] Search for `pass`, ignored return values, `.get(..., default)` behavior that could hide invalid config/protocol state, and broad compatibility fallbacks.
+- [x] Search for mutation retry loops/backoff wrappers and prove none can replay uncertain input.
+- [x] Search logs/tracing for tool arguments/results, Authorization headers, token values, text, clipboard, and screenshots.
+- [x] Search transport setup for disabled Host/Origin/DNS-rebinding checks.
+- [x] Search configuration for raw secret env/CLI support.
+- [x] Search tests for mocks that accidentally bypass the one-call/no-retry invariant.
+- [x] Review dependency import fallback behavior; missing MCP dependency must be explicit.
+- [x] Record every surviving intentional ignored result/fallback with nearby rationale.
 
 ## MCP-014 — Exact candidate and merged-master validation
 
 ### Candidate freeze
 
-- [ ] Reconcile all MCP-001 through MCP-013 checkboxes against actual source/tests/docs/workflows.
+- [x] Reconcile all MCP-001 through MCP-013 checkboxes against actual source/tests/docs/workflows.
 - [ ] Record exact final candidate SHA.
 - [ ] Run regular CI on that exact SHA.
 - [ ] Record CI run ID/conclusion.
