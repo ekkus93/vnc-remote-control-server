@@ -96,10 +96,18 @@ def assert_wrong_password_and_missing_secret(harness: Harness) -> None:
     # truthfully classified as a protocol/initialization failure rather than
     # an unproven "authentication_failed" label. It stays in the bounded
     # reconnect loop instead of latching a terminal authentication state.
+    # The worker can briefly publish Disconnected between protocol-failure
+    # invalidation and the next Reconnecting transition, so the assertion
+    # accepts that documented in-loop state only while protocol failure,
+    # reconnect progress, and non-fatal status are all still present.
     status = harness.wait_status(lambda value: value.get("last_failure") == "protocol", 20)
     require(
-        status.get("state") in ("connecting", "reconnecting"),
+        status.get("state") in {"connecting", "disconnected", "reconnecting"},
         f"unexpected state for a wrong-password protocol failure: {status}",
+    )
+    require(
+        int(status.get("reconnect_attempts") or 0) >= 1,
+        f"wrong password did not enter the bounded reconnect loop: {status}",
     )
     require(not status.get("fatal_exit"), f"wrong password unexpectedly became fatal: {status}")
     os.chmod(harness.vnc_secret, 0o600)
