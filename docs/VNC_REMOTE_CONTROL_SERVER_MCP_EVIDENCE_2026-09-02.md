@@ -240,4 +240,12 @@ These findings do not invalidate the historical CI results recorded above; those
 - `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_SPEC_2026-09-12.md`
 - `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md`
 
-The remediation preserves the original architecture and no-retry policy. Final candidate and merged-master validation evidence will be appended when MCR-009 through MCR-011 complete.
+The remediation preserves the original architecture and no-retry policy. MCR-009 through MCR-011 are complete. The authoritative remediation evidence is recorded in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_EVIDENCE_2026-09-12.md`.
+
+The exact validated remediation generations are:
+
+- implementation candidate `1cd71c70fc7c63c7ef0c691e2100ab677ca19071`: CI `34710744120` **success**, Release Gates `34710744121` **success**;
+- merged implementation `master` `9a0a6f99ce704e5eac0eba10409b6e2746fe28b0`: CI `34711065779` **success**, Release Gates `34711065829` **success**, Publish CI Status `34711069866` **success**;
+- documentation-closed final `master` `c34cc988920036258fed172d98b4507d908d3fa7`: CI `34714153379` **success**, Release Gates `34714153396` **success**, Publish CI Status `34714423324` **success**.
+
+The final remediation VEX review is `reviewed_at: 2026-09-12`, `expires_at: 2026-10-12`, tracking issue `7`; exact CRITICAL VEX enforcement passed both the remediation candidate and the final merged generations. The historical MCP closeout evidence above remains unchanged as evidence for the generations it originally validated.
