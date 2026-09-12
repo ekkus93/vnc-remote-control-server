@@ -201,10 +201,28 @@ Both workflows are fresh push runs on that exact SHA. The final master CI again 
 
 The metadata is unexpired at the 2026-09-11 final validation. Exact final candidate Release Gates `34647222812` and exact merged-master Release Gates `34658956281` both passed `Enforce exact CRITICAL VEX determinations`, so the current image vulnerability inventories match the reviewed determinations. Any expiry, package/version change, unmatched CRITICAL finding, or determination drift remains release-blocking.
 
-## 14. Final reconciliation and declaration
+## 14. Final documentation-closed master validation
 
-MCP-001 through MCP-013 were reconciled against current source, permanent tests, living documentation, and workflow configuration before candidate freeze. MCP-014 was then satisfied with exact candidate and exact merged-master CI/Release Gates evidence, including investigation and correction of the R13 failure without weakening a gate. This file supplies the MCP-015 evidence record.
+PR #44 added the MCP-015 evidence record and closed the MCP TODO on top of the already validated runtime implementation generation. That documentation-only closeout merged to `master` as:
+
+`3a04e0854468ed036affdf07674e095da7c806a6`
+
+Fresh post-closeout workflows on that exact `master` SHA completed successfully:
+
+- CI `34660215099`: **success**
+- Release Gates `34660215186`: **success**
+
+Those workflow IDs are external validation observed after the documentation-closed commit existed and after it merged. They are recorded here as evidence about that generation, not as a claim that the commit could contain future workflow results before the workflows ran.
+
+The distinction is intentional:
+
+- authoritative runtime implementation generation: `a31e2f3fdf77085292fe65648d8741613f91cb38`, validated by CI `34658956284` and Release Gates `34658956281`;
+- documentation-closed generation from PR #44: `3a04e0854468ed036affdf07674e095da7c806a6`, validated by CI `34660215099` and Release Gates `34660215186`.
+
+## 15. Final reconciliation and declaration
+
+MCP-001 through MCP-013 were reconciled against current source, permanent tests, living documentation, and workflow configuration before candidate freeze. MCP-014 was then satisfied with exact candidate and exact merged-master CI/Release Gates evidence, including investigation and correction of the R13 failure without weakening a gate. MCP-015 was satisfied by the evidence record added in PR #44, and that documentation-closed generation was subsequently validated by fresh permanent workflows.
 
 No TODO checkbox is closed solely because a commit message claims completion. The acceptance basis is executable source/tests, workflow configuration, documentation contracts, exact GitHub Actions run results, and the explicit audit/evidence records cited above.
 
-Subject to this documentation-only closeout change itself passing the permanent workflows, the MCP implementation phase is complete and all applicable MCP-001 through MCP-015 requirements are satisfied.
+The MCP implementation phase is complete. All applicable MCP-001 through MCP-015 requirements are satisfied; the later MCP closeout evidence-correction task changes evidence wording only and does not reopen or change runtime MCP behavior.
