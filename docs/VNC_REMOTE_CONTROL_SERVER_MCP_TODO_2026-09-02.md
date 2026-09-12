@@ -366,7 +366,7 @@ VEX re-review on 2026-09-11 confirmed repository metadata `reviewed_at: 2026-08-
 
 ## MCP-015 — Final evidence and completion
 
-**2026-09-12 remediation note:** MCP-015 remains valid as historical closeout evidence, but the present-day completion declaration is superseded until the MCR remediation phase completes and passes exact candidate/merged-master validation.
+**2026-09-12 remediation note:** MCP-015 remains valid as historical closeout evidence. The later MCR cancellation/bounding remediation has now completed and passed exact candidate, merged-implementation, and documentation-closed `master` validation; current evidence is recorded in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_EVIDENCE_2026-09-12.md`.
 
 **Evidence:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md` records the final architecture, catalog, configuration/security model, SDK/protocol target, transport/E2E validation, dependency/license closure, unsafe-fallback audit, exact-generation validation history, VEX review, and completion rationale.
 
@@ -394,8 +394,8 @@ The MCP implementation phase is complete. Every applicable MCP-001 through MCP-0
 
 The authoritative validated implementation generation is `a31e2f3fdf77085292fe65648d8741613f91cb38`, with CI `34658956284` and Release Gates `34658956281` both successful. The final MCP/TigerVNC E2E and the corrected R13 restart/resource validation both passed on that exact `master` SHA.
 
-The CRITICAL VEX metadata remains `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`; exact CRITICAL VEX enforcement passed the final candidate and merged-master Release Gates.
+For the original MCP closeout generation, the historical CRITICAL VEX metadata was `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`; exact CRITICAL VEX enforcement passed that phase's final candidate and merged-master Release Gates. The later MCR remediation refreshed the current VEX review to `reviewed_at: 2026-09-12`, `expires_at: 2026-10-12`, tracking issue `7`, and exact CRITICAL VEX enforcement passed the remediation candidate and final merged generations.
 
 The PR #44 documentation-only closeout is no longer provisional. It merged to documentation-closed `master` `3a04e0854468ed036affdf07674e095da7c806a6`, and fresh post-closeout workflows on that exact SHA passed: CI `34660215099` and Release Gates `34660215186`. This subsequent evidence-correction task is documentation/evidence-only and does not reopen or change runtime MCP behavior.
 
-**Current-status supersession (2026-09-12):** a later code review found post-admission cancellation/future-observation and HTTP response-ingestion bounding defects. The historical closeout above remains accurate for the evidence available then, but current MCP sign-off is governed by `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md` until that remediation is complete and exact-generation CI/Release Gates are green.
+**Current-status reconciliation (2026-09-12):** a later code review found post-admission cancellation/future-observation and HTTP response-ingestion bounding defects. The historical closeout above remains accurate for the evidence available then. That remediation is now complete under `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md`: implementation candidate `1cd71c70fc7c63c7ef0c691e2100ab677ca19071` passed CI `34710744120` and Release Gates `34710744121`; merged implementation `master` `9a0a6f99ce704e5eac0eba10409b6e2746fe28b0` passed CI `34711065779` and Release Gates `34711065829`; documentation-closed final `master` `c34cc988920036258fed172d98b4507d908d3fa7` passed CI `34714153379` and Release Gates `34714153396`. Current remediation evidence is recorded in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_EVIDENCE_2026-09-12.md`.
