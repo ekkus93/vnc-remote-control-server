@@ -161,10 +161,15 @@ class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
                 loop = asyncio.get_running_loop()
                 previous_handler = loop.get_exception_handler()
                 loop.set_exception_handler(
-                    lambda _loop, context: diagnostics.append(context)
+                    lambda _loop, context, diagnostics=diagnostics: diagnostics.append(context)
                 )
 
-                def failing_call() -> None:
+                def failing_call(
+                    started: threading.Event = started,
+                    release: threading.Event = release,
+                    finished: threading.Event = finished,
+                    failure: BaseException = failure,
+                ) -> None:
                     started.set()
                     release.wait(timeout=1.0)
                     finished.set()
