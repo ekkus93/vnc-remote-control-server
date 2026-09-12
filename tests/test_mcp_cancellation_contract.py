@@ -12,12 +12,13 @@ import unittest
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from mcp_test_support import RecordingToolRegistrar, RegisteredTool, fake_annotations_factory
 from vnc_remote_control.errors import TransportError
 from vnc_remote_control.mcp_execution import BoundedControllerExecutor, McpCallCapacityError
 from vnc_remote_control.mcp_mutation_tools import (
+    McpMutationClient,
     McpMutationRuntime,
     McpMutationValidationError,
     build_mutation_schema_metadata,
@@ -110,7 +111,7 @@ def _registered_tools(
     schema = build_mutation_schema_metadata(SimpleNamespace)
     register_mutation_tools(
         registrar,
-        McpMutationRuntime(client=client, executor=executor),
+        McpMutationRuntime(client=cast(McpMutationClient, client), executor=executor),
         annotations_factory=fake_annotations_factory,
         schema=schema,
     )
