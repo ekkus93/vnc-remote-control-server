@@ -1,5 +1,9 @@
 """End-to-end dependency-free contracts for MCP cancellation ownership."""
 
+# Intentional overlap with lower-level outcome/executor tests proves the same
+# safety invariants through the actual registered mutation surface.
+# pylint: disable=duplicate-code
+
 from __future__ import annotations
 
 import asyncio
@@ -41,10 +45,12 @@ class FakeCallToolResult:
 
 
 def _text_content_factory(**kwargs: Any) -> FakeTextContent:
+    """Build one inspectable SDK-like text content value."""
     return FakeTextContent(type=kwargs["type"], text=kwargs["text"])
 
 
 def _call_tool_result_factory(**kwargs: Any) -> FakeCallToolResult:
+    """Build one inspectable SDK-like tool result value."""
     return FakeCallToolResult(
         content=kwargs["content"],
         structured_content=kwargs.get("structured_content"),
@@ -53,6 +59,7 @@ def _call_tool_result_factory(**kwargs: Any) -> FakeCallToolResult:
 
 
 async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
+    """Wait for one deterministic threaded-test condition."""
     deadline = asyncio.get_running_loop().time() + timeout
     while not predicate():
         if asyncio.get_running_loop().time() >= deadline:
@@ -71,6 +78,7 @@ class BlockingMutationClient:
         self.text_failure: BaseException | None = None
 
     def click_pointer(self, x: int, y: int, button: str) -> CommandResponse:
+        """Record and block one pointer click until released by the test."""
         self.calls.append(("click_pointer", (x, y, button)))
         self.started.set()
         self.release.wait(timeout=2.0)
@@ -78,6 +86,7 @@ class BlockingMutationClient:
         return CommandResponse(command_id=501, status="succeeded")
 
     def type_keyboard_text(self, text: str) -> CommandResponse:
+        """Record and block one text mutation, optionally failing after release."""
         self.calls.append(("type_keyboard_text", (text,)))
         self.started.set()
         self.release.wait(timeout=2.0)
@@ -98,7 +107,7 @@ def _registered_tools(
         text_content_factory=_text_content_factory,
         mutation_validation_errors=(McpMutationValidationError,),
     )
-    schema = build_mutation_schema_metadata(lambda **kwargs: SimpleNamespace(**kwargs))
+    schema = build_mutation_schema_metadata(SimpleNamespace)
     register_mutation_tools(
         registrar,
         McpMutationRuntime(client=client, executor=executor),
@@ -112,6 +121,7 @@ class McpCancellationContractTests(unittest.IsolatedAsyncioTestCase):
     """Prove cancellation never turns an admitted mutation into replay-safe silence."""
 
     async def test_post_admission_read_cancellation_propagates_and_drains_worker(self) -> None:
+        """Read cancellation propagates while terminal worker failure is still drained."""
         executor = BoundedControllerExecutor(1)
         self.addAsyncCleanup(executor.aclose)
         started = threading.Event()
@@ -161,6 +171,7 @@ class McpCancellationContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await executor.call(lambda: None))
 
     async def test_cancel_before_handler_runs_issues_no_controller_call(self) -> None:
+        """Cancellation before scheduling proves that no controller mutation is issued."""
         executor = BoundedControllerExecutor(1)
         self.addAsyncCleanup(executor.aclose)
         client = BlockingMutationClient()
@@ -174,6 +185,7 @@ class McpCancellationContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(client.started.is_set())
 
     async def test_post_admission_click_cancellation_is_unknown_and_exactly_once(self) -> None:
+        """An admitted click becomes unknown/non-retry-safe and runs exactly once."""
         executor = BoundedControllerExecutor(1)
         self.addAsyncCleanup(executor.aclose)
         client = BlockingMutationClient()
@@ -212,6 +224,7 @@ class McpCancellationContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_sensitive_mutation_failure_is_drained_without_payload_log(
         self,
     ) -> None:
+        """A cancelled payload mutation drains later failure without leaking its payload."""
         executor = BoundedControllerExecutor(1)
         self.addAsyncCleanup(executor.aclose)
         client = BlockingMutationClient()
