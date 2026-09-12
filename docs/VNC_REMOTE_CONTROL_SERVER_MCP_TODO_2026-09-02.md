@@ -61,7 +61,7 @@ Final closeout reconciliation on 2026-09-11 reviewed the implementation, permane
 
 ## MCP-003 — Build common bounded controller-call execution
 
-**2026-09-12 remediation note:** the historical MCP-003 implementation satisfied its original capacity-ownership checks, but later review found that post-admission cancellation could abandon a worker future's terminal exception. Current remediation authority is `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md` (MCR-001 through MCR-003). Historical CI evidence below remains valid for the exact generations it describes.
+**2026-09-12 remediation reconciliation:** the historical MCP-003 implementation satisfied its original capacity-ownership checks, but later review found that post-admission cancellation could abandon a worker future's terminal exception. MCR-001 through MCR-003 fixed that defect and passed exact candidate, merged-implementation, and documentation-closed `master` validation. Historical CI evidence below remains valid for the exact generations it describes.
 
 **Reconciled complete:** `BoundedControllerExecutor` provides fail-fast admission before submission, cancellation-safe slot ownership, typed failure normalization, and bounded owned shutdown. Exact `master` `0da2324f89fa72933486fcb6e59e26d7c4bf8880` passed the full execution regression suite in CI `34147921952`.
 
@@ -122,7 +122,7 @@ Final closeout reconciliation on 2026-09-11 reviewed the implementation, permane
 
 ## MCP-005 — Implement native MCP screenshot output
 
-**2026-09-12 remediation note:** MCP PNG validation was bounded after materialization, but the typed HTTP client still performed unrestricted response reads. MCR-004/MCR-005 add transport-level bounded ingestion while preserving the existing PNG validation.
+**2026-09-12 remediation reconciliation:** MCP PNG validation was bounded after materialization, but the typed HTTP client still performed unrestricted response reads. MCR-004/MCR-005 added transport-level bounded ingestion while preserving the existing PNG validation, and the remediation passed exact candidate and merged-generation validation.
 
 **Reconciled complete:** read-tool tests prove unconditional screenshot retrieval, bounded PNG validation, native MCP image content, sanitized metadata, payload-free errors, and no placeholder fallback.
 
@@ -177,7 +177,7 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ## MCP-007 — Preserve fail-closed command-outcome semantics
 
-**2026-09-12 remediation note:** the original outcome matrix omitted post-admission asyncio cancellation. MCR-001/MCR-003 define cancellation after admission as an uncertain mutation outcome with `retry_safe=false`; no automatic replay is permitted.
+**2026-09-12 remediation reconciliation:** the original outcome matrix omitted post-admission asyncio cancellation. MCR-001/MCR-003 now classify cancellation after admission as an uncertain mutation outcome with `retry_safe=false`; no automatic replay is permitted, and the behavior is covered by permanent regression tests.
 
 **Reconciled complete:** `mcp_outcomes.py`, dependency-free tests, pinned-SDK tests, and transport/E2E coverage prove explicit conservative ambiguity classification and no automatic replay.
 
@@ -320,7 +320,7 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ## MCP-013 — Cross-cutting unsafe-fallback and silent-failure audit
 
-**2026-09-12 remediation note:** the historical audit is reopened for asynchronous cancellation ownership, abandoned futures, default event-loop exception diagnostics, and bounded HTTP response ingestion. See MCR-006 and the audit addendum.
+**2026-09-12 remediation reconciliation:** the historical audit was reopened for asynchronous cancellation ownership, abandoned futures, default event-loop exception diagnostics, and bounded HTTP response ingestion. MCR-006 completed that re-audit, the audit addendum records the conclusions, and permanent static contracts cover the remediated paths.
 
 **Validated audit checkpoint:** `5f70bd064c663a00843369f791a2cdf460734737` passed CI `34642850866` and Release Gates `34642850991`. Detailed rationale is in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_UNSAFE_FALLBACK_AUDIT_2026-09-11.md`; `tests/test_mcp_unsafe_fallback_contract.py` keeps the key static conclusions permanent.
 
