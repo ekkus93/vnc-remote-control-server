@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from collections.abc import Callable
+from typing import Any
 from unittest import mock
 
 from vnc_remote_control.errors import ProtocolError, TransportError
@@ -160,9 +161,16 @@ class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
                 diagnostics: list[dict[str, object]] = []
                 loop = asyncio.get_running_loop()
                 previous_handler = loop.get_exception_handler()
-                loop.set_exception_handler(
-                    lambda _loop, context, diagnostics=diagnostics: diagnostics.append(context)
-                )
+
+                def record_diagnostic(
+                    _loop: asyncio.AbstractEventLoop,
+                    context: dict[str, Any],
+                    diagnostics: list[dict[str, object]] = diagnostics,
+                ) -> None:
+                    """Capture one unexpected event-loop diagnostic for this case."""
+                    diagnostics.append(context)
+
+                loop.set_exception_handler(record_diagnostic)
 
                 def failing_call(
                     started: threading.Event = started,
