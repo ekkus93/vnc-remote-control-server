@@ -28,6 +28,17 @@ async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) ->
         await asyncio.sleep(0.001)
 
 
+def _diagnostic_handler(
+    diagnostics: list[dict[str, object]],
+) -> Callable[[asyncio.AbstractEventLoop, dict[str, Any]], None]:
+    """Return one typed event-loop diagnostic collector for a test case."""
+
+    def record(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        diagnostics.append(context)
+
+    return record
+
+
 class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
     """Verify bounded admission, cancellation, failure, and shutdown semantics."""
 
@@ -161,16 +172,7 @@ class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
                 diagnostics: list[dict[str, object]] = []
                 loop = asyncio.get_running_loop()
                 previous_handler = loop.get_exception_handler()
-
-                def record_diagnostic(
-                    _loop: asyncio.AbstractEventLoop,
-                    context: dict[str, Any],
-                    diagnostics: list[dict[str, object]] = diagnostics,
-                ) -> None:
-                    """Capture one unexpected event-loop diagnostic for this case."""
-                    diagnostics.append(context)
-
-                loop.set_exception_handler(record_diagnostic)
+                loop.set_exception_handler(_diagnostic_handler(diagnostics))
 
                 def failing_call(
                     started: threading.Event = started,
