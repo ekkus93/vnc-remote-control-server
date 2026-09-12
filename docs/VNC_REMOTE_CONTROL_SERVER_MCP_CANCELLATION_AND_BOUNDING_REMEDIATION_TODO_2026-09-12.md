@@ -5,309 +5,275 @@
 **Reviewed starting `master`:** `7b69ad82a6939c9619d8b8a0b9146c005bf6889e`  
 **Parent MCP TODO:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_TODO_2026-09-02.md`
 
-This TODO is evidence-driven. Do not close a checkbox from a commit message alone. Every completed item must be supported by source, tests, workflow configuration, documentation, or exact-generation external validation.
-
-Do not weaken an existing CI/security/release gate to make this remediation green.
-
----
+This TODO is evidence-driven. A checkbox is closed only from source, tests, workflow configuration, documentation, audit evidence, or exact-generation external validation. No existing CI/security/release gate was weakened to complete this remediation.
 
 ## MCR-001 — Freeze cancellation and outcome semantics
 
-### Required behavioral contract
-
-- [x] Define the precise distinction between cancellation before controller-call admission and cancellation after admission.
-- [x] Define what externally observable result is permitted for pre-admission cancellation.
-- [x] Define what externally observable result is required for post-admission mutation cancellation.
-- [x] State explicitly that post-admission cancellation does not prove the mutation did not execute.
+- [x] Define cancellation before controller-call admission versus cancellation after admission.
+- [x] Define the externally observable result permitted for pre-admission cancellation.
+- [x] Define the externally observable result required for post-admission mutation cancellation.
+- [x] State that post-admission cancellation does not prove the mutation did not execute.
 - [x] Preserve `retry_safe=false` for every uncertain mutation outcome.
 - [x] Preserve trustworthy controller `command_id` values when available.
 - [x] Never fabricate a command ID.
-- [x] Preserve the exactly-one adapter invocation invariant.
-- [x] Explicitly forbid automatic retry/replay/poll-and-replay.
-- [x] Document the selected implementation strategy near the executor/outcome code.
-- [x] Add or update architecture comments so future maintainers do not "simplify" the cancellation logic back into an unsafe form.
+- [x] Preserve exactly-one adapter invocation.
+- [x] Forbid automatic retry/replay/poll-and-replay.
+- [x] Document the selected strategy near executor/outcome code.
+- [x] Add architecture comments preventing unsafe future simplification.
+- [x] Add deterministic contract tests proving the semantics.
 
-### Evidence
-
-- [x] Add deterministic contract tests proving the frozen semantics before closing MCR-001.
-
----
+**Result:** executor admission/submission occurs before its first await. Cancellation before a mutation handler is scheduled issues no controller call. Cancellation observed after mutation admission is conservative unknown/non-retry-safe; read-only cancellation remains cancellation after terminal-observation ownership is transferred.
 
 ## MCR-002 — Make `BoundedControllerExecutor` cancellation-safe and exception-draining
 
 ### Executor ownership
 
-- [x] Ensure every admitted worker future has one defined terminal-observation owner.
-- [x] Ensure a cancelled awaiting task cannot abandon a future whose exception later becomes unobserved.
-- [x] Ensure no supported path produces `Future exception was never retrieved`.
-- [x] Ensure terminal observation happens exactly once.
-- [x] Ensure exception-draining code does not accidentally swallow a result needed for MCP outcome classification.
-- [x] Ensure cleanup callbacks do not log raw controller payload/body data.
+- [x] Give every admitted worker future one defined terminal-observation owner.
+- [x] Prevent cancelled awaiters from abandoning later worker exceptions.
+- [x] Prevent supported paths from producing `Future exception was never retrieved`.
+- [x] Observe terminal state exactly once.
+- [x] Preserve results needed for MCP outcome classification.
+- [x] Keep cleanup callbacks payload-free and non-logging.
 
 ### Capacity semantics
 
 - [x] Preserve admission before submission.
-- [x] Preserve bounded executor concurrency.
-- [x] Preserve the invariant that capacity is held until the underlying synchronous controller call actually exits.
-- [x] Prove capacity is released exactly once after terminal worker completion.
-- [x] Prove cancellation before submission does not consume a worker slot.
-- [x] Prove cancellation after submission does not free the slot early.
-- [x] Prove saturation remains fail-fast/bounded according to existing behavior.
+- [x] Preserve bounded concurrency.
+- [x] Hold capacity until the synchronous controller call actually exits.
+- [x] Release capacity exactly once after terminal completion.
+- [x] Prove pre-submission cancellation consumes no worker slot.
+- [x] Prove post-submission cancellation does not release the slot early.
+- [x] Preserve fail-fast bounded saturation behavior.
 
 ### Shutdown/races
 
-- [x] Cover cancellation racing with successful worker completion.
+- [x] Cover cancellation racing with successful completion.
 - [x] Cover cancellation racing with worker failure.
-- [x] Cover cancellation racing with executor `close()`.
+- [x] Cover cancellation racing with executor close.
 - [x] Preserve bounded shutdown.
 - [x] Prove no executor-owned work is orphaned indefinitely.
 
----
-
 ## MCR-003 — Preserve truthful mutation outcomes across cancellation
 
-### Mutation execution
-
-- [x] Update mutation wrapper/outcome handling so post-admission cancellation cannot surface as misleading bare cancellation while the side effect continues invisibly.
-- [x] Preserve exactly one typed-client call for every admitted mutation.
-- [x] Preserve existing terminal-success handling.
-- [x] Preserve existing controller-known `command_outcome_unknown` handling.
-- [x] Preserve existing no-command-ID `mutation_outcome_unknown` handling.
-- [x] Integrate cancellation with the conservative unknown-outcome model where execution cannot be proven absent.
+- [x] Prevent post-admission cancellation from surfacing as misleading bare cancellation while the side effect continues invisibly.
+- [x] Preserve exactly one typed-client call per admitted mutation.
+- [x] Preserve terminal-success handling.
+- [x] Preserve controller-known `command_outcome_unknown` handling.
+- [x] Preserve no-command-ID `mutation_outcome_unknown` handling.
+- [x] Integrate cancellation with conservative unknown-outcome semantics.
 - [x] Preserve `retry_safe=false` for uncertain post-admission cancellation.
-- [x] Preserve/request `request_id` where safe and available.
-- [x] Direct callers to `vnc_get_command_status(command_id)` when a trustworthy command ID exists.
+- [x] Preserve safe request metadata when available.
+- [x] Preserve command-status recovery when a trustworthy command ID exists.
 - [x] Do not auto-poll-and-replay.
 - [x] Do not retry terminal controller failures.
-
-### Sensitive mutations
-
-- [x] Verify typed keyboard text is never included in cancellation/cleanup diagnostics.
-- [x] Verify clipboard text is never included in cancellation/cleanup diagnostics.
-- [x] Verify screenshot/controller raw bodies are never exposed through asynchronous exception logging.
-
----
+- [x] Keep typed keyboard text out of cancellation/cleanup diagnostics.
+- [x] Keep clipboard text out of cancellation/cleanup diagnostics.
+- [x] Keep screenshot/raw controller bodies out of asynchronous exception logging.
 
 ## MCR-004 — Bound controller response ingestion
 
 ### Bounded read primitive
 
-- [x] Introduce a reusable bounded response-body read helper in the typed Python client or another appropriate shared layer.
-- [x] Enforce byte bounds while reading, not only after full `response.read()` materialization.
-- [x] Use a `limit + 1` or equivalent strategy to distinguish valid-at-limit from oversized responses.
+- [x] Add a reusable bounded response-body reader.
+- [x] Enforce byte ceilings while reading rather than after unrestricted materialization.
+- [x] Use limit-plus-one probing to distinguish valid-at-limit from oversized bodies.
 - [x] Do not trust `Content-Length` as the sole bound.
 - [x] Support responses without `Content-Length`.
-- [x] Fail closed on bodies exceeding the configured/constant maximum.
-- [x] Ensure oversized-body error messages do not include body contents.
+- [x] Fail closed on oversized bodies.
+- [x] Keep oversized-body errors free of body contents.
 
 ### Screenshot
 
-- [x] Bound screenshot response ingestion before the full PNG can exceed the allowed allocation.
-- [x] Preserve existing PNG signature/structure/CRC/IHDR/dimension/decompression/IEND validation.
+- [x] Bound screenshot response ingestion before full PNG allocation can exceed the limit.
+- [x] Preserve PNG signature/structure/CRC/IHDR/dimension/decompression/IEND validation.
 - [x] Preserve native MCP image output.
-- [x] Keep transport-level screenshot limit and MCP PNG limit consistent and documented.
-- [x] Verify a valid screenshot at the maximum supported size remains accepted.
-- [x] Verify a screenshot one byte over the transport limit is rejected before unbounded materialization.
+- [x] Keep transport and MCP screenshot limits intentionally consistent.
+- [x] Accept a valid screenshot at the supported boundary.
+- [x] Reject one byte over the transport limit.
 
-### JSON/API bodies
+### JSON/API and metrics/text
 
-- [x] Define an explicit finite maximum for normal JSON/controller responses.
-- [x] Apply the bound to success responses.
-- [x] Apply the bound to HTTP error responses.
-- [x] Preserve structured `ApiError`, transport, and protocol classification after bounded reads.
-- [x] Ensure malformed/oversized JSON never becomes success.
+- [x] Define finite JSON/controller response maximums.
+- [x] Bound success responses.
+- [x] Bound HTTP error responses.
+- [x] Preserve structured API/transport/protocol classification.
+- [x] Reject malformed/oversized JSON as failure.
+- [x] Define and enforce a finite metrics/text maximum.
+- [x] Preserve valid metrics semantics.
 
-### Metrics/text
+**Final reviewed wire ceilings:** JSON/controller 8 MiB; screenshot PNG 128 MiB; metrics/text 1 MiB; HTTP error bodies 1 MiB.
 
-- [x] Define an explicit finite maximum for metrics/text responses.
-- [x] Apply the bound before complete materialization.
-- [x] Preserve existing controller metrics semantics for valid responses.
+## MCR-005 — Permanent cancellation and oversized-response regression matrix
 
----
+### Executor cancellation
 
-## MCR-005 — Add permanent cancellation and oversized-response regression matrix
-
-### Executor cancellation tests
-
-- [x] Cancel before admission -> prove zero underlying client calls.
+- [x] Cancel before admission -> zero underlying calls.
 - [x] Cancel after admission -> worker succeeds.
-- [x] Cancel after admission -> worker raises typed transport error.
-- [x] Cancel after admission -> worker raises protocol error.
-- [x] Cancel after admission -> worker raises unexpected exception.
+- [x] Cancel after admission -> typed transport failure.
+- [x] Cancel after admission -> protocol failure.
+- [x] Cancel after admission -> unexpected failure.
 - [x] Race cancellation with completion.
 - [x] Race cancellation with shutdown.
-- [x] Assert no unobserved-future diagnostic is emitted.
+- [x] Assert no unobserved-future diagnostic.
 - [x] Assert capacity remains occupied until worker completion.
 - [x] Assert capacity returns exactly once.
 
-### Mutation cancellation tests
+### Mutation cancellation
 
-- [x] Exercise at least one pointer/click mutation through the actual registered mutation path.
-- [x] Exercise at least one payload-bearing mutation through the actual registered mutation path.
+- [x] Exercise a pointer/click mutation through the actual registered path.
+- [x] Exercise a payload-bearing mutation through the actual registered path.
 - [x] Prove exactly one typed-client mutation invocation.
 - [x] Prove cancellation does not imply safe replay after admission.
-- [x] Prove trustworthy command IDs are preserved where available.
-- [x] Prove command IDs are never fabricated.
-- [x] Prove unknown outcome is explicit where required.
-- [x] Prove typed text/clipboard payloads do not appear in captured diagnostics.
+- [x] Preserve trustworthy command IDs where available.
+- [x] Never fabricate command IDs.
+- [x] Make unknown outcome explicit where required.
+- [x] Keep typed text/clipboard payloads out of diagnostics.
 
-### Read cancellation tests
+### Read cancellation
 
 - [x] Cancel a read-only call after admission.
 - [x] Prove no capacity leak.
 - [x] Prove no unobserved future exception.
-- [x] Prove read errors remain read errors rather than mutation-unknown errors.
+- [x] Preserve read-error classification.
 
-### Bounded HTTP tests
+### Bounded HTTP
 
-- [x] Valid body exactly at limit.
+- [x] Body exactly at limit.
 - [x] Body one byte over limit.
 - [x] Missing `Content-Length`.
 - [x] Incorrectly small `Content-Length`.
 - [x] Oversized success response.
 - [x] Oversized error response.
 - [x] Oversized screenshot response.
-- [x] Valid screenshot at a limit-compatible size.
+- [x] Valid limit-compatible screenshot.
 - [x] Oversized JSON/controller response.
 - [x] Oversized metrics/text response.
-- [x] Keep all regression tests deterministic and internet-independent.
-
----
+- [x] Deterministic internet-independent regressions.
 
 ## MCR-006 — Re-run unsafe-fallback and silent-failure audit with cancellation in scope
 
-### Static/dynamic audit
-
-- [x] Review every `asyncio.shield` usage in MCP production code.
-- [x] Review every `asyncio.wrap_future` usage.
-- [x] Review every executor-submitted future lifecycle.
-- [x] Review every explicit `CancelledError` handler or absence thereof where cancellation can cross a side-effect boundary.
-- [x] Review every done callback.
-- [x] Review every asynchronous cleanup callback.
-- [x] Review every future/task that may outlive its original waiter.
+- [x] Review every production `asyncio.shield` use.
+- [x] Review every production `asyncio.wrap_future` use.
+- [x] Review executor-submitted future lifecycles.
+- [x] Review cancellation across side-effect boundaries.
+- [x] Review done callbacks and asynchronous cleanup callbacks.
+- [x] Review futures/tasks that may outlive their original waiter.
 - [x] Review shutdown races.
 - [x] Review event-loop default exception-handler exposure.
 - [x] Search for broad exception swallowing introduced by remediation.
-- [x] Search for callbacks that call `.exception()` or `.result()` without preserving required semantic handling.
-- [x] Search for new ignored return values.
-- [x] Search again for mutation retry/backoff/replay logic.
-- [x] Search logs/tracing for Authorization, token values, typed text, clipboard, screenshot bytes, raw controller bodies, and VNC credentials.
-- [x] Record every intentional ignored terminal result/fallback with nearby rationale.
-- [x] Update the MCP unsafe-fallback audit document with the discovered defects and their remediation evidence.
-- [x] Add/extend permanent static contract tests so the same class of defect is harder to reintroduce.
+- [x] Review `.exception()`/`.result()` consumers for semantic correctness.
+- [x] Search for ignored results.
+- [x] Re-search mutation retry/backoff/replay logic.
+- [x] Audit logs for Authorization, tokens, typed text, clipboard, screenshots, raw bodies, and VNC credentials.
+- [x] Record intentional ignored/alternate results with rationale.
+- [x] Update the MCP unsafe-fallback audit with remediation evidence.
+- [x] Extend permanent static contracts.
 
----
+**Result:** no automatic mutation retry/replay was introduced; the fixed abandoned-future observer consumes terminal state without logging exception payloads.
 
 ## MCR-007 — Update living MCP documentation
 
-- [x] Update `docs/MCP_SERVER.md` with pre-admission cancellation semantics.
+- [x] Document pre-admission cancellation semantics.
 - [x] Document post-admission mutation cancellation semantics.
-- [x] Document that an admitted mutation cannot be assumed not to have executed merely because the caller was cancelled.
-- [x] Reiterate the no-retry/no-replay rule.
+- [x] Document that admitted mutation cancellation cannot imply non-execution.
+- [x] Reiterate no-retry/no-replay.
 - [x] Document command-status recovery for trustworthy command IDs.
-- [x] Document client-side controller response-size ceilings.
+- [x] Document client-side controller response ceilings.
 - [x] Document oversized-response failure behavior.
-- [x] Update root/operator/security documentation only where existing text becomes inaccurate.
-- [x] Extend documentation contract/freshness tests for the new semantics.
+- [x] Update other living docs only where needed.
+- [x] Extend documentation contracts.
 
----
+## MCR-008 — Reconcile original MCP TODO/evidence without rewriting history
 
-## MCR-008 — Reconcile original MCP TODO and evidence without rewriting history
+### Original records
 
-### Original TODO
+- [x] Add remediation notes to MCP-003, MCP-005, MCP-007, MCP-013, and MCP-015.
+- [x] Preserve MCP-014 historical exact-generation evidence.
+- [x] Preserve prior successful CI runs as factual historical evidence.
+- [x] Add a post-closeout remediation section to the original MCP evidence record.
+- [x] Record the 2026-09-12 findings and starting master SHA.
+- [x] Record the exact remediation implementation candidate.
+- [x] Record exact candidate CI/Release Gates results.
+- [x] Record exact merged implementation master and post-merge CI/Release Gates results.
+- [x] Clearly distinguish original historical closeout evidence from this remediation evidence.
 
-- [x] Add a remediation note to MCP-003 explaining the post-admission cancellation defect and fix.
-- [x] Add a remediation note to MCP-005 explaining transport-level response bounding.
-- [x] Add a remediation note to MCP-007 explaining cancellation/unknown-outcome semantics.
-- [x] Add a remediation note to MCP-013 explaining the reopened unsafe-fallback audit.
-- [x] Update MCP-015 completion language to reference this remediation phase.
-- [x] Preserve MCP-014's historical candidate/master CI evidence exactly as historical evidence.
-- [x] Do not relabel prior successful CI runs as failures.
+**Validated implementation candidate:** `1cd71c70fc7c63c7ef0c691e2100ab677ca19071`
 
-### Evidence
+- CI `34710744120`: **success**
+- Release Gates `34710744121`: **success**
 
-- [x] Update `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md` with a post-closeout remediation section.
-- [x] Record the code-review finding date and starting master SHA.
-- [x] Record the exact defects found.
-- [ ] Record the remediation branch/candidate SHA after implementation.
-- [ ] Record exact candidate CI/Release Gates results.
-- [ ] Record exact merged-master SHA and post-merge CI/Release Gates results.
-- [x] Clearly distinguish historical MCP completion evidence from remediation evidence.
+**Validated merged implementation master:** `9a0a6f99ce704e5eac0eba10409b6e2746fe28b0`
 
-### Implementation checkpoint
-
-MCR-001 through MCR-007 and the non-CI portions of MCR-008 are implemented in the remediation working tree. Permanent regression coverage includes executor cancellation races, actual registered mutation cancellation, sensitive-payload failure draining, read cancellation, bounded JSON/screenshot/metrics/error response ingestion, documentation contracts, and the extended unsafe-fallback static contract. Exact remote candidate SHA and workflow evidence remain intentionally open until the branch is committed and GitHub Actions validates that exact generation.
-
----
+- CI `34711065779`: **success**
+- Release Gates `34711065829`: **success**
+- Publish CI Status `34711069866`: **success**
 
 ## MCR-009 — Exact candidate validation
 
-### Candidate freeze
+- [x] Reconcile MCR-001 through MCR-008 against actual source/tests/docs/workflows.
+- [x] Record exact implementation candidate SHA.
+- [x] Run regular CI on that exact SHA.
+- [x] Record CI run ID/conclusion.
+- [x] Run Release Gates on that exact SHA.
+- [x] Record Release Gates run ID/conclusion.
+- [x] Verify Python compile/lint/type checks pass.
+- [x] Verify core Python client without MCP passes.
+- [x] Verify cancellation regressions pass.
+- [x] Verify bounded-response regressions pass.
+- [x] Verify stdio transport acceptance passes.
+- [x] Verify Streamable HTTP acceptance passes.
+- [x] Verify production MCP -> controller -> TigerVNC E2E passes.
+- [x] Verify R13 integration passes.
+- [x] Verify Python MCP dependency/license gate passes.
+- [x] Verify Gitleaks/cargo-deny/auditable-binary gates pass.
+- [x] Verify sanitizer/Miri gates pass.
+- [x] Verify Trivy/SBOM/VEX gates pass.
+- [x] Investigate every failure and fix root cause without weakening gates.
+- [x] Re-run both workflows whenever an implementation fix changed the candidate SHA.
+- [x] Require regular CI and Release Gates green on one exact candidate before merge.
 
-- [ ] Reconcile MCR-001 through MCR-008 against actual source/tests/docs/workflows.
-- [ ] Record exact candidate SHA.
-- [ ] Run regular CI on that exact SHA.
-- [ ] Record CI run ID and conclusion.
-- [ ] Run Release Gates on that exact SHA.
-- [ ] Record Release Gates run ID and conclusion.
-- [ ] Verify Python compile/lint/type checks pass.
-- [ ] Verify core Python client without MCP still passes.
-- [ ] Verify new cancellation regression matrix passes.
-- [ ] Verify bounded-response regression matrix passes.
-- [ ] Verify stdio transport acceptance passes.
-- [ ] Verify Streamable HTTP acceptance passes.
-- [ ] Verify production MCP -> controller -> TigerVNC E2E passes.
-- [ ] Verify R13 integration passes.
-- [ ] Verify Python MCP dependency/license gate passes.
-- [ ] Verify Gitleaks/cargo-deny/auditable binary gates pass.
-- [ ] Verify sanitizer/Miri gates pass.
-- [ ] Verify Trivy/SBOM/VEX gates pass.
-- [ ] Investigate every failure and fix root cause without weakening gates.
-- [ ] If any fix changes candidate SHA, require both permanent workflows again on the new exact generation.
-- [ ] Require regular CI and Release Gates green on one exact candidate SHA before merge.
+### Candidate-failure history
 
----
+The loop fixed Ruff B023 captures, Pylint test/protocol diagnostics, mypy callback/protocol typing, a documentation-contract case mismatch, and a stale exact VEX inventory. None was bypassed or converted to `continue-on-error`. The VEX refresh removed only tuples no longer observed as CRITICAL, retained still-observed controller Perl/libxml2 determinations, and refreshed `reviewed_at` to `2026-09-12` / `expires_at` to `2026-10-12` with tracking issue `7`.
 
 ## MCR-010 — Guarded merge and exact-master validation
 
-- [ ] Merge only through the repository's policy-approved guarded path.
-- [ ] Record exact merged `master` SHA.
-- [ ] Require fresh regular CI on exact merged `master`.
-- [ ] Record final master CI run ID/conclusion.
-- [ ] Require fresh Release Gates on exact merged `master`.
-- [ ] Record final master Release Gates run ID/conclusion.
-- [ ] Re-review current VEX status/expiry at final validation time.
-- [ ] Do not treat merge success as validation success.
-- [ ] Investigate any merged-master failure before sign-off.
+- [x] Merge only through the repository's policy-approved guarded path.
+- [x] Record exact merged implementation `master` SHA.
+- [x] Require fresh regular CI on exact merged implementation `master`.
+- [x] Record final implementation-master CI run ID/conclusion.
+- [x] Require fresh Release Gates on exact merged implementation `master`.
+- [x] Record final implementation-master Release Gates run ID/conclusion.
+- [x] Re-review VEX status/expiry at final validation time.
+- [x] Do not treat merge success as validation success.
+- [x] Investigate any merged-master failure before sign-off.
 
----
+PR #46 was squash-merged through the guarded merge path to `9a0a6f99ce704e5eac0eba10409b6e2746fe28b0`. Fresh push CI `34711065779` and Release Gates `34711065829` both passed that exact SHA. VEX metadata at sign-off is `reviewed_at: 2026-09-12`, `expires_at: 2026-10-12`, tracking issue `7`, and exact CRITICAL enforcement passed both candidate and merged-master Release Gates.
 
 ## MCR-011 — Final evidence and completion
 
-- [ ] Create or update a durable remediation evidence section/document.
-- [ ] Record starting master `7b69ad82a6939c9619d8b8a0b9146c005bf6889e`.
-- [ ] Record final cancellation semantics.
-- [ ] Record executor terminal-observation strategy.
-- [ ] Record bounded-response design and exact byte ceilings.
-- [ ] Record regression test matrix.
-- [ ] Record unsafe-fallback audit conclusions.
-- [ ] Record exact candidate SHA plus CI/Release Gates IDs and conclusions.
-- [ ] Record exact merged-master SHA plus CI/Release Gates IDs and conclusions.
-- [ ] Re-review every MCR checkbox against final source/tests/workflows/docs/evidence.
-- [ ] Confirm no checkbox is closed solely because a commit message says so.
-- [ ] Confirm no security/release gate was weakened.
-- [ ] Confirm no automatic mutation retry/replay was introduced.
-- [ ] Confirm no `Future exception was never retrieved` is reproducible in the supported cancellation paths.
-- [ ] Confirm post-admission mutation cancellation cannot falsely imply non-execution.
-- [ ] Confirm controller response ingestion is bounded during read.
-- [ ] Declare the remediation complete only after exact merged-master CI and Release Gates are green.
-
----
+- [x] Maintain a durable remediation evidence document.
+- [x] Record starting master `7b69ad82a6939c9619d8b8a0b9146c005bf6889e`.
+- [x] Record final cancellation semantics.
+- [x] Record executor terminal-observation strategy.
+- [x] Record bounded-response design and exact byte ceilings.
+- [x] Record regression matrix.
+- [x] Record unsafe-fallback audit conclusions.
+- [x] Record exact candidate SHA plus CI/Release Gates IDs/conclusions.
+- [x] Record exact merged implementation master plus CI/Release Gates IDs/conclusions.
+- [x] Re-review every MCR checkbox against final source/tests/workflows/docs/evidence.
+- [x] Confirm no checkbox is closed solely because a commit message says so.
+- [x] Confirm no security/release gate was weakened.
+- [x] Confirm no automatic mutation retry/replay was introduced.
+- [x] Confirm supported cancellation paths no longer reproduce `Future exception was never retrieved`.
+- [x] Confirm post-admission mutation cancellation cannot falsely imply non-execution.
+- [x] Confirm controller response ingestion is bounded during read.
+- [x] Declare runtime remediation complete only after exact merged implementation master CI and Release Gates are green.
 
 ## Completion declaration
 
-Do not mark this section complete until all applicable MCR-001 through MCR-011 tasks are genuinely satisfied.
+- [x] MCP cancellation and bounding runtime remediation is complete.
+- [x] Original MCP evidence is reconciled without rewriting historical validation.
+- [x] Exact merged implementation `master` `9a0a6f99ce704e5eac0eba10409b6e2746fe28b0` passed CI `34711065779` and Release Gates `34711065829`.
 
-- [ ] MCP cancellation and bounding remediation is complete.
-- [ ] Original MCP evidence has been reconciled without rewriting historical validation.
-- [ ] The final exact merged `master` generation has passed both regular CI and Release Gates.
+This file is finalized in a documentation-only closeout generation after the validated implementation merge. The closeout commit cannot truthfully contain its own future GitHub Actions run IDs. Therefore the closeout PR must itself pass CI and Release Gates before merge, and the resulting documentation-closed `master` must pass fresh CI and Release Gates as external validation. Those later workflow results validate this evidence record; they do not require another self-referential edit.
