@@ -104,7 +104,7 @@ http://127.0.0.1:8765/mcp
 
 The adapter accepts only the loopback addresses `127.0.0.1`, `localhost`, and `::1`. It does not permit `0.0.0.0` or another public bind in the initial release.
 
-The server is run with `stateless_http=True`. The adapter intentionally does not override the official SDK transport security configuration, so the SDK's DNS-rebinding, Host, and Origin checks remain active. Legacy SSE is not exposed as a fallback.
+The server is run with `stateless_http=True`. The adapter intentionally does not override the official SDK transport security configuration, so the SDK's DNS-rebinding, Host, and Origin checks remain active. legacy SSE is not exposed as a fallback.
 
 The MCP Streamable HTTP listener does **not** authenticate MCP clients itself. For remote use, keep MCP bound to loopback and place a trusted access boundary in front of it, for example an SSH local-forward or another authenticated tunnel/proxy. Do not publish the loopback listener directly.
 
