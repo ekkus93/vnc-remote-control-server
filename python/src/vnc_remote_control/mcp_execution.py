@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from functools import partial
-from typing import ParamSpec, TypeVar
+from typing import Any, ParamSpec, TypeVar
 
 from .errors import VncRemoteControlError
 
@@ -129,11 +129,33 @@ class BoundedControllerExecutor:
 
         # Wait for completion without awaiting the wrapped Future directly. This
         # lets us inspect worker exceptions without a broad exception handler.
-        # Shield preserves the existing cancellation guarantee: cancelling the
-        # caller never cancels the admitted worker or releases its slot early.
+        # Shield preserves the capacity guarantee: cancelling the caller never
+        # cancels the admitted worker or releases its slot early. Once submission
+        # succeeds, cancellation can only arrive at this await, so a propagated
+        # CancelledError means the controller call was already admitted.
         wrapped_future = asyncio.wrap_future(concurrent_future)
-        await asyncio.shield(asyncio.wait((wrapped_future,)))
+        try:
+            await asyncio.shield(asyncio.wait((wrapped_future,)))
+        except asyncio.CancelledError:
+            if wrapped_future.done():
+                # Prefer a terminal controller result that won the cancellation
+                # race; this preserves any real command ID/outcome metadata.
+                return self._completed_result(wrapped_future)
+            # The original waiter is disappearing while the synchronous worker
+            # remains authoritative. Transfer terminal-observation ownership to
+            # a fixed callback so a later failure cannot become an unobserved
+            # Future exception or leak exception payload text through asyncio's
+            # default exception handler. Mutation outcome classification happens
+            # one layer above, where read-vs-mutation intent is known.
+            wrapped_future.add_done_callback(self._observe_abandoned_future)
+            raise
         return self._completed_result(wrapped_future)
+
+    @staticmethod
+    def _observe_abandoned_future(future: asyncio.Future[Any]) -> None:
+        """Consume one abandoned admitted future's terminal state without logging it."""
+        if not future.cancelled():
+            future.exception()
 
     def close(self) -> None:
         """Stop new admission and wait for all already-admitted calls to finish."""
