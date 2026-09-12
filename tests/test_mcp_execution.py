@@ -7,8 +7,10 @@ import threading
 import time
 import unittest
 from collections.abc import Callable
+from typing import Any
+from unittest import mock
 
-from vnc_remote_control.errors import TransportError
+from vnc_remote_control.errors import ProtocolError, TransportError
 from vnc_remote_control.mcp_execution import (
     BoundedControllerExecutor,
     McpCallCapacityError,
@@ -24,6 +26,17 @@ async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) ->
         if asyncio.get_running_loop().time() >= deadline:
             raise AssertionError("condition was not reached before timeout")
         await asyncio.sleep(0.001)
+
+
+def _diagnostic_handler(
+    diagnostics: list[dict[str, object]],
+) -> Callable[[asyncio.AbstractEventLoop, dict[str, Any]], None]:
+    """Return one typed event-loop diagnostic collector for a test case."""
+
+    def record(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        diagnostics.append(context)
+
+    return record
 
 
 class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
@@ -140,6 +153,108 @@ class BoundedControllerExecutorTests(unittest.IsolatedAsyncioTestCase):
         release.set()
         await _wait_until(finished.is_set)
         self.assertIsNone(await executor.call(lambda: None))
+
+    async def test_cancelled_waiter_drains_later_worker_failures_without_loop_diagnostics(
+        self,
+    ) -> None:
+        """Cancelled callers transfer future observation even when workers fail later."""
+        failures: tuple[BaseException, ...] = (
+            TransportError("SENSITIVE_TRANSPORT_CANCEL_DETAIL"),
+            ProtocolError("SENSITIVE_PROTOCOL_CANCEL_DETAIL"),
+            RuntimeError("SENSITIVE_UNEXPECTED_CANCEL_DETAIL"),
+        )
+        for failure in failures:
+            with self.subTest(failure_type=type(failure).__name__):
+                executor = BoundedControllerExecutor(1)
+                started = threading.Event()
+                release = threading.Event()
+                finished = threading.Event()
+                diagnostics: list[dict[str, object]] = []
+                loop = asyncio.get_running_loop()
+                previous_handler = loop.get_exception_handler()
+                loop.set_exception_handler(_diagnostic_handler(diagnostics))
+
+                def failing_call(
+                    started: threading.Event = started,
+                    release: threading.Event = release,
+                    finished: threading.Event = finished,
+                    failure: BaseException = failure,
+                ) -> None:
+                    started.set()
+                    release.wait(timeout=1.0)
+                    finished.set()
+                    raise failure
+
+                try:
+                    task = asyncio.create_task(executor.call(failing_call))
+                    await _wait_until(started.is_set)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    with self.assertRaises(McpCallCapacityError):
+                        await executor.call(lambda: None)
+
+                    release.set()
+                    await _wait_until(finished.is_set)
+                    await asyncio.sleep(0)
+                    self.assertEqual(diagnostics, [])
+                    self.assertIsNone(await executor.call(lambda: None))
+                finally:
+                    loop.set_exception_handler(previous_handler)
+                    release.set()
+                    await executor.aclose()
+
+    async def test_terminal_result_wins_cancellation_race(self) -> None:
+        """A completed worker result remains authoritative if cancellation races with wakeup."""
+        executor = BoundedControllerExecutor(1)
+        self.addAsyncCleanup(executor.aclose)
+        terminal_seen = asyncio.Event()
+        release_wait = asyncio.Event()
+        original_wait = asyncio.wait
+
+        async def controlled_wait(
+            futures: tuple[asyncio.Future[object], ...],
+        ) -> tuple[set[asyncio.Future[object]], set[asyncio.Future[object]]]:
+            done, pending = await original_wait(futures)
+            terminal_seen.set()
+            await release_wait.wait()
+            return done, pending
+
+        with mock.patch(
+            "vnc_remote_control.mcp_execution.asyncio.wait",
+            new=controlled_wait,
+        ):
+            task = asyncio.create_task(executor.call(lambda: "terminal"))
+            await terminal_seen.wait()
+            task.cancel()
+            self.assertEqual(await task, "terminal")
+            release_wait.set()
+            await asyncio.sleep(0)
+
+    async def test_cancelled_waiter_and_shutdown_race_still_joins_worker(self) -> None:
+        """Shutdown after caller cancellation still waits for the admitted worker."""
+        executor = BoundedControllerExecutor(1)
+        started = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+
+        def blocking_call() -> None:
+            started.set()
+            release.wait(timeout=1.0)
+            finished.set()
+
+        call_task = asyncio.create_task(executor.call(blocking_call))
+        await _wait_until(started.is_set)
+        call_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await call_task
+
+        close_task = asyncio.create_task(executor.aclose())
+        await _wait_until(lambda: executor.closed)
+        self.assertFalse(close_task.done())
+        release.set()
+        await close_task
+        self.assertTrue(finished.is_set())
 
     async def test_close_rejects_new_calls_and_waits_for_admitted_work(self) -> None:
         """Verify shutdown closes admission and joins active adapter-owned work."""

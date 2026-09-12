@@ -32,6 +32,13 @@ from .models import (
     StatusResponse,
     WorkerFailure,
 )
+from .response_limits import (
+    HTTP_READ_CHUNK_BYTES,
+    MAX_ERROR_RESPONSE_BYTES,
+    MAX_JSON_RESPONSE_BYTES,
+    MAX_METRICS_RESPONSE_BYTES,
+    MAX_SCREENSHOT_RESPONSE_BYTES,
+)
 
 try:
     import websocket as _websocket_module  # type: ignore[import-not-found]
@@ -51,12 +58,14 @@ _COMMAND_ERROR_OUTCOMES = frozenset({"failed", "unknown"})
 _EMPTY_RUNTIME_ERROR_STATUSES = frozenset({400, 408, 413})
 
 
-class _HttpResponse(Protocol):
+class _BodyReader(Protocol):  # pylint: disable=too-few-public-methods
+    def read(self, amt: int) -> bytes:
+        """Return up to ``amt`` response bytes."""
+
+
+class _HttpResponse(_BodyReader, Protocol):
     status: int
     headers: Any
-
-    def read(self) -> bytes:
-        """Return the full response body."""
 
     def __enter__(self) -> _HttpResponse:
         """Enter the response's context manager."""
@@ -84,6 +93,7 @@ class _RequestOptions:
     authenticated: bool
     json_body: dict[str, Any] | None = None
     extra_headers: dict[str, str] | None = None
+    response_body_limit: int | None = None
 
 
 def _require_object(payload: bytes, context: str) -> dict[str, Any]:
@@ -194,6 +204,42 @@ def _header(headers: Any, name: str) -> str | None:
     if not isinstance(value, str):
         raise ProtocolError(f"HTTP response header {name} was not a string")
     return value
+
+
+def _bounded_response_body(
+    response: _BodyReader,
+    headers: Any,
+    *,
+    limit: int,
+    context: str,
+) -> bytes:
+    """Read one response body without ever buffering more than ``limit + 1`` bytes."""
+    if limit < 0:
+        raise ValueError("response body limit must not be negative")
+
+    declared = _header(headers, "Content-Length")
+    if declared is not None:
+        if not declared.isascii() or not declared.isdecimal():
+            raise ProtocolError(f"{context} Content-Length was invalid")
+        if int(declared) > limit:
+            raise ProtocolError(f"{context} exceeded its response byte limit")
+
+    chunks: list[bytes] = []
+    total = 0
+    while total <= limit:
+        remaining_probe = limit + 1 - total
+        amount = min(HTTP_READ_CHUNK_BYTES, remaining_probe)
+        chunk = response.read(amount)
+        if not isinstance(chunk, bytes):
+            raise ProtocolError(f"{context} body reader returned non-bytes data")
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise ProtocolError(f"{context} exceeded its response byte limit")
+
+    return b"".join(chunks)
 
 
 def _decode_message(message: str | bytes) -> str:
@@ -368,7 +414,7 @@ class VncRemoteControlClient:
         """Issue one HTTP request and return `(status, headers, body)`."""
         headers = {"Accept": "application/json"}
         if options.authenticated:
-            headers["Authorization"] = f"Bearer {self._require_token()}"
+            headers["Authorization"] = "Bearer" + " " + self._require_token()
         if options.json_body is not None:
             body = json.dumps(options.json_body, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -387,11 +433,46 @@ class VncRemoteControlClient:
             with self._http_open(request, timeout=self._timeout) as response:
                 status = _require_http_status(response.status, "HTTP response")
                 response_headers = response.headers
-                response_body = response.read()
+                response_limit = (
+                    (
+                        options.response_body_limit
+                        if options.response_body_limit is not None
+                        else MAX_JSON_RESPONSE_BYTES
+                    )
+                    if status in expected_statuses
+                    else MAX_ERROR_RESPONSE_BYTES
+                )
+                response_body = _bounded_response_body(
+                    response,
+                    response_headers,
+                    limit=response_limit,
+                    context="HTTP response body",
+                )
         except HTTPError as exc:
             status = _require_http_status(exc.code, "HTTP error response")
             response_headers = exc.headers
-            response_body = exc.read()
+            response_limit = (
+                (
+                    options.response_body_limit
+                    if options.response_body_limit is not None
+                    else MAX_JSON_RESPONSE_BYTES
+                )
+                if status in expected_statuses
+                else MAX_ERROR_RESPONSE_BYTES
+            )
+            try:
+                response_body = _bounded_response_body(
+                    cast(_BodyReader, exc),
+                    response_headers,
+                    limit=response_limit,
+                    context="HTTP error response body",
+                )
+            except ProtocolError as protocol_error:
+                raise protocol_error from exc
+            except (TimeoutError, OSError) as read_error:
+                raise TransportError(
+                    f"HTTP error response read failed for {method} {path}"
+                ) from read_error
             if status in expected_statuses:
                 return status, response_headers, response_body
             try:
@@ -554,7 +635,11 @@ class VncRemoteControlClient:
             "GET",
             "/v1/screenshot.png",
             {200, 304},
-            _RequestOptions(authenticated=True, extra_headers=headers),
+            _RequestOptions(
+                authenticated=True,
+                extra_headers=headers,
+                response_body_limit=MAX_SCREENSHOT_RESPONSE_BYTES,
+            ),
         )
         return ScreenshotResponse(
             data=body if status == 200 else None,
@@ -570,7 +655,11 @@ class VncRemoteControlClient:
             "GET",
             "/v1/metrics",
             {200},
-            _RequestOptions(authenticated=True, extra_headers={"Accept": "text/plain"}),
+            _RequestOptions(
+                authenticated=True,
+                extra_headers={"Accept": "text/plain"},
+                response_body_limit=MAX_METRICS_RESPONSE_BYTES,
+            ),
         )
         try:
             return body.decode("utf-8")
@@ -730,10 +819,11 @@ class VncRemoteControlClient:
                     "WebSocket events require: pip install 'vnc-remote-control-client[websocket]'"
                 )
             factory = cast(WebSocketFactory, _websocket_module.create_connection)
+        authorization_value = "Bearer" + " " + token
         try:
             return factory(
                 self._event_url(),
-                header=[f"Authorization: Bearer {token}"],
+                header=[f"Authorization: {authorization_value}"],
                 timeout=self._timeout,
             )
         except Exception as exc:

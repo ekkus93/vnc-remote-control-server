@@ -226,3 +226,18 @@ MCP-001 through MCP-013 were reconciled against current source, permanent tests,
 No TODO checkbox is closed solely because a commit message claims completion. The acceptance basis is executable source/tests, workflow configuration, documentation contracts, exact GitHub Actions run results, and the explicit audit/evidence records cited above.
 
 The MCP implementation phase is complete. All applicable MCP-001 through MCP-015 requirements are satisfied; the later MCP closeout evidence-correction task changes evidence wording only and does not reopen or change runtime MCP behavior.
+
+## 16. Post-closeout cancellation and response-bounding remediation
+
+A 2026-09-12 code review of exact `master` `7b69ad82a6939c9619d8b8a0b9146c005bf6889e` discovered defects outside the regression matrix used for the original closeout:
+
+- a caller cancelled after controller-call admission could stop awaiting the asyncio wrapper while the synchronous worker continued, and a later worker failure could become an unobserved-future diagnostic;
+- mutation cancellation after admission was not explicitly mapped to the existing conservative unknown/non-retry-safe outcome model; and
+- controller HTTP bodies were read without a client-side byte ceiling before screenshot/JSON/text validation.
+
+These findings do not invalidate the historical CI results recorded above; those exact generations genuinely passed the then-current tests. They supersede the present-day claim that no further MCP hardening is required. The authoritative remediation specification and checklist are:
+
+- `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_SPEC_2026-09-12.md`
+- `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md`
+
+The remediation preserves the original architecture and no-retry policy. Final candidate and merged-master validation evidence will be appended when MCR-009 through MCR-011 complete.

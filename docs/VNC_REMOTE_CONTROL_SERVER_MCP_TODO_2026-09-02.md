@@ -61,6 +61,8 @@ Final closeout reconciliation on 2026-09-11 reviewed the implementation, permane
 
 ## MCP-003 — Build common bounded controller-call execution
 
+**2026-09-12 remediation note:** the historical MCP-003 implementation satisfied its original capacity-ownership checks, but later review found that post-admission cancellation could abandon a worker future's terminal exception. Current remediation authority is `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md` (MCR-001 through MCR-003). Historical CI evidence below remains valid for the exact generations it describes.
+
 **Reconciled complete:** `BoundedControllerExecutor` provides fail-fast admission before submission, cancellation-safe slot ownership, typed failure normalization, and bounded owned shutdown. Exact `master` `0da2324f89fa72933486fcb6e59e26d7c4bf8880` passed the full execution regression suite in CI `34147921952`.
 
 - [x] Create one adapter-owned bounded concurrency limiter for all controller calls.
@@ -120,6 +122,8 @@ Final closeout reconciliation on 2026-09-11 reviewed the implementation, permane
 
 ## MCP-005 — Implement native MCP screenshot output
 
+**2026-09-12 remediation note:** MCP PNG validation was bounded after materialization, but the typed HTTP client still performed unrestricted response reads. MCR-004/MCR-005 add transport-level bounded ingestion while preserving the existing PNG validation.
+
 **Reconciled complete:** read-tool tests prove unconditional screenshot retrieval, bounded PNG validation, native MCP image content, sanitized metadata, payload-free errors, and no placeholder fallback.
 
 - [x] Register `vnc_get_screenshot` with no initial input arguments.
@@ -172,6 +176,8 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 - [x] Prove no mutation handler contains an automatic retry/replay loop.
 
 ## MCP-007 — Preserve fail-closed command-outcome semantics
+
+**2026-09-12 remediation note:** the original outcome matrix omitted post-admission asyncio cancellation. MCR-001/MCR-003 define cancellation after admission as an uncertain mutation outcome with `retry_safe=false`; no automatic replay is permitted.
 
 **Reconciled complete:** `mcp_outcomes.py`, dependency-free tests, pinned-SDK tests, and transport/E2E coverage prove explicit conservative ambiguity classification and no automatic replay.
 
@@ -314,6 +320,8 @@ Mutation tools are registered only when `VRC_MCP_ALLOW_MUTATIONS=true`.
 
 ## MCP-013 — Cross-cutting unsafe-fallback and silent-failure audit
 
+**2026-09-12 remediation note:** the historical audit is reopened for asynchronous cancellation ownership, abandoned futures, default event-loop exception diagnostics, and bounded HTTP response ingestion. See MCR-006 and the audit addendum.
+
 **Validated audit checkpoint:** `5f70bd064c663a00843369f791a2cdf460734737` passed CI `34642850866` and Release Gates `34642850991`. Detailed rationale is in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_UNSAFE_FALLBACK_AUDIT_2026-09-11.md`; `tests/test_mcp_unsafe_fallback_contract.py` keeps the key static conclusions permanent.
 
 - [x] Search MCP Python code for broad `except Exception` paths and classify every survivor.
@@ -358,6 +366,8 @@ VEX re-review on 2026-09-11 confirmed repository metadata `reviewed_at: 2026-08-
 
 ## MCP-015 — Final evidence and completion
 
+**2026-09-12 remediation note:** MCP-015 remains valid as historical closeout evidence, but the present-day completion declaration is superseded until the MCR remediation phase completes and passes exact candidate/merged-master validation.
+
 **Evidence:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md` records the final architecture, catalog, configuration/security model, SDK/protocol target, transport/E2E validation, dependency/license closure, unsafe-fallback audit, exact-generation validation history, VEX review, and completion rationale.
 
 - [x] Create `docs/VNC_REMOTE_CONTROL_SERVER_MCP_EVIDENCE_2026-09-02.md`.
@@ -387,3 +397,5 @@ The authoritative validated implementation generation is `a31e2f3fdf77085292fe65
 The CRITICAL VEX metadata remains `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`; exact CRITICAL VEX enforcement passed the final candidate and merged-master Release Gates.
 
 The PR #44 documentation-only closeout is no longer provisional. It merged to documentation-closed `master` `3a04e0854468ed036affdf07674e095da7c806a6`, and fresh post-closeout workflows on that exact SHA passed: CI `34660215099` and Release Gates `34660215186`. This subsequent evidence-correction task is documentation/evidence-only and does not reopen or change runtime MCP behavior.
+
+**Current-status supersession (2026-09-12):** a later code review found post-admission cancellation/future-observation and HTTP response-ingestion bounding defects. The historical closeout above remains accurate for the evidence available then, but current MCP sign-off is governed by `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md` until that remediation is complete and exact-generation CI/Release Gates are green.

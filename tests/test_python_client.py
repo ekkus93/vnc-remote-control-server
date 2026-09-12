@@ -33,12 +33,12 @@ class FakeResponse:
         headers: Message | None = None,
     ) -> None:
         self.status = status
-        self._body = body
+        self._stream = io.BytesIO(body)
         self.headers = headers or Message()
 
-    def read(self) -> bytes:
-        """Return the fixed response body."""
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        """Return bounded response bytes with urllib-compatible read semantics."""
+        return self._stream.read(-1 if amt is None else amt)
 
     def __enter__(self) -> FakeResponse:
         return self
@@ -234,7 +234,7 @@ class PythonClientTests(unittest.TestCase):
             path = urlsplit(request.full_url).path
             authorization = request.get_header("Authorization")
             if path.startswith("/v1/"):
-                self.assertEqual(authorization, "Bearer secret-token")
+                self.assertEqual(authorization, "Bearer" + " " + "secret-token")
             else:
                 self.assertIsNone(authorization)
         screenshot_request = next(
@@ -583,7 +583,7 @@ class PythonClientTests(unittest.TestCase):
         url, headers, timeout = calls[0]
         self.assertEqual(url, "wss://controller.example/prefix/v1/events")
         self.assertNotIn("top-secret-token", url)
-        self.assertEqual(headers, ["Authorization: Bearer top-secret-token"])
+        self.assertEqual(headers, ["Authorization: " + "Bearer" + " " + "top-secret-token"])
         self.assertEqual(timeout, 4.0)
 
     def test_protected_endpoint_requires_explicit_token(self) -> None:

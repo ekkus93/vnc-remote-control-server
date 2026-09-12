@@ -15,6 +15,10 @@ from .models import (
     ScreenshotResponse,
     StatusResponse,
 )
+from .response_limits import (
+    MAX_CONTROLLER_FRAMEBUFFER_BYTES,
+    MAX_SCREENSHOT_RESPONSE_BYTES,
+)
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -28,12 +32,8 @@ _PNG_IHDR = b"IHDR"
 _PNG_IDAT = b"IDAT"
 _PNG_IEND = b"IEND"
 _PNG_RGBA8_IHDR_TAIL = bytes((8, 6, 0, 0, 0))
-_CONTROLLER_MAX_FRAMEBUFFER_BYTES = 64 * 1024 * 1024
-# The controller caps the decoded RGBA framebuffer at 64 MiB. PNG scanline
-# filtering and DEFLATE/chunk framing can make an incompressible encoded image
-# larger than the framebuffer, so allow a conservative 2x wire envelope while
-# still refusing an unbounded response before the SDK performs base64 expansion.
-_MAX_MCP_SCREENSHOT_PNG_BYTES = 2 * _CONTROLLER_MAX_FRAMEBUFFER_BYTES
+_CONTROLLER_MAX_FRAMEBUFFER_BYTES = MAX_CONTROLLER_FRAMEBUFFER_BYTES
+_MAX_MCP_SCREENSHOT_PNG_BYTES = MAX_SCREENSHOT_RESPONSE_BYTES
 _MAX_PROCESS_INSTANCE_BYTES = 64
 _MAX_REQUEST_ID_BYTES = 64
 _DEFLATE_INPUT_CHUNK_BYTES = 64 * 1024

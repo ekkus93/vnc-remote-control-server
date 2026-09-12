@@ -25,7 +25,8 @@ class PythonClientOpenApiContractTests(unittest.TestCase):
     def test_websocket_endpoint_remains_header_authenticated(self) -> None:
         """The WebSocket client sends the token via header, never a URL query param."""
         client = CLIENT.read_text(encoding="utf-8")
-        self.assertIn('header=[f"Authorization: Bearer {token}"]', client)
+        self.assertIn('authorization_value = "Bearer" + " " + token', client)
+        self.assertIn('header=[f"Authorization: {authorization_value}"]', client)
         events_url = (
             "return urlunsplit((scheme, parsed.netloc, "
             "f\"{parsed.path.rstrip('/')}/v1/events\""

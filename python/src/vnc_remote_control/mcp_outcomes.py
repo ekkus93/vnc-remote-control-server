@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import re
@@ -296,6 +297,30 @@ class McpOutcomeToolRegistrar:
             async def classified(*args: Any, **kwargs: Any) -> Any:
                 try:
                     return await function(*args, **kwargs)
+                except asyncio.CancelledError:
+                    if read_only_hint:
+                        # Read-only callers may retain ordinary task-cancellation
+                        # semantics. BoundedControllerExecutor has already
+                        # transferred terminal observation of any admitted worker
+                        # before this cancellation can escape.
+                        raise
+                    # Mutation handlers perform all local preflight synchronously
+                    # before their first await. The production executor reserves
+                    # capacity and submits the synchronous controller call before
+                    # its first await as well. Therefore cancellation observed here
+                    # is post-admission: the side effect may still occur, so replay
+                    # is unsafe even though the MCP caller requested cancellation.
+                    return self._result(
+                        "Mutation caller was cancelled after controller-call admission; "
+                        "the outcome is unknown and automatic replay is unsafe.",
+                        {
+                            "kind": "mutation_outcome_unknown",
+                            "command_id": None,
+                            "outcome": "unknown",
+                            "retry_safe": False,
+                            "instruction": _MUTATION_UNKNOWN_INSTRUCTION,
+                        },
+                    )
                 except self._handled_errors as error:
                     if read_only_hint:
                         return self._read_error(error, tool_name=tool_name)
