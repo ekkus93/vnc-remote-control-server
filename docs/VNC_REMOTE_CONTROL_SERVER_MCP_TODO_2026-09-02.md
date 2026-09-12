@@ -384,4 +384,6 @@ The MCP implementation phase is complete. Every applicable MCP-001 through MCP-0
 
 The authoritative validated implementation generation is `a31e2f3fdf77085292fe65648d8741613f91cb38`, with CI `34658956284` and Release Gates `34658956281` both successful. The final MCP/TigerVNC E2E and the corrected R13 restart/resource validation both passed on that exact `master` SHA.
 
-The CRITICAL VEX metadata remains `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`; exact CRITICAL VEX enforcement passed the final candidate and merged-master Release Gates. This documentation-only closeout change must itself remain green under the permanent workflows before merge.
+The CRITICAL VEX metadata remains `reviewed_at: 2026-08-31`, `expires_at: 2026-09-30`; exact CRITICAL VEX enforcement passed the final candidate and merged-master Release Gates.
+
+The PR #44 documentation-only closeout is no longer provisional. It merged to documentation-closed `master` `3a04e0854468ed036affdf07674e095da7c806a6`, and fresh post-closeout workflows on that exact SHA passed: CI `34660215099` and Release Gates `34660215186`. This subsequent evidence-correction task is documentation/evidence-only and does not reopen or change runtime MCP behavior.
