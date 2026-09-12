@@ -18,12 +18,12 @@ class FakeResponse:
 
     def __init__(self, status: int, body: bytes) -> None:
         self.status = status
-        self._body = body
+        self._stream = io.BytesIO(body)
         self.headers = Message()
 
-    def read(self) -> bytes:
-        """Return the fixed response body."""
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        """Return bounded response bytes with urllib-compatible read semantics."""
+        return self._stream.read(-1 if amt is None else amt)
 
     def __enter__(self) -> FakeResponse:
         return self
