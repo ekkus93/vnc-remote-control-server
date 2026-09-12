@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from mcp_test_support import MUTATION_TOOL_NAMES, READ_ONLY_TOOL_NAMES
-from vnc_remote_control import mcp_config
+from vnc_remote_control import mcp_config, response_limits
 
 ROOT = Path(__file__).resolve().parents[1]
 MCP_GUIDE_PATH = ROOT / "docs" / "MCP_SERVER.md"
@@ -115,6 +115,26 @@ class McpDocumentationContractTests(unittest.TestCase):
             "There is no adapter retry loop",
         ):
             self.assertIn(required, guide)
+
+    def test_guide_documents_cancellation_ownership_and_response_bounds(self) -> None:
+        """Cancellation and transport-level response ceilings remain living contracts."""
+        guide = MCP_GUIDE_PATH.read_text(encoding="utf-8")
+        for required in (
+            "terminal-observation owner",
+            'kind="mutation_outcome_unknown"',
+            "post-admission task cancellation",
+            "Cancellation before the handler is ever scheduled issues no controller call",
+            "Controller response-size bounds",
+            "ceiling plus one probe byte",
+        ):
+            self.assertIn(required, guide)
+        for size in (
+            response_limits.MAX_JSON_RESPONSE_BYTES // (1024 * 1024),
+            response_limits.MAX_SCREENSHOT_RESPONSE_BYTES // (1024 * 1024),
+            response_limits.MAX_METRICS_RESPONSE_BYTES // (1024 * 1024),
+            response_limits.MAX_ERROR_RESPONSE_BYTES // (1024 * 1024),
+        ):
+            self.assertIn(f"**{size} MiB**", guide)
 
     def test_guide_preserves_transport_and_remote_security_boundaries(self) -> None:
         """HTTP remains loopback-only and retains the SDK security middleware."""
