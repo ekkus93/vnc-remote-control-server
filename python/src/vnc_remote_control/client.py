@@ -58,7 +58,7 @@ _COMMAND_ERROR_OUTCOMES = frozenset({"failed", "unknown"})
 _EMPTY_RUNTIME_ERROR_STATUSES = frozenset({400, 408, 413})
 
 
-class _BodyReader(Protocol):
+class _BodyReader(Protocol):  # pylint: disable=too-few-public-methods
     def read(self, amt: int) -> bytes:
         """Return up to ``amt`` response bytes."""
 
