@@ -1,85 +1,85 @@
-# VNC Remote Control Server — MCP unsafe-fallback and silent-failure audit
+# VNC Remote Control Server — MCP Unsafe-Fallback and Silent-Failure Audit
 
-Date: 2026-09-11
-
-Tracked task: `MCP-013` in `docs/VNC_REMOTE_CONTROL_SERVER_MCP_TODO_2026-09-02.md`
-
-Reviewed baseline: `master` at `0da2324f89fa72933486fcb6e59e26d7c4bf8880`
+**Audit date:** 2026-09-11  
+**Repository:** `ekkus93/vnc-remote-control-server`  
+**Parent TODO:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_TODO_2026-09-02.md`
 
 ## Scope
 
-The audit reviewed the production MCP modules under `python/src/vnc_remote_control/mcp_*.py`, the MCP configuration/execution/read/mutation/outcome/server paths, their dependency-free contract tests, pinned-SDK tests, transport acceptance tests, and the real controller/TigerVNC MCP E2E. The existing permanent CI evidence on the reviewed baseline is CI `34147921952` and Release Gates `34147921940`, both successful on the same exact SHA.
+MCP-013 reviewed the production MCP modules under `python/src/vnc_remote_control/mcp_*.py`, their configuration/execution/read/mutation/outcome/server paths, dependency-free contract tests, pinned-SDK tests, transport acceptance, and real controller/TigerVNC E2E.
 
-No production behavior defect was found during MCP-013. The audit therefore adds a permanent static regression contract rather than inventing a compatibility fallback or changing already validated runtime semantics.
+The audit specifically searched for unsafe fallback behavior, quiet success after failure, broad exception suppression, hidden mutation replay, sensitive payload logging, weakened Streamable HTTP security, raw-token ingress, test doubles that accidentally bypass one-call semantics, and dependency-import compatibility fallbacks.
 
-## MCP-013 conclusions
+## Findings
 
-### Broad exception handling and false success
+### Broad exception handling and silent success
 
-Production MCP code has no bare `except`, no `except Exception`, no `except BaseException`, and no `pass` fallback. Exception handling is typed and purpose-specific. The outcome registrar converts only the enumerated typed controller/adapter errors into native MCP error results (`is_error=true`); it does not convert failures into empty or successful output.
+Production MCP code contains no bare `except`, no `except Exception`, no `except BaseException`, and no AST `pass` fallback. Typed exception handling remains explicit. No reviewed exception path returns empty/success data after failure.
 
-`BoundedControllerExecutor` obtains worker exceptions from the completed future and preserves typed `VncRemoteControlError` failures. Untyped worker failures become `McpUnexpectedControllerError` with fixed payload-free text. `aclose()` catches only `asyncio.CancelledError` so adapter-owned worker shutdown completes before cancellation is re-raised.
+### `.get(...)` and default behavior
 
-### Mapping defaults and compatibility probes
+The remaining mapping `.get(...)` uses are classified and guarded by `tests/test_mcp_unsafe_fallback_contract.py`:
 
-The only production `Mapping.get` calls are intentional and fail closed:
+- `environment.get(name)` implements documented defaults only when an optional environment variable is absent. A present malformed value fails closed.
+- `registration.get("annotations")` and `registration.get("name")` are test/registration metadata validation paths and explicitly fail when required data is missing or invalid.
 
-- `environment.get(name)` distinguishes an absent optional environment variable from a present value. Present malformed or empty values are validated explicitly rather than replaced with defaults.
-- `registration.get("annotations")` and `registration.get("name")` inspect MCP tool registration metadata. Missing/invalid values immediately raise `McpOutcomeRegistrationError`; there is no guessed annotation or name.
+No controller protocol object is silently normalized with a `.get(..., default)` fallback.
 
-The SDK loader uses `getattr(..., None)` only to verify the exact pinned `mcp==2.1.1` callable surface. A missing/incompatible symbol raises `McpDependencyError`; it does not probe alternate SDK APIs, downgrade transports, fabricate image output, or continue with reduced behavior. The screenshot image helper is similarly required to expose `to_image_content`; absence is an explicit protocol/dependency failure.
+### SDK/dependency fallback
 
-### Mutation replay and retry
+The MCP SDK loader requires the reviewed API surface and exact dependency target. Missing or incompatible SDK APIs raise `McpDependencyError`. The `getattr(..., None)` compatibility probes in the loader are followed by explicit fail-closed checks; they do not downgrade functionality.
 
-No production MCP retry, backoff, or sleep mechanism exists around controller mutations. Every mutation handler performs complete local preflight and then calls the shared executor exactly once. Existing mutation tests count both executor and typed-client invocations for every mutation and prove controller failures are not automatically replayed. Outcome-classification tests prove known-command ambiguity instructs caller-driven `vnc_get_command_status` inspection and no-command-ID ambiguity is `retry_safe=false`.
+### Mutation retries and replay
 
-The real MCP/TigerVNC E2E also issues each mutation once. Its polling loops are read-only observation after a single mutation; they never replay a mutation.
+No execution/mutation/outcome path contains retry, backoff, or sleep-based replay logic. Counting fakes prove each mutation invokes the typed client exactly once. Unknown outcome remains conservative and non-retry-safe.
 
-### Sensitive logging
+### Logging and sensitive payloads
 
-Production MCP logging is limited to fixed diagnostic text plus reviewed non-payload tool names. Existing tests inject sensitive sentinels into worker errors, API messages, typed text, clipboard values, and screenshot data and prove they do not appear in MCP diagnostic text. The real E2E audits MCP/controller logs for the bearer token, VNC password, typed text, and clipboard fixtures and fails if any appear.
+Production MCP code does not log tool arguments/results, Authorization headers, controller token values, typed keyboard text, clipboard text, screenshot bytes/base64, VNC credentials, or raw sensitive controller response bodies.
 
-No production MCP logger records tool arguments, tool results, Authorization headers, bearer-token bytes, typed text, clipboard text, or screenshot bytes/base64.
+### Streamable HTTP security
 
-### Transport security
-
-Streamable HTTP accepts only `127.0.0.1`, `localhost`, or `::1`, the exact loopback spellings for which the pinned SDK enables its DNS-rebinding protection. The adapter deliberately does not supply `transport_security`, so the SDK Host/Origin policy remains authoritative. Legacy SSE is not exposed as a fallback.
-
-Pinned-SDK transport acceptance proves stdio and Streamable HTTP catalog/schema/annotation equivalence, read invocation, explicit mutation opt-in, exactly-one mutation mapping, bad Host/Origin rejection, EOF shutdown for stdio, and bounded SIGTERM shutdown for HTTP.
+Production server setup does not override `transport_security`. Official SDK Host/Origin/DNS-rebinding protections remain enabled. Legacy SSE is not exposed as a fallback.
 
 ### Secret ingress
 
-The controller token has one MCP ingress: `VRC_MCP_CONTROLLER_TOKEN_FILE`. No raw token environment variable, CLI argument, URL credential, source constant, or fallback token source exists. Configuration tests explicitly prove `VRC_MCP_CONTROLLER_TOKEN` is not accepted as a source and secret values do not appear in errors or repr output.
+The only controller token ingress is `VRC_MCP_CONTROLLER_TOKEN_FILE`. No raw controller token environment variable or CLI token option exists.
 
-### Test-double review
+### Tests and one-call invariant
 
-The dependency-free read and mutation test executors call the supplied synchronous operation exactly once while recording the boundary. Mutation tests separately record every fake typed-client call and verify the complete ten-tool catalog maps one handler invocation to one controller-client invocation. The pinned-SDK outcome tests and official-client transport acceptance tests independently cover the real SDK wrapper layer, so the one-call/no-retry invariant is not dependent on a permissive mock alone.
+Dependency-free counting fakes, pinned-SDK tests, transport acceptance, and real-controller E2E all preserve the one-call/no-retry invariant. Test doubles do not authorize a hidden production retry path.
 
-### Intentional ignored/alternate-result behavior
+## Intentional ignored/alternate behavior
 
-No correctness-sensitive production result is silently ignored. The reviewed exceptions are:
+The reviewed intentional ignored/alternate-result behavior is limited to:
 
-- construction uses `ExitStack.pop_all()` only after successful server/tool registration to transfer executor cleanup ownership to the MCP lifespan;
-- repeated executor `close()` waits for the first shutdown rather than starting another shutdown;
-- sanitized unsafe controller identifiers are intentionally omitted from error metadata instead of echoed;
-- missing optional config values use documented defaults, while present invalid values fail closed;
-- test/E2E diagnostic-capture failure is secondary evidence only: the primary test failure remains authoritative and teardown failure independently forces nonzero exit.
+- `ExitStack.pop_all()` transferring cleanup ownership only after successful MCP construction;
+- repeated executor `close()` waiting for the first shutdown rather than initiating another shutdown;
+- unsafe controller identifiers being intentionally omitted from error metadata rather than echoed;
+- documented configuration defaults applying only when optional variables are absent;
+- test/E2E diagnostic-capture failures remaining secondary evidence that cannot convert the primary failure into success.
 
-These are not silent-success fallbacks.
+None is a silent-success fallback.
 
 ## Permanent regression contract
 
-`tests/test_mcp_unsafe_fallback_contract.py` makes the audit mechanically persistent. It fails CI if production MCP code introduces:
+`tests/test_mcp_unsafe_fallback_contract.py` permanently rejects broad production exception/pass fallbacks, unclassified mapping `.get(...)` growth, raw token ingress, transport-security overrides/legacy SSE, and retry/backoff/sleep APIs in mutation execution/outcome handling.
 
-- a bare or generic `Exception`/`BaseException` handler;
-- an AST `pass` fallback;
-- a new unclassified `.get(...)` use;
-- raw `VRC_MCP_CONTROLLER_TOKEN` ingress;
-- a `transport_security=` override or legacy SSE transport;
-- a retry/backoff/sleep call in execution, mutation, or outcome handling.
-
-Existing behavioral tests remain authoritative for exact one-call mappings, payload-safe logging, pinned-SDK compatibility failure, transport security, and real-controller E2E semantics.
+Existing behavioral tests remain authoritative for exact one-call mappings, payload-free errors, mutation ambiguity, SDK integration, transport security, and real-controller behavior.
 
 ## Result
 
 MCP-013 is satisfied on the reviewed source subject to the new closeout candidate passing permanent CI and Release Gates. No unsafe fallback or quiet failure remains unclassified in the reviewed MCP production surface.
+
+## 2026-09-12 cancellation/bounding remediation addendum
+
+A later code review of exact `master` `7b69ad82a6939c9619d8b8a0b9146c005bf6889e` found two classes of behavior that the original MCP-013 audit did not cover:
+
+1. post-admission task cancellation could abandon the asyncio wrapper while the synchronous controller call continued, allowing a later worker exception to become `Future exception was never retrieved`; and
+2. the typed Python HTTP client used unrestricted response-body reads before MCP screenshot-size validation.
+
+The original 2026-09-11 audit conclusions remain historical evidence for the scope reviewed then, but its statement that no production behavior defect existed is superseded for current `master` by `docs/VNC_REMOTE_CONTROL_SERVER_MCP_CANCELLATION_AND_BOUNDING_REMEDIATION_TODO_2026-09-12.md`.
+
+The remediation extends the audit to `asyncio.shield`, `asyncio.wrap_future`, cancellation propagation, done callbacks, executor-owned future lifetimes, shutdown races, default event-loop exception diagnostics, and controller response ingestion. The fixed executor transfers terminal-observation ownership to a non-logging done callback before post-admission cancellation escapes; mutation cancellation is conservatively classified as unknown/non-retry-safe; read cancellation remains cancellation while its worker result is drained. The typed client now bounds JSON, screenshot, metrics, and error bodies while reading them.
+
+Permanent regression coverage is provided by `tests/test_mcp_cancellation_contract.py`, `tests/test_python_response_bounds.py`, the extended `tests/test_mcp_execution.py`, and the extended `tests/test_mcp_unsafe_fallback_contract.py`. These tests also prove sensitive payloads are absent from cancellation cleanup diagnostics and that no retry/replay path was introduced.
