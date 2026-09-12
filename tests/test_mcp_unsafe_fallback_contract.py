@@ -84,6 +84,22 @@ class McpUnsafeFallbackContractTests(unittest.TestCase):
         self.assertNotIn('transport="sse"', server_source)
         self.assertNotIn("transport='sse'", server_source)
 
+    def test_cancellation_paths_have_explicit_terminal_observation(self) -> None:
+        """Admitted cancellation cannot abandon worker failures or imply replay safety."""
+        sources = self._sources()
+        execution = next(
+            source for path, source in sources.items() if path.name == "mcp_execution.py"
+        )
+        outcomes = next(
+            source for path, source in sources.items() if path.name == "mcp_outcomes.py"
+        )
+        self.assertIn("except asyncio.CancelledError", execution)
+        self.assertIn("add_done_callback(self._observe_abandoned_future)", execution)
+        self.assertIn("future.exception()", execution)
+        self.assertIn("except asyncio.CancelledError", outcomes)
+        self.assertIn('"kind": "mutation_outcome_unknown"', outcomes)
+        self.assertIn('"retry_safe": False', outcomes)
+
     def test_mutation_path_has_no_retry_backoff_or_sleep_api(self) -> None:
         """Mutation handling exposes no adapter retry/backoff timing mechanism."""
         reviewed = {
