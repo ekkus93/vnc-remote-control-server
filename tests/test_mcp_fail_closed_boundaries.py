@@ -75,7 +75,10 @@ class McpFailClosedBoundaryTests(unittest.TestCase):
             )
             with self.subTest(transport=transport, host=host, port=port):
                 with self.assertRaises(McpConfigError):
-                    mcp_server._run_configured_transport(server, config)
+                    mcp_server._run_configured_transport(  # pylint: disable=protected-access
+                        server,
+                        config,
+                    )
                 server.run.assert_not_called()
 
     def test_dynamic_validation_errors_reject_broad_builtin_classes(self) -> None:
