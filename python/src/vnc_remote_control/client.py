@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast, get_args
@@ -94,6 +95,16 @@ class _RequestOptions:
     json_body: dict[str, Any] | None = None
     extra_headers: dict[str, str] | None = None
     response_body_limit: int | None = None
+
+
+def _validate_timeout(timeout: object) -> float:
+    """Return one positive finite timeout without bool or string coercion."""
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float):
+        raise ValueError("timeout must be a positive finite number")
+    normalized = float(timeout)
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError("timeout must be a positive finite number")
+    return normalized
 
 
 def _require_object(payload: bytes, context: str) -> dict[str, Any]:
@@ -303,8 +314,7 @@ class VncRemoteControlClient:
             raise ValueError("base_url must not contain credentials")
         if parsed.query or parsed.fragment:
             raise ValueError("base_url must not contain a query string or fragment")
-        if timeout <= 0:
-            raise ValueError("timeout must be greater than zero")
+        normalized_timeout = _validate_timeout(timeout)
         if token is not None:
             if not token:
                 raise ValueError("token must not be empty")
@@ -313,7 +323,7 @@ class VncRemoteControlClient:
 
         self._base_url = base_url.rstrip("/")
         self._token = token
-        self._timeout = float(timeout)
+        self._timeout = normalized_timeout
         self._http_open = _http_open or cast(HttpOpen, urlopen)
         self._websocket_factory = _websocket_factory
 

@@ -42,6 +42,74 @@ const DEFAULT_STABLE_CONNECTION_RESET_MS: u64 = 10_000;
 const DEFAULT_MANUAL_RECONNECT_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_STALL_PROBE_AFTER_MS: u64 = 30_000;
 const DEFAULT_STALL_CONFIRM_AFTER_MS: u64 = 10_000;
+#[cfg(test)]
+const CONFIG_VALUE_ENVIRONMENT_NAMES: &[&str] = &[
+    "VRC_API_TOKEN_FILE",
+    "VRC_COMMAND_ACK_TIMEOUT_MS",
+    "VRC_COMMAND_CAPACITY",
+    "VRC_EVENT_CAPACITY",
+    "VRC_LISTEN_ADDR",
+    "VRC_MANUAL_RECONNECT_INTERVAL_MS",
+    "VRC_MAX_FRAMEBUFFER_BYTES",
+    "VRC_MAX_JSON_BYTES",
+    "VRC_POLL_INTERVAL_MS",
+    "VRC_PROCESS_INSTANCE",
+    "VRC_RECONNECT_JITTER_PER_MILLE",
+    "VRC_RECONNECT_MAX_MS",
+    "VRC_RECONNECT_MIN_MS",
+    "VRC_SCREENSHOT_MAX_CONCURRENT",
+    "VRC_SCREENSHOT_TIMEOUT_MS",
+    "VRC_SHUTDOWN_TIMEOUT_MS",
+    "VRC_STABLE_CONNECTION_RESET_MS",
+    "VRC_STALL_CONFIRM_AFTER_MS",
+    "VRC_STALL_PROBE_AFTER_MS",
+    "VRC_STARTUP_TIMEOUT_MS",
+    "VRC_VNC_CONNECT_TIMEOUT_MS",
+    "VRC_VNC_HOST",
+    "VRC_VNC_PASSWORD_FILE",
+    "VRC_VNC_PORT",
+    "VRC_VNC_READ_TIMEOUT_MS",
+    "VRC_WEBSOCKET_EVENT_CAPACITY",
+    "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+    "VRC_WEBSOCKET_MAX_CLIENTS",
+    "VRC_WEBSOCKET_PING_INTERVAL_MS",
+];
+const SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES: &[&str] = &[
+    "VRC_API_TOKEN_FILE",
+    "VRC_COMMAND_ACK_TIMEOUT_MS",
+    "VRC_COMMAND_CAPACITY",
+    "VRC_EVENT_CAPACITY",
+    "VRC_HTTP_BODY_TIMEOUT_MS",
+    "VRC_HTTP_HEADER_TIMEOUT_MS",
+    "VRC_HTTP_MAX_CONNECTIONS",
+    "VRC_LISTEN_ADDR",
+    "VRC_MANUAL_RECONNECT_INTERVAL_MS",
+    "VRC_MAX_FRAMEBUFFER_BYTES",
+    "VRC_MAX_JSON_BYTES",
+    "VRC_POLL_INTERVAL_MS",
+    "VRC_PROCESS_INSTANCE",
+    "VRC_RECONNECT_JITTER_PER_MILLE",
+    "VRC_RECONNECT_MAX_MS",
+    "VRC_RECONNECT_MIN_MS",
+    "VRC_SCREENSHOT_MAX_CONCURRENT",
+    "VRC_SCREENSHOT_TIMEOUT_MS",
+    "VRC_SHUTDOWN_GRACE_MS",
+    "VRC_SHUTDOWN_TIMEOUT_MS",
+    "VRC_STABLE_CONNECTION_RESET_MS",
+    "VRC_STALL_CONFIRM_AFTER_MS",
+    "VRC_STALL_PROBE_AFTER_MS",
+    "VRC_STARTUP_TIMEOUT_MS",
+    "VRC_VNC_CONNECT_TIMEOUT_MS",
+    "VRC_VNC_HOST",
+    "VRC_VNC_PASSWORD_FILE",
+    "VRC_VNC_PORT",
+    "VRC_VNC_READ_TIMEOUT_MS",
+    "VRC_WEBSOCKET_EVENT_CAPACITY",
+    "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+    "VRC_WEBSOCKET_MAX_CLIENTS",
+    "VRC_WEBSOCKET_PING_INTERVAL_MS",
+];
+const CONTROLLER_ENVIRONMENT_PREFIX: &str = "VRC_";
 const MAX_SECRET_BYTES: u64 = 4 * 1024;
 const MAX_JSON_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CHANNEL_CAPACITY: usize = 65_536;
@@ -150,6 +218,8 @@ impl ControllerConfig {
         E: EnvironmentSource,
         S: SecretReader,
     {
+        reject_unknown_controller_environment_names(environment)?;
+
         let listen_address = value_or(environment, "VRC_LISTEN_ADDR", DEFAULT_LISTEN_ADDRESS)?
             .parse::<SocketAddr>()
             .map_err(|_| ConfigError::InvalidValue("VRC_LISTEN_ADDR"))?;
@@ -366,6 +436,8 @@ impl ControllerConfig {
 pub enum ConfigError {
     /// A configured environment value is syntactically or semantically invalid.
     InvalidValue(&'static str),
+    /// A controller-prefixed environment variable is not part of the closed vocabulary.
+    UnsupportedEnvironmentVariable(String),
     /// A secret file could not be read or failed the file policy.
     SecretFile {
         /// Configured secret path.
@@ -381,6 +453,12 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidValue(name) => write!(formatter, "invalid configuration value: {name}"),
+            Self::UnsupportedEnvironmentVariable(name) => {
+                write!(
+                    formatter,
+                    "unsupported controller environment variable: {name}"
+                )
+            }
             Self::SecretFile { path, reason } => {
                 write!(
                     formatter,
@@ -406,6 +484,9 @@ pub enum EnvironmentReadError {
 pub trait EnvironmentSource {
     /// Distinguishes an absent value from a present non-Unicode value.
     fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError>;
+
+    /// Returns the visible environment variable names for closed-vocabulary validation.
+    fn names(&self) -> Vec<String>;
 }
 
 /// Current process environment source.
@@ -418,6 +499,12 @@ impl EnvironmentSource for ProcessEnvironment {
             Err(env::VarError::NotPresent) => Ok(None),
             Err(env::VarError::NotUnicode(_)) => Err(EnvironmentReadError::NotUnicode),
         }
+    }
+
+    fn names(&self) -> Vec<String> {
+        env::vars_os()
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect()
     }
 }
 
@@ -544,6 +631,19 @@ fn validate_secret_permissions(_path: &Path, _metadata: &fs::Metadata) -> Result
     Ok(())
 }
 
+fn reject_unknown_controller_environment_names<E: EnvironmentSource>(
+    environment: &E,
+) -> Result<(), ConfigError> {
+    for name in environment.names() {
+        if name.starts_with(CONTROLLER_ENVIRONMENT_PREFIX)
+            && !SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES.contains(&name.as_str())
+        {
+            return Err(ConfigError::UnsupportedEnvironmentVariable(name));
+        }
+    }
+    Ok(())
+}
+
 fn environment_value<E: EnvironmentSource>(
     environment: &E,
     name: &'static str,
@@ -644,6 +744,10 @@ mod tests {
         fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
             Ok(self.0.get(name).cloned())
         }
+
+        fn names(&self) -> Vec<String> {
+            self.0.keys().cloned().collect()
+        }
     }
 
     struct NonUnicodeEnvironment {
@@ -657,6 +761,10 @@ mod tests {
             } else {
                 Ok(None)
             }
+        }
+
+        fn names(&self) -> Vec<String> {
+            vec![self.rejected_name.to_owned()]
         }
     }
 
@@ -752,37 +860,7 @@ mod tests {
 
     #[test]
     fn non_unicode_controller_environment_values_fail_closed() {
-        for name in [
-            "VRC_LISTEN_ADDR",
-            "VRC_API_TOKEN_FILE",
-            "VRC_VNC_PASSWORD_FILE",
-            "VRC_PROCESS_INSTANCE",
-            "VRC_MAX_JSON_BYTES",
-            "VRC_COMMAND_ACK_TIMEOUT_MS",
-            "VRC_SHUTDOWN_TIMEOUT_MS",
-            "VRC_SCREENSHOT_MAX_CONCURRENT",
-            "VRC_SCREENSHOT_TIMEOUT_MS",
-            "VRC_WEBSOCKET_EVENT_CAPACITY",
-            "VRC_WEBSOCKET_MAX_CLIENTS",
-            "VRC_WEBSOCKET_PING_INTERVAL_MS",
-            "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
-            "VRC_VNC_HOST",
-            "VRC_VNC_PORT",
-            "VRC_VNC_CONNECT_TIMEOUT_MS",
-            "VRC_VNC_READ_TIMEOUT_MS",
-            "VRC_COMMAND_CAPACITY",
-            "VRC_EVENT_CAPACITY",
-            "VRC_MAX_FRAMEBUFFER_BYTES",
-            "VRC_POLL_INTERVAL_MS",
-            "VRC_STARTUP_TIMEOUT_MS",
-            "VRC_RECONNECT_MIN_MS",
-            "VRC_RECONNECT_MAX_MS",
-            "VRC_RECONNECT_JITTER_PER_MILLE",
-            "VRC_STABLE_CONNECTION_RESET_MS",
-            "VRC_MANUAL_RECONNECT_INTERVAL_MS",
-            "VRC_STALL_PROBE_AFTER_MS",
-            "VRC_STALL_CONFIRM_AFTER_MS",
-        ] {
+        for name in CONFIG_VALUE_ENVIRONMENT_NAMES {
             let error = ControllerConfig::load_from(
                 &NonUnicodeEnvironment {
                     rejected_name: name,
@@ -790,7 +868,7 @@ mod tests {
                 &secrets(),
             )
             .expect_err("present non-Unicode environment value must fail");
-            assert!(matches!(error, ConfigError::InvalidValue(value) if value == name));
+            assert!(matches!(error, ConfigError::InvalidValue(value) if value == *name));
         }
     }
 
@@ -839,14 +917,49 @@ mod tests {
     }
 
     #[test]
-    fn secret_values_cannot_be_supplied_directly_by_environment() {
+    fn raw_secret_values_cannot_be_supplied_directly_by_environment() {
+        for (name, secret_value) in [
+            ("VRC_API_TOKEN", "ignored-api-value"),
+            ("VRC_VNC_PASSWORD", "ignored-vnc-value"),
+        ] {
+            let environment =
+                MapEnvironment(HashMap::from([(name.to_owned(), secret_value.to_owned())]));
+            let error = ControllerConfig::load_from(&environment, &secrets())
+                .expect_err("raw secret-shaped environment variable is rejected");
+            let rendered = format!("{error:?} {error}");
+            assert!(matches!(
+                error,
+                ConfigError::UnsupportedEnvironmentVariable(variable) if variable == name
+            ));
+            assert!(rendered.contains(name));
+            assert!(!rendered.contains(secret_value));
+        }
+    }
+
+    #[test]
+    fn unknown_controller_environment_names_fail_closed_without_value_echo() {
         let environment = MapEnvironment(HashMap::from([
-            ("VRC_API_TOKEN".to_owned(), "ignored-api-value".to_owned()),
-            (
-                "VRC_VNC_PASSWORD".to_owned(),
-                "ignored-vnc-value".to_owned(),
-            ),
+            ("VRC_LISTEN_ADR".to_owned(), "127.0.0.1:9090".to_owned()),
+            ("HOME".to_owned(), "unrelated-process-value".to_owned()),
         ]));
+        let error = ControllerConfig::load_from(&environment, &secrets())
+            .expect_err("unknown controller-prefixed environment variable is rejected");
+        let rendered = format!("{error:?} {error}");
+        assert!(matches!(
+            error,
+            ConfigError::UnsupportedEnvironmentVariable(variable) if variable == "VRC_LISTEN_ADR"
+        ));
+        assert!(rendered.contains("VRC_LISTEN_ADR"));
+        assert!(!rendered.contains("127.0.0.1:9090"));
+        assert!(!rendered.contains("unrelated-process-value"));
+    }
+
+    #[test]
+    fn unrelated_environment_names_are_preserved() {
+        let environment = MapEnvironment(HashMap::from([(
+            "HOME".to_owned(),
+            "unrelated-process-value".to_owned(),
+        )]));
         let config = ControllerConfig::load_from(&environment, &secrets()).expect("config loads");
         assert_eq!(config.api_token.expose_secret_for_test(), "api-token");
         assert_eq!(
