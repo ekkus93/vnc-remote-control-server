@@ -19,7 +19,11 @@ from importlib import import_module
 from typing import Any, TypeAlias, cast
 
 from .client import VncRemoteControlClient
-from .mcp_config import McpConfig, McpConfigError
+from .mcp_config import (
+    McpConfig,
+    McpConfigError,
+    validate_mcp_transport_configuration,
+)
 from .mcp_execution import BoundedControllerExecutor
 from .mcp_mutation_tools import (
     McpMutationRuntime,
@@ -218,6 +222,11 @@ def create_mcp_server(
 
 def _run_configured_transport(server: Any, config: McpConfig) -> None:
     """Run exactly the validated MCP transport without compatibility fallback."""
+    validate_mcp_transport_configuration(
+        config.transport,
+        config.http_host,
+        config.http_port,
+    )
     if config.transport == "stdio":
         # The pinned SDK owns stdio lifecycle and follows the MCP shutdown contract:
         # the host closes stdin/EOF first, then applies its bounded escalation policy.
@@ -225,18 +234,20 @@ def _run_configured_transport(server: Any, config: McpConfig) -> None:
         # blocked on its private stdin duplicate, so signal-only unwinding can hang.
         server.run(transport="stdio")
         return
-
-    # Config accepts only the three exact loopback spellings for which mcp==2.1.1
-    # auto-enables its DNS-rebinding middleware. Deliberately omit
-    # ``transport_security`` so the official Host/Origin policy is not replaced or
-    # disabled here. Stateless mode prevents persistent HTTP session accumulation;
-    # controller calls remain independently bounded by the shared executor.
-    server.run(
-        transport="streamable-http",
-        host=config.http_host,
-        port=config.http_port,
-        stateless_http=True,
-    )
+    if config.transport == "streamable-http":
+        # Config accepts only the three exact loopback spellings for which mcp==2.1.1
+        # auto-enables its DNS-rebinding middleware. Deliberately omit
+        # ``transport_security`` so the official Host/Origin policy is not replaced or
+        # disabled here. Stateless mode prevents persistent HTTP session accumulation;
+        # controller calls remain independently bounded by the shared executor.
+        server.run(
+            transport="streamable-http",
+            host=config.http_host,
+            port=config.http_port,
+            stateless_http=True,
+        )
+        return
+    raise McpConfigError("invalid VRC_MCP_TRANSPORT")
 
 
 def main() -> None:
