@@ -55,10 +55,14 @@ This checklist tracks a narrow hardening follow-up after the completed MCP Fail-
   - Local targeted Python validation passed: `tests.test_post_fcr_hardening`, `tests.test_mcp_unsafe_fallback_contract`, `tests.test_mcp_outcomes`, and `tests.test_python_client`.
 - [x] Run focused local validation for changed Rust tests where possible.
   - Local sandbox has no `cargo`; changed Rust config tests are covered by exact PR-head CI and Release Gates below.
-- [ ] Run repository formatting/lint/type/unit gates through CI.
-- [ ] Require exact PR-head CI success.
-- [ ] Require exact PR-head Release Gates success.
-- [ ] Record exact PR-head SHA and CI run IDs in this TODO.
+- [x] Run repository formatting/lint/type/unit gates through CI.
+  - Exact PR-head CI run `34899631499` passed repository formatting, Clippy, Rust tests, documentation, Python compile, Ruff, Pylint, mypy, Python/workflow contract tests, shell syntax, and CI evidence generation on candidate `84502ffe6c8425079f564e8b65b24e9d4570a498`.
+- [x] Require exact PR-head CI success.
+  - CI run `34899631499` passed on exact PR-head candidate `84502ffe6c8425079f564e8b65b24e9d4570a498`.
+- [x] Require exact PR-head Release Gates success.
+  - Release Gates run `34899631331` passed on exact PR-head candidate `84502ffe6c8425079f564e8b65b24e9d4570a498`.
+- [x] Record exact PR-head SHA and CI run IDs in this TODO.
+  - Candidate SHA: `84502ffe6c8425079f564e8b65b24e9d4570a498`; CI: `34899631499`; Release Gates: `34899631331`.
 
 ## PFH-006 — Merge and post-merge validation
 
@@ -72,4 +76,4 @@ This checklist tracks a narrow hardening follow-up after the completed MCP Fail-
 
 ## Completion status
 
-PFH-001 through PFH-004 are implemented locally. PFH-005 and PFH-006 remain open for exact PR-head qualification, merge, post-merge validation, and final evidence reconciliation.
+PFH-001 through PFH-005 are implemented and exact-candidate qualified. PFH-006 remains open for approved merge, post-merge validation, and final evidence reconciliation.
