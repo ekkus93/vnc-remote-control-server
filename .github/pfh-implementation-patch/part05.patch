@@ -1,0 +1,62 @@
++            ConfigError::UnsupportedEnvironmentVariable(variable) if variable == "VRC_LISTEN_ADR"
++        ));
++        assert!(rendered.contains("VRC_LISTEN_ADR"));
++        assert!(!rendered.contains("127.0.0.1:9090"));
++        assert!(!rendered.contains("unrelated-process-value"));
++    }
++
++    #[test]
++    fn unrelated_environment_names_are_preserved() {
++        let environment = MapEnvironment(HashMap::from([(
++            "HOME".to_owned(),
++            "unrelated-process-value".to_owned(),
++        )]));
+         let config = ControllerConfig::load_from(&environment, &secrets()).expect("config loads");
+         assert_eq!(config.api_token.expose_secret_for_test(), "api-token");
+         assert_eq!(
+diff --git a/crates/controller-api/src/duration_policy.rs b/crates/controller-api/src/duration_policy.rs
+index 8c4ff6e..d182e74 100644
+--- a/crates/controller-api/src/duration_policy.rs
++++ b/crates/controller-api/src/duration_policy.rs
+@@ -53,6 +53,10 @@ mod tests {
+         fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
+             Ok(self.0.get(name).cloned())
+         }
++
++        fn names(&self) -> Vec<String> {
++            self.0.keys().cloned().collect()
++        }
+     }
+ 
+     struct Secrets;
+diff --git a/python/src/vnc_remote_control/client.py b/python/src/vnc_remote_control/client.py
+index 60452e9..3c7ee38 100644
+--- a/python/src/vnc_remote_control/client.py
++++ b/python/src/vnc_remote_control/client.py
+@@ -3,6 +3,7 @@
+ from __future__ import annotations
+ 
+ import json
++import math
+ from collections.abc import Callable, Iterator, Sequence
+ from dataclasses import dataclass
+ from typing import Any, Protocol, cast, get_args
+@@ -96,6 +97,16 @@ class _RequestOptions:
+     response_body_limit: int | None = None
+ 
+ 
++def _validate_timeout(timeout: object) -> float:
++    """Return one positive finite timeout without bool or string coercion."""
++    if isinstance(timeout, bool) or not isinstance(timeout, int | float):
++        raise ValueError("timeout must be a positive finite number")
++    normalized = float(timeout)
++    if not math.isfinite(normalized) or normalized <= 0:
++        raise ValueError("timeout must be a positive finite number")
++    return normalized
++
++
+ def _require_object(payload: bytes, context: str) -> dict[str, Any]:
+     try:
+         decoded = payload.decode("utf-8")
+@@ -303,8 +314,7 @@ class VncRemoteControlClient:
+             raise ValueError("base_url must not contain credentials")
