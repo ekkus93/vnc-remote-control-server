@@ -83,3 +83,17 @@ The original 2026-09-11 audit conclusions remain historical evidence for the sco
 The remediation extends the audit to `asyncio.shield`, `asyncio.wrap_future`, cancellation propagation, done callbacks, executor-owned future lifetimes, shutdown races, default event-loop exception diagnostics, and controller response ingestion. The fixed executor transfers terminal-observation ownership to a non-logging done callback before post-admission cancellation escapes; mutation cancellation is conservatively classified as unknown/non-retry-safe; read cancellation remains cancellation while its worker result is drained. The typed client now bounds JSON, screenshot, metrics, and error bodies while reading them.
 
 Permanent regression coverage is provided by `tests/test_mcp_cancellation_contract.py`, `tests/test_python_response_bounds.py`, the extended `tests/test_mcp_execution.py`, and the extended `tests/test_mcp_unsafe_fallback_contract.py`. These tests also prove sensitive payloads are absent from cancellation cleanup diagnostics and that no retry/replay path was introduced.
+
+## 2026-09-14 fail-closed boundary reconciliation addendum
+
+A fresh Ralph Bridge re-audit of exact `master` `4371f1f30c11c7bc72237bc9cf842ebaf04de354` compared current source directly against stale PR #41 and found three additional production boundary defects that the historical MCP-013 audit and the 2026-09-12 cancellation/bounding remediation had not closed:
+
+1. `_run_configured_transport()` revalidated neither the injected transport nor HTTP bind values immediately before SDK dispatch and implicitly treated every non-`stdio` transport as Streamable HTTP;
+2. unknown `VRC_MCP_*` environment variables were silently ignored, allowing typos or raw-token-shaped aliases to create a quiet configuration mismatch; and
+3. `McpOutcomeToolRegistrar` accepted caller-supplied mutation validation exception classes without preventing broad built-in classes from widening handled-failure classification.
+
+These defects were fixed through PR #50 rather than by merging stale PR #41 wholesale. Current production code now revalidates transport/host/port at final dispatch, rejects unknown MCP-prefixed environment names using a closed vocabulary, and accepts only application-specific `ValueError` subclasses for dynamic mutation validation classification. Permanent behavioral coverage is in `tests/test_mcp_fail_closed_boundaries.py`.
+
+The exact final PR candidate `4d0689405f34d068fced58cd8af793007a433599` passed CI `34872815462` and Release Gates `34872815475`. PR #50 was squash-merged to exact `master` `c3748230acc6f375ba274e999f85a17ee0be3cda`, which passed fresh CI `34873573103`, Release Gates `34873573179`, and Publish CI Status `34873575943`, including production MCP/TigerVNC E2E and R13 Compose integration/E2E.
+
+The authoritative detailed reconciliation is `docs/VNC_REMOTE_CONTROL_SERVER_MCP_FAIL_CLOSED_RECONCILIATION_2026-09-14.md`. Historical statements above that no production behavior defect remained are preserved as evidence of the conclusions reached on their exact reviewed generations, but are superseded for current `master` by the 2026-09-12 and 2026-09-14 addenda.
