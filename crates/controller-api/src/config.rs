@@ -863,7 +863,7 @@ mod tests {
         for name in CONFIG_VALUE_ENVIRONMENT_NAMES {
             let error = ControllerConfig::load_from(
                 &NonUnicodeEnvironment {
-                    rejected_name: *name,
+                    rejected_name: name,
                 },
                 &secrets(),
             )
