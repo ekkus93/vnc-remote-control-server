@@ -1,0 +1,75 @@
+@@ -544,6 +628,19 @@ fn validate_secret_permissions(_path: &Path, _metadata: &fs::Metadata) -> Result
+     Ok(())
+ }
+ 
++fn reject_unknown_controller_environment_names<E: EnvironmentSource>(
++    environment: &E,
++) -> Result<(), ConfigError> {
++    for name in environment.names() {
++        if name.starts_with(CONTROLLER_ENVIRONMENT_PREFIX)
++            && !SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES.contains(&name.as_str())
++        {
++            return Err(ConfigError::UnsupportedEnvironmentVariable(name));
++        }
++    }
++    Ok(())
++}
++
+ fn environment_value<E: EnvironmentSource>(
+     environment: &E,
+     name: &'static str,
+@@ -644,6 +741,10 @@ mod tests {
+         fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
+             Ok(self.0.get(name).cloned())
+         }
++
++        fn names(&self) -> Vec<String> {
++            self.0.keys().cloned().collect()
++        }
+     }
+ 
+     struct NonUnicodeEnvironment {
+@@ -658,6 +759,10 @@ mod tests {
+                 Ok(None)
+             }
+         }
++
++        fn names(&self) -> Vec<String> {
++            vec![self.rejected_name.to_owned()]
++        }
+     }
+ 
+     struct MapSecrets(HashMap<PathBuf, String>);
+@@ -752,45 +857,15 @@ mod tests {
+ 
+     #[test]
+     fn non_unicode_controller_environment_values_fail_closed() {
+-        for name in [
+-            "VRC_LISTEN_ADDR",
+-            "VRC_API_TOKEN_FILE",
+-            "VRC_VNC_PASSWORD_FILE",
+-            "VRC_PROCESS_INSTANCE",
+-            "VRC_MAX_JSON_BYTES",
+-            "VRC_COMMAND_ACK_TIMEOUT_MS",
+-            "VRC_SHUTDOWN_TIMEOUT_MS",
+-            "VRC_SCREENSHOT_MAX_CONCURRENT",
+-            "VRC_SCREENSHOT_TIMEOUT_MS",
+-            "VRC_WEBSOCKET_EVENT_CAPACITY",
+-            "VRC_WEBSOCKET_MAX_CLIENTS",
+-            "VRC_WEBSOCKET_PING_INTERVAL_MS",
+-            "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+-            "VRC_VNC_HOST",
+-            "VRC_VNC_PORT",
+-            "VRC_VNC_CONNECT_TIMEOUT_MS",
+-            "VRC_VNC_READ_TIMEOUT_MS",
+-            "VRC_COMMAND_CAPACITY",
+-            "VRC_EVENT_CAPACITY",
+-            "VRC_MAX_FRAMEBUFFER_BYTES",
+-            "VRC_POLL_INTERVAL_MS",
+-            "VRC_STARTUP_TIMEOUT_MS",
+-            "VRC_RECONNECT_MIN_MS",
+-            "VRC_RECONNECT_MAX_MS",
+-            "VRC_RECONNECT_JITTER_PER_MILLE",
+-            "VRC_STABLE_CONNECTION_RESET_MS",
+-            "VRC_MANUAL_RECONNECT_INTERVAL_MS",
+-            "VRC_STALL_PROBE_AFTER_MS",
