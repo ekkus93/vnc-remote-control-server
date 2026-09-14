@@ -164,6 +164,7 @@ def _reject_unknown_mcp_environment(environment: Mapping[str, str]) -> None:
     ):
         raise McpConfigError(
             "unsupported VRC_MCP_* environment variable; "
+            "VRC_MCP_CONTROLLER_TOKEN_FILE is the only controller token source and "
             "only documented MCP variables are accepted"
         )
 
