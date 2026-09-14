@@ -1,0 +1,53 @@
++        registrar = _registrar(mutation_validation_errors=(LocalMutationValidationError,))
++        self.assertIsInstance(registrar, McpOutcomeToolRegistrar)
++
++    def test_public_client_accepts_positive_numeric_timeouts(self) -> None:
++        """Positive int and float timeouts are normalized without lossy defaults."""
++        for value, expected in ((1, 1.0), (3.5, 3.5)):
++            with self.subTest(value=value):
++                client = VncClient("http://controller", timeout=value)
++                self.assertEqual(client.timeout, expected)
++
++    def test_public_client_rejects_invalid_timeout_values(self) -> None:
++        """Timeout validation rejects bools, nonfinite values, and nonnumeric objects."""
++        invalid_values = (
++            True,
++            False,
++            0,
++            -1,
++            0.0,
++            -0.1,
++            math.nan,
++            math.inf,
++            -math.inf,
++            "5",
++            b"5",
++            None,
++            object(),
++        )
++        for value in invalid_values:
++            with self.subTest(value=repr(value)):
++                with self.assertRaisesRegex(
++                    ValueError,
++                    "timeout must be a positive finite number",
++                ):
++                    VncClient("http://controller", timeout=cast(float, value))
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- a/docs/VNC_REMOTE_CONTROL_SERVER_POST_FCR_HARDENING_TODO_2026-09-14.md
++++ b/docs/VNC_REMOTE_CONTROL_SERVER_POST_FCR_HARDENING_TODO_2026-09-14.md
+@@ -1,58 +1,60 @@
+ # VNC Remote Control Server — Post-FCR Hardening TODO
+ 
+-**Date:** 2026-09-14  
+-**Spec:** `docs/VNC_REMOTE_CONTROL_SERVER_POST_FCR_HARDENING_SPEC_2026-09-14.md`  
+-**Parent review:** post-FCR code review of `master` at `f5b9cf39bdcca3abc4105ba6cce40a72251d062e`  
++**Date:** 2026-09-14
++**Spec:** `docs/VNC_REMOTE_CONTROL_SERVER_POST_FCR_HARDENING_SPEC_2026-09-14.md`
++**Parent review:** post-FCR code review of `master` at `f5b9cf39bdcca3abc4105ba6cce40a72251d062e`
+ **Prior closeout:** `docs/VNC_REMOTE_CONTROL_SERVER_MCP_FAIL_CLOSED_RECONCILIATION_TODO_2026-09-14.md`
+ 
+ This checklist tracks a narrow hardening follow-up after the completed MCP Fail-Closed Reconciliation. It does not reopen FCR-001 through FCR-008. The goal is to fix one direct FCR-adjacent constructor-boundary gap and two broader fail-closed validation opportunities found during review.
+ 
