@@ -1,0 +1,34 @@
+-- [ ] Add Rust config tests for raw secret-shaped aliases and value non-echo behavior.
+-- [ ] Add Rust config tests proving supported variables still work.
++- [x] Identify every currently supported controller-side `VRC_*` environment variable.
++- [x] Define the supported controller `VRC_*` vocabulary in one place.
++- [x] Reject unknown controller-side `VRC_*` variables before startup accepts configuration.
++- [x] Preserve unrelated non-`VRC_*` process environment variables.
++- [x] Reject raw secret-shaped aliases such as `VRC_API_TOKEN` and `VRC_VNC_PASSWORD` when the supported source remains file-based.
++- [x] Ensure diagnostics name unsupported variables but never echo supplied values or secret file contents.
++- [x] Preserve supported file-based secret loading behavior.
++- [x] Preserve supported non-secret controller configuration behavior and defaults.
++- [x] Add Rust config tests for unknown controller `VRC_*` names.
++- [x] Add Rust config tests for raw secret-shaped aliases and value non-echo behavior.
++- [x] Add Rust config tests proving supported variables still work.
+ 
+ ## PFH-003 — Public Python client timeout validation
+ 
+-- [ ] Replace the public client timeout boundary with explicit positive finite numeric validation.
+-- [ ] Reject `bool` values even though `bool` is an `int` subclass in Python.
+-- [ ] Reject zero, negative numbers, NaN, and infinity.
+-- [ ] Reject strings, bytes, `None`, and arbitrary nonnumeric objects with stable `ValueError` behavior.
+-- [ ] Preserve accepted positive `int` and positive `float` timeout values.
+-- [ ] Add Python client tests for accepted timeout values.
+-- [ ] Add Python client tests for rejected timeout values and stable diagnostics.
++- [x] Replace the public client timeout boundary with explicit positive finite numeric validation.
++- [x] Reject `bool` values even though `bool` is an `int` subclass in Python.
++- [x] Reject zero, negative numbers, NaN, and infinity.
++- [x] Reject strings, bytes, `None`, and arbitrary nonnumeric objects with stable `ValueError` behavior.
++- [x] Preserve accepted positive `int` and positive `float` timeout values.
++- [x] Add Python client tests for accepted timeout values.
++- [x] Add Python client tests for rejected timeout values and stable diagnostics.
+ 
+ ## PFH-004 — Static safety contract preservation
+ 
+-- [ ] Preserve `tests/test_mcp_unsafe_fallback_contract.py` without weakening broad-exception, raw-token, retry, transport, SSE, or silent-fallback checks.
