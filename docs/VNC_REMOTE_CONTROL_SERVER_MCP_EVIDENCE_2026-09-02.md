@@ -232,7 +232,7 @@ MCP-001 through MCP-013 were reconciled against current source, permanent tests,
 
 No TODO checkbox is closed solely because a commit message claims completion. The acceptance basis is executable source/tests, workflow configuration, documentation contracts, exact GitHub Actions run results, and the explicit audit/evidence records cited above.
 
-The historical MCP implementation phase was complete for its reviewed scope. Later post-closeout reviews found additional defects and remediated them without changing the architecture or reopening already satisfied functional catalog requirements. Sections 16 and 17 below are authoritative for current hardening state.
+The MCP implementation phase is complete for the original reviewed scope. Later post-closeout reviews found additional defects and remediated them without changing the architecture or reopening already satisfied functional catalog requirements. Sections 16 and 17 below are authoritative for current hardening state.
 
 ## 16. Post-closeout cancellation and response-bounding remediation
 
