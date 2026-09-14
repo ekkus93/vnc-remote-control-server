@@ -454,7 +454,10 @@ impl fmt::Display for ConfigError {
         match self {
             Self::InvalidValue(name) => write!(formatter, "invalid configuration value: {name}"),
             Self::UnsupportedEnvironmentVariable(name) => {
-                write!(formatter, "unsupported controller environment variable: {name}")
+                write!(
+                    formatter,
+                    "unsupported controller environment variable: {name}"
+                )
             }
             Self::SecretFile { path, reason } => {
                 write!(
@@ -919,10 +922,8 @@ mod tests {
             ("VRC_API_TOKEN", "ignored-api-value"),
             ("VRC_VNC_PASSWORD", "ignored-vnc-value"),
         ] {
-            let environment = MapEnvironment(HashMap::from([(
-                name.to_owned(),
-                secret_value.to_owned(),
-            )]));
+            let environment =
+                MapEnvironment(HashMap::from([(name.to_owned(), secret_value.to_owned())]));
             let error = ControllerConfig::load_from(&environment, &secrets())
                 .expect_err("raw secret-shaped environment variable is rejected");
             let rendered = format!("{error:?} {error}");
