@@ -111,6 +111,11 @@ class McpOutcomeToolRegistrar:
         text_content_factory: McpTextContentFactory,
         mutation_validation_errors: tuple[type[Exception], ...],
     ) -> None:
+        if not isinstance(mutation_validation_errors, tuple):
+            raise McpOutcomeRegistrationError(
+                "mutation validation errors must be a tuple of "
+                "application-specific ValueError subclasses"
+            )
         if any(
             not isinstance(error_type, type)
             or not issubclass(error_type, ValueError)
@@ -119,8 +124,8 @@ class McpOutcomeToolRegistrar:
             for error_type in mutation_validation_errors
         ):
             raise McpOutcomeRegistrationError(
-                "mutation validation errors must be application-specific "
-                "ValueError subclasses"
+                "mutation validation errors must be a tuple of "
+                "application-specific ValueError subclasses"
             )
         self._registrar = registrar
         self._call_tool_result_factory = call_tool_result_factory
