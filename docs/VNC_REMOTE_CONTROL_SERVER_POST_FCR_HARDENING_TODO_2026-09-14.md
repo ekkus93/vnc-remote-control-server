@@ -54,26 +54,34 @@ This checklist tracks a narrow hardening follow-up after the completed MCP Fail-
 - [x] Run focused local validation for changed Python tests where possible.
   - Local targeted Python validation passed: `tests.test_post_fcr_hardening`, `tests.test_mcp_unsafe_fallback_contract`, `tests.test_mcp_outcomes`, and `tests.test_python_client`.
 - [x] Run focused local validation for changed Rust tests where possible.
-  - Local sandbox has no `cargo`; changed Rust config tests are covered by exact PR-head CI and Release Gates below.
+  - Local sandbox had no `cargo`; changed Rust config tests were covered by exact PR-head CI and Release Gates.
 - [x] Run repository formatting/lint/type/unit gates through CI.
-  - Exact PR-head CI run `34899631499` passed repository formatting, Clippy, Rust tests, documentation, Python compile, Ruff, Pylint, mypy, Python/workflow contract tests, shell syntax, and CI evidence generation on candidate `84502ffe6c8425079f564e8b65b24e9d4570a498`.
+  - Exact PR-head CI run `34900304780` passed repository formatting, Clippy, Rust tests, documentation, Python compile, Ruff, Pylint, mypy, Python/workflow contract tests, shell syntax, and CI evidence generation on final candidate `3d4a3b19a5aa3124193287b321a757ad016e9ee4`.
 - [x] Require exact PR-head CI success.
-  - CI run `34899631499` passed on exact PR-head candidate `84502ffe6c8425079f564e8b65b24e9d4570a498`.
+  - CI run `34900304780` passed on exact PR-head candidate `3d4a3b19a5aa3124193287b321a757ad016e9ee4`.
 - [x] Require exact PR-head Release Gates success.
-  - Release Gates run `34899631331` passed on exact PR-head candidate `84502ffe6c8425079f564e8b65b24e9d4570a498`.
+  - Release Gates run `34900304823` passed on exact PR-head candidate `3d4a3b19a5aa3124193287b321a757ad016e9ee4`.
 - [x] Record exact PR-head SHA and CI run IDs in this TODO.
-  - Candidate SHA: `84502ffe6c8425079f564e8b65b24e9d4570a498`; CI: `34899631499`; Release Gates: `34899631331`.
+  - Final candidate SHA: `3d4a3b19a5aa3124193287b321a757ad016e9ee4`; CI: `34900304780`; Release Gates: `34900304823`.
+  - Earlier candidate `84502ffe6c8425079f564e8b65b24e9d4570a498` also passed CI `34899631499` and Release Gates `34899631331`, but it was superseded by the evidence-reconciliation commit above.
 
 ## PFH-006 — Merge and post-merge validation
 
-- [ ] Merge through the repository's approved merge path only after exact candidate qualification is green.
-- [ ] Record merged `master` SHA in this TODO.
-- [ ] Require fresh CI success on the exact merged `master` SHA.
-- [ ] Require fresh Release Gates success on the exact merged `master` SHA.
-- [ ] Require fresh Publish CI Status success on the exact merged `master` SHA.
-- [ ] Verify merged-master CI includes production MCP/TigerVNC E2E.
-- [ ] Verify merged-master CI includes R13 Compose integration/E2E.
+- [x] Merge through the repository's approved merge path only after exact candidate qualification is green.
+  - PR #58 was merged through the Ralph Bridge gated squash path after exact final candidate `3d4a3b19a5aa3124193287b321a757ad016e9ee4` passed CI `34900304780` and Release Gates `34900304823`.
+- [x] Record merged `master` SHA in this TODO.
+  - Implementation merge landed on `master` as `a4ef90b770766c5a5d14bbf85513c8ec95ca56b6`.
+- [x] Require fresh CI success on the exact merged `master` SHA.
+  - Post-merge CI run `34900972475` passed on exact `master` SHA `a4ef90b770766c5a5d14bbf85513c8ec95ca56b6`.
+- [x] Require fresh Release Gates success on the exact merged `master` SHA.
+  - Post-merge Release Gates run `34900972446` passed on exact `master` SHA `a4ef90b770766c5a5d14bbf85513c8ec95ca56b6`.
+- [x] Require fresh Publish CI Status success on the exact merged `master` SHA.
+  - Final post-merge Publish CI Status run `34901476949` passed for exact `master` SHA `a4ef90b770766c5a5d14bbf85513c8ec95ca56b6`.
+- [x] Verify merged-master CI includes production MCP/TigerVNC E2E.
+  - CI run `34900972475` passed `Run MCP production controller/TigerVNC E2E` in the secured desktop/native adapter job.
+- [x] Verify merged-master CI includes R13 Compose integration/E2E.
+  - CI run `34900972475` passed `Run R13 Compose integration and E2E validation` in the secured desktop/native adapter job.
 
 ## Completion status
 
-PFH-001 through PFH-005 are implemented and exact-candidate qualified. PFH-006 remains open for approved merge, post-merge validation, and final evidence reconciliation.
+PFH-001 through PFH-006 are implemented, exact-candidate qualified, merged to `master`, post-merge validated, and reconciled in this TODO.
