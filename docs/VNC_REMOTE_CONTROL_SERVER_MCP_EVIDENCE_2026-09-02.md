@@ -12,7 +12,7 @@ This file is the final evidence record for MCP-001 through MCP-015. Checkboxes a
 
 The MCP phase started from repository `master` SHA `e3a719600b03b5622ceec9e013dfc9ef94c12702`; the dated MCP specification was committed at `b454c754291a950a6d21ede9dd9594e5e45530`.
 
-The prerequisite Code Review Remediation V2 phase is complete. Its authoritative validated implementation generation is `4956a624be10ddb4b23aa23bcea23560b9c13a24`, with CI `33666006266` and Release Gates `33666005936` both successful. V2 explicitly released the prior MCP deferral only after all V2-R0 through V2-R10 requirements were reconciled.
+The prerequisite Code Review Remediation V2 phase is complete. Its authoritative validated implementation generation is `4956a624be10ddb4b23bcea23560b9c13a24`, with CI `33666006266` and Release Gates `33666005936` both successful. V2 explicitly released the prior MCP deferral only after all V2-R0 through V2-R10 requirements were reconciled.
 
 ## 2. Final architecture and authority boundary
 
@@ -80,13 +80,13 @@ The final configuration contract is:
 | `VRC_MCP_HTTP_HOST` | `127.0.0.1` | exactly `127.0.0.1`, `localhost`, or `::1` |
 | `VRC_MCP_HTTP_PORT` | `8765` | integer `1..=65535` |
 
-Mutation capability is disabled by default. Invalid present values fail closed rather than falling back to defaults.
+Mutation capability is disabled by default. Invalid present values fail closed rather than falling back to defaults. Current source additionally treats the `VRC_MCP_*` namespace as a closed vocabulary: unsupported MCP-prefixed names fail startup rather than being silently ignored.
 
 All controller calls share one adapter-owned bounded executor/admission limit. Admission happens before worker submission so work cannot accumulate in an unbounded executor queue. Cancellation does not free capacity before an already-running synchronous controller call exits.
 
 ## 6. Controller-token secret policy and Python memory limitation
 
-The sole MCP controller-token ingress is `VRC_MCP_CONTROLLER_TOKEN_FILE`; no raw token env var, CLI argument, URL credential, source constant, or alternate fallback exists.
+The sole MCP controller-token ingress is `VRC_MCP_CONTROLLER_TOKEN_FILE`; no raw token env var, CLI argument, URL credential, source constant, or alternate fallback exists. Unknown `VRC_MCP_*` aliases are rejected before configuration parsing, and failure text does not echo the supplied value.
 
 The secret reader requires readable metadata and a regular file, size `1..4096` bytes, strict UTF-8, no embedded NUL, and nonempty content after trimming trailing CR/LF only. On POSIX, group/other write bits and all execute bits are rejected. Error text identifies path/reason without echoing token bytes.
 
@@ -102,7 +102,7 @@ The adapter contains no automatic mutation retry, replay, or backoff loop.
 - authoritative accepted-command failure remains failed and is not retried;
 - read-only transport/protocol failures remain read errors rather than mutation ambiguity.
 
-Counting fakes, pinned-SDK tests, transport acceptance, and real-controller E2E independently prove exactly-one mutation invocation and no automatic replay.
+Counting fakes, pinned-SDK tests, transport acceptance, and real-controller E2E independently prove exactly-one mutation invocation and no automatic replay. Dynamic mutation-validation exception registration is constrained to application-specific `ValueError` subclasses so broad built-in exception classes cannot silently widen the handled preflight-error set.
 
 ## 8. Transport validation
 
@@ -113,6 +113,8 @@ The default executable transport is stdio. Official-SDK client acceptance proves
 ### Streamable HTTP
 
 The HTTP transport is explicit, loopback-only, and stateless. Production configuration accepts only `127.0.0.1`, `localhost`, and `::1`. The adapter does not provide a `transport_security` override, so the official SDK Host/Origin/DNS-rebinding protections remain authoritative. Acceptance tests prove bad Host and Origin requests are rejected. Legacy SSE is not exposed as a compatibility fallback.
+
+Current source revalidates transport, host, and port immediately before SDK dispatch. A bypassed or directly constructed invalid configuration cannot fall through from non-`stdio` to the Streamable HTTP branch.
 
 Cross-transport acceptance compares tool names, schemas, and annotations for semantic equivalence.
 
@@ -145,11 +147,16 @@ Permanent Release Gates install the closure in an isolated environment, run `pip
 
 ## 11. Unsafe-fallback and silent-failure audit
 
-MCP-013 reviewed all production `mcp_*.py` configuration, execution, read, mutation, outcome, and server paths together with unit/contract, pinned-SDK, transport, and real-controller tests.
+MCP-013 originally reviewed all production `mcp_*.py` configuration, execution, read, mutation, outcome, and server paths together with unit/contract, pinned-SDK, transport, and real-controller tests.
 
-No production behavior defect was found. The permanent `tests/test_mcp_unsafe_fallback_contract.py` rejects broad `Exception`/`BaseException` handlers, AST `pass` fallbacks, new unclassified `.get(...)` uses, raw controller-token ingress, transport-security overrides/legacy SSE, and retry/backoff/sleep calls in execution/mutation/outcome handling.
+The historical 2026-09-11 conclusion stated that no production behavior defect was found. Later reviews superseded that present-day conclusion in two stages:
 
-Intentional alternate/ignored-result behavior is limited and documented:
+- the 2026-09-12 cancellation/response-bounding remediation found and fixed post-admission cancellation/future-observation and unrestricted response-ingestion defects; and
+- the 2026-09-14 fail-closed boundary reconciliation found and fixed final transport-dispatch fallthrough, silent acceptance of unknown `VRC_MCP_*` names, and dynamic mutation-validation exception widening.
+
+The permanent `tests/test_mcp_unsafe_fallback_contract.py` still rejects broad `Exception`/`BaseException` handlers, AST `pass` fallbacks, new unclassified `.get(...)` uses, raw controller-token ingress, transport-security overrides/legacy SSE, and retry/backoff/sleep calls in execution/mutation/outcome handling. `tests/test_mcp_fail_closed_boundaries.py` adds behavioral protection for the three 2026-09-14 findings.
+
+Intentional alternate/ignored-result behavior remains limited and documented:
 
 - `ExitStack.pop_all()` transfers executor cleanup ownership only after successful MCP construction;
 - repeated executor `close()` waits for the first shutdown rather than starting another;
@@ -159,7 +166,7 @@ Intentional alternate/ignored-result behavior is limited and documented:
 
 None is a silent-success fallback.
 
-MCP-013 audit checkpoint `5f70bd064c663a00843369f791a2cdf460734737` passed CI `34642850866` and Release Gates `34642850991`.
+Historical MCP-013 audit checkpoint `5f70bd064c663a00843369f791a2cdf460734737` passed CI `34642850866` and Release Gates `34642850991`. The authoritative current fail-closed reconciliation is `docs/VNC_REMOTE_CONTROL_SERVER_MCP_FAIL_CLOSED_RECONCILIATION_2026-09-14.md`.
 
 ## 12. Exact-generation validation history
 
@@ -225,7 +232,7 @@ MCP-001 through MCP-013 were reconciled against current source, permanent tests,
 
 No TODO checkbox is closed solely because a commit message claims completion. The acceptance basis is executable source/tests, workflow configuration, documentation contracts, exact GitHub Actions run results, and the explicit audit/evidence records cited above.
 
-The MCP implementation phase is complete. All applicable MCP-001 through MCP-015 requirements are satisfied; the later MCP closeout evidence-correction task changes evidence wording only and does not reopen or change runtime MCP behavior.
+The historical MCP implementation phase was complete for its reviewed scope. Later post-closeout reviews found additional defects and remediated them without changing the architecture or reopening already satisfied functional catalog requirements. Sections 16 and 17 below are authoritative for current hardening state.
 
 ## 16. Post-closeout cancellation and response-bounding remediation
 
@@ -249,3 +256,27 @@ The exact validated remediation generations are:
 - documentation-closed final `master` `c34cc988920036258fed172d98b4507d908d3fa7`: CI `34714153379` **success**, Release Gates `34714153396` **success**, Publish CI Status `34714423324` **success**.
 
 The final remediation VEX review is `reviewed_at: 2026-09-12`, `expires_at: 2026-10-12`, tracking issue `7`; exact CRITICAL VEX enforcement passed both the remediation candidate and the final merged generations. The historical MCP closeout evidence above remains unchanged as evidence for the generations it originally validated.
+
+## 17. 2026-09-14 fail-closed boundary reconciliation
+
+A fresh re-audit of exact `master` `4371f1f30c11c7bc72237bc9cf842ebaf04de354` compared current source with stale PR #41 and found three fail-closed boundary defects still present after the earlier closeout/remediation sequence:
+
+- final MCP transport dispatch implicitly treated every non-`stdio` transport as Streamable HTTP and did not revalidate host/port immediately before SDK dispatch;
+- unknown `VRC_MCP_*` environment variables were silently ignored; and
+- caller-supplied mutation validation exception classes could widen the handled-error set with broad built-in classes.
+
+PR #50 fixed those defects with targeted production changes and focused permanent regressions rather than merging stale PR #41 wholesale. The exact final candidate `4d0689405f34d068fced58cd8af793007a433599` passed CI `34872815462` and Release Gates `34872815475`.
+
+PR #50 was squash-merged to exact `master`:
+
+`c3748230acc6f375ba274e999f85a17ee0be3cda`
+
+Fresh post-merge validation on that exact generation passed:
+
+- CI `34873573103` — **success**
+- Release Gates `34873573179` — **success**
+- Publish CI Status `34873575943` — **success**
+
+The merged-master CI included production MCP/TigerVNC E2E and R13 Compose integration/E2E. The authoritative detailed record is `docs/VNC_REMOTE_CONTROL_SERVER_MCP_FAIL_CLOSED_RECONCILIATION_2026-09-14.md`.
+
+The current MCP hardening conclusion is therefore that cancellation/future ownership, response-body bounds, transport dispatch, configuration namespace handling, and dynamic validation-exception registration are all fail-closed under permanent regression coverage and exact candidate/merged-master validation.
