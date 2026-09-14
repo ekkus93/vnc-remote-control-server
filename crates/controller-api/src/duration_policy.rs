@@ -53,6 +53,10 @@ mod tests {
         fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
             Ok(self.0.get(name).cloned())
         }
+
+        fn names(&self) -> Vec<String> {
+            self.0.keys().cloned().collect()
+        }
     }
 
     struct Secrets;
