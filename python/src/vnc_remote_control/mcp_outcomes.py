@@ -111,6 +111,17 @@ class McpOutcomeToolRegistrar:
         text_content_factory: McpTextContentFactory,
         mutation_validation_errors: tuple[type[Exception], ...],
     ) -> None:
+        if any(
+            not isinstance(error_type, type)
+            or not issubclass(error_type, ValueError)
+            or error_type is ValueError
+            or error_type.__module__ == "builtins"
+            for error_type in mutation_validation_errors
+        ):
+            raise McpOutcomeRegistrationError(
+                "mutation validation errors must be application-specific "
+                "ValueError subclasses"
+            )
         self._registrar = registrar
         self._call_tool_result_factory = call_tool_result_factory
         self._text_content_factory = text_content_factory
