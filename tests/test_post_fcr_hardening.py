@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from types import SimpleNamespace
 from typing import Any, cast
 
 from mcp_test_support import RecordingToolRegistrar
@@ -105,25 +106,19 @@ class PostFcrHardeningTests(unittest.TestCase):
 
     def test_public_client_rejects_non_string_base_url_stably(self) -> None:
         """Malformed base URL types do not leak parser-specific exceptions or reprs."""
-        class SensitiveValue:
-            def __repr__(self) -> str:
-                return "SENSITIVE_BASE_URL_REPR"
-
+        sensitive_value = SimpleNamespace(secret="SENSITIVE_BASE_URL_REPR")
         with self.assertRaisesRegex(ValueError, "base_url must be a string") as caught:
-            VncClient(cast(Any, SensitiveValue()))
+            VncClient(cast(Any, sensitive_value))
         self.assertNotIn("SENSITIVE_BASE_URL_REPR", str(caught.exception))
 
     def test_public_client_rejects_non_string_token_without_echo(self) -> None:
         """Malformed token types fail deterministically without echoing sensitive values."""
-        class SensitiveToken:
-            def __repr__(self) -> str:
-                return "SENSITIVE_TOKEN_REPR"
-
+        sensitive_token = SimpleNamespace(secret="SENSITIVE_TOKEN_REPR")
         with self.assertRaisesRegex(
             ValueError,
             "token must be a string when provided",
         ) as caught:
-            VncClient("http://controller", cast(Any, SensitiveToken()))
+            VncClient("http://controller", cast(Any, sensitive_token))
         self.assertNotIn("SENSITIVE_TOKEN_REPR", str(caught.exception))
 
     def test_public_client_preserves_normal_base_url_and_token_values(self) -> None:
