@@ -1,0 +1,68 @@
+name: PRH Rust format fix
+
+on:
+  push:
+    branches:
+      - ralph/post-pfh-review-hardening-fix-helper-20260914
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out helper branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Fix imports, run rustfmt, and update implementation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='ralph/post-pfh-review-hardening-implementation-20260914'
+          expected='46789f6ad7c267c24c5c828705fd595a2eea8fba'
+
+          git fetch origin "refs/heads/$target:refs/remotes/origin/$target"
+          git switch --detach "origin/$target"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/controller-api/src/runtime.rs')
+          text = path.read_text()
+          old = '''use crate::config::{
+              ENV_API_TOKEN_FILE, ENV_HTTP_BODY_TIMEOUT_MS, ENV_HTTP_HEADER_TIMEOUT_MS,
+              ENV_HTTP_MAX_CONNECTIONS, ENV_VNC_PASSWORD_FILE,
+          '''
+          new = '''use crate::config::{
+              ENV_HTTP_BODY_TIMEOUT_MS, ENV_HTTP_HEADER_TIMEOUT_MS, ENV_HTTP_MAX_CONNECTIONS,
+          '''
+          if old not in text:
+              raise SystemExit('expected runtime import block not found')
+          text = text.replace(old, new, 1)
+          marker = '''};
+          use axum::Router;
+          '''
+          replacement = '''};
+          #[cfg(test)]
+          use crate::config::{ENV_API_TOKEN_FILE, ENV_VNC_PASSWORD_FILE};
+          use axum::Router;
+          '''
+          if marker not in text:
+              raise SystemExit('runtime import insertion point not found')
+          path.write_text(text.replace(marker, replacement, 1))
+          PY
+
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          cargo +1.97.1 fmt --all
+          git diff --check
+
+          git config user.name 'chatgpt-ralph-bridge[bot]'
+          git config user.email '326723642+chatgpt-ralph-bridge[bot]@users.noreply.github.com'
+          git add crates/controller-api/src/config.rs crates/controller-api/src/runtime.rs
+          git diff --cached --check
+          git commit -m 'fix: format PRH Rust changes'
+          git push origin "HEAD:refs/heads/$target"
