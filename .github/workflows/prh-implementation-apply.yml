@@ -1,0 +1,52 @@
+name: PRH implementation apply
+
+on:
+  push:
+    branches:
+      - ralph/post-pfh-review-hardening-helper-20260914
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out helper branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Apply reviewed patch to clean implementation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='ralph/post-pfh-review-hardening-implementation-20260914'
+          base='38c302178e3b40de66ab230c110ddd6f322a0948'
+          patch_file="$RUNNER_TEMP/prh-implementation.patch"
+
+          base64 -d .github/prh-implementation-patch/implementation.patch.gz.b64 \
+            | gzip -d > "$patch_file"
+
+          git fetch origin "refs/heads/$target:refs/remotes/origin/$target"
+          git switch --detach "origin/$target"
+          test "$(git rev-parse HEAD)" = "$base"
+
+          git apply --check "$patch_file"
+          git apply "$patch_file"
+          git diff --check
+
+          git config user.name 'chatgpt-ralph-bridge[bot]'
+          git config user.email '326723642+chatgpt-ralph-bridge[bot]@users.noreply.github.com'
+          git add \
+            crates/controller-api/src/config.rs \
+            crates/controller-api/src/runtime.rs \
+            docs/OPERATOR_GUIDE.md \
+            docs/VNC_REMOTE_CONTROL_SERVER_POST_FCR_HARDENING_SPEC_2026-09-14.md \
+            python/README.md \
+            python/src/vnc_remote_control/client.py \
+            tests/test_documentation_contract.py \
+            tests/test_post_fcr_hardening.py
+          git diff --cached --check
+          git commit -m 'fix: harden post-PFH review boundaries'
+          git push origin "HEAD:refs/heads/$target"
