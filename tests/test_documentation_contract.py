@@ -372,8 +372,29 @@ class DocumentationContractTests(unittest.TestCase):
         ):
             self.assertIn(required, guide)
 
+        for required in (
+            "closed configuration namespace",
+            "Only documented controller `VRC_*` variables are accepted",
+            "Raw `VRC_API_TOKEN` and `VRC_VNC_PASSWORD` variables are rejected",
+            "`VRC_API_TOKEN_FILE` and `VRC_VNC_PASSWORD_FILE`",
+            "present with an empty value is still explicit input",
+        ):
+            self.assertIn(required, guide)
+
         self.assertNotIn("Authorization: Bearer replace", guide)
         self.assertNotRegex(guide, r"Authorization: Bearer [A-Za-z0-9]{16,}")
+
+    def test_python_client_readme_documents_constructor_validation_contract(self) -> None:
+        """The Python client guide documents deterministic constructor boundaries."""
+        python_readme = PYTHON_README_PATH.read_text(encoding="utf-8")
+        for required in (
+            "`base_url` must be a string",
+            "`token` may be `None` or a non-empty string",
+            "without echoing their value",
+            "positive finite numeric value representable by the internal timeout implementation",
+            "timeout must be a positive finite number",
+        ):
+            self.assertIn(required, python_readme)
 
     def test_custom_desktop_guide_matches_deployment_contract(self) -> None:
         """The custom-desktop-images guide matches the actual deployment files."""

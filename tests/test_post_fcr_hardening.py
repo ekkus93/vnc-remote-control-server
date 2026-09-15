@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from types import SimpleNamespace
 from typing import Any, cast
 
 from mcp_test_support import RecordingToolRegistrar
@@ -94,6 +95,38 @@ class PostFcrHardeningTests(unittest.TestCase):
                     "timeout must be a positive finite number",
                 ):
                     VncClient("http://controller", timeout=cast(float, value))
+
+    def test_public_client_rejects_timeout_conversion_overflow_stably(self) -> None:
+        """Huge positive integers fail with the public timeout validation contract."""
+        with self.assertRaisesRegex(
+            ValueError,
+            "timeout must be a positive finite number",
+        ):
+            VncClient("http://controller", timeout=10**400)
+
+    def test_public_client_rejects_non_string_base_url_stably(self) -> None:
+        """Malformed base URL types do not leak parser-specific exceptions or reprs."""
+        sensitive_value = SimpleNamespace(secret="SENSITIVE_BASE_URL_REPR")
+        with self.assertRaisesRegex(ValueError, "base_url must be a string") as caught:
+            VncClient(cast(Any, sensitive_value))
+        self.assertNotIn("SENSITIVE_BASE_URL_REPR", str(caught.exception))
+
+    def test_public_client_rejects_non_string_token_without_echo(self) -> None:
+        """Malformed token types fail deterministically without echoing sensitive values."""
+        sensitive_token = SimpleNamespace(secret="SENSITIVE_TOKEN_REPR")
+        with self.assertRaisesRegex(
+            ValueError,
+            "token must be a string when provided",
+        ) as caught:
+            VncClient("http://controller", cast(Any, sensitive_token))
+        self.assertNotIn("SENSITIVE_TOKEN_REPR", str(caught.exception))
+
+    def test_public_client_preserves_normal_base_url_and_token_values(self) -> None:
+        """Explicit type guards preserve accepted normal constructor values."""
+        self.assertEqual(VncClient("http://controller").base_url, "http://controller")
+        client = VncClient("https://controller.example", "token-value")
+        self.assertEqual(client.base_url, "https://controller.example")
+        self.assertNotIn("token-value", repr(client))
 
 
 if __name__ == "__main__":

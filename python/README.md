@@ -24,6 +24,8 @@ project-owned VNC desktop container
 
 `base_url` is therefore the controller's HTTP address, such as `http://127.0.0.1:8080` on the host or `http://controller:8080` from another container on a shared Docker network.
 
+`VncClient` validates constructor inputs at the public boundary. `base_url` must be a string containing an absolute `http://` or `https://` URL without embedded credentials, query text, or a fragment. `token` may be `None` or a non-empty string without CR/LF characters; malformed token types are rejected without echoing their value. `timeout` must be a positive finite numeric value representable by the internal timeout implementation. Booleans, nonnumeric objects, nonfinite values, nonpositive values, and numeric values that cannot be converted to the internal timeout representation fail with the stable `ValueError` message `timeout must be a positive finite number`.
+
 The Python client does not need the desktop service name, desktop image name, VNC port, or VNC password. Those are controller/deployment concerns. Swapping a supported custom desktop image behind an unchanged controller does not require changing Python application code. See [`../docs/CUSTOM_DESKTOP_IMAGES.md`](../docs/CUSTOM_DESKTOP_IMAGES.md) for the complete configuration chain.
 
 The optional MCP adapter uses the same typed client and the same controller API. It does not connect to VNC directly or implement a second remote-desktop protocol stack:
