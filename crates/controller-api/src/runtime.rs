@@ -5,9 +5,10 @@
 //! an explicit live-connection cap, and graceful connection draining after the
 //! process termination signal.
 
+#[cfg(test)]
+use crate::config::{ENV_API_TOKEN_FILE, ENV_VNC_PASSWORD_FILE};
 use crate::config::{
-    ENV_API_TOKEN_FILE, ENV_HTTP_BODY_TIMEOUT_MS, ENV_HTTP_HEADER_TIMEOUT_MS,
-    ENV_HTTP_MAX_CONNECTIONS, ENV_VNC_PASSWORD_FILE,
+    ENV_HTTP_BODY_TIMEOUT_MS, ENV_HTTP_HEADER_TIMEOUT_MS, ENV_HTTP_MAX_CONNECTIONS,
     ENV_MAX_JSON_BYTES, ENV_SHUTDOWN_GRACE_MS, EnvironmentReadError, EnvironmentSource,
     ProcessEnvironment, validate_controller_environment_names,
     write_unsupported_controller_environment_variable,
@@ -516,8 +517,7 @@ mod tests {
             ENV_SHUTDOWN_GRACE_MS,
             ENV_HTTP_MAX_CONNECTIONS,
         ] {
-            let environment =
-                MapEnvironment(HashMap::from([(name.to_owned(), String::new())]));
+            let environment = MapEnvironment(HashMap::from([(name.to_owned(), String::new())]));
             assert_eq!(
                 RuntimeSettings::load_from(&environment, 1024),
                 Err(RuntimeConfigError::InvalidValue(name))
@@ -528,19 +528,14 @@ mod tests {
     #[test]
     fn runtime_loader_raw_secret_alias_guidance_is_value_free() {
         for (name, value, supported) in [
-            (
-                "VRC_API_TOKEN",
-                "runtime-secret-api",
-                ENV_API_TOKEN_FILE,
-            ),
+            ("VRC_API_TOKEN", "runtime-secret-api", ENV_API_TOKEN_FILE),
             (
                 "VRC_VNC_PASSWORD",
                 "runtime-secret-vnc",
                 ENV_VNC_PASSWORD_FILE,
             ),
         ] {
-            let environment =
-                MapEnvironment(HashMap::from([(name.to_owned(), value.to_owned())]));
+            let environment = MapEnvironment(HashMap::from([(name.to_owned(), value.to_owned())]));
             let error = RuntimeSettings::load_from(&environment, 1024)
                 .expect_err("raw secret aliases fail in public runtime loader");
             let rendered = format!("{error:?} {error}");
@@ -623,9 +618,7 @@ mod tests {
                 1,
                 1,
             ),
-            Err(RuntimeConfigError::InvalidValue(
-                ENV_HTTP_HEADER_TIMEOUT_MS
-            ))
+            Err(RuntimeConfigError::InvalidValue(ENV_HTTP_HEADER_TIMEOUT_MS))
         );
         assert_eq!(
             RuntimeSettings::new(

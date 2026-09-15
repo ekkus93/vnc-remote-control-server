@@ -859,18 +859,9 @@ mod tests {
             (ENV_VNC_READ_TIMEOUT_MS.to_owned(), "1000".to_owned()),
             (ENV_WEBSOCKET_EVENT_CAPACITY.to_owned(), "10".to_owned()),
             (ENV_WEBSOCKET_MAX_CLIENTS.to_owned(), "3".to_owned()),
-            (
-                ENV_WEBSOCKET_PING_INTERVAL_MS.to_owned(),
-                "1000".to_owned(),
-            ),
-            (
-                ENV_WEBSOCKET_IDLE_TIMEOUT_MS.to_owned(),
-                "3000".to_owned(),
-            ),
-            (
-                ENV_PROCESS_INSTANCE.to_owned(),
-                "test-instance".to_owned(),
-            ),
+            (ENV_WEBSOCKET_PING_INTERVAL_MS.to_owned(), "1000".to_owned()),
+            (ENV_WEBSOCKET_IDLE_TIMEOUT_MS.to_owned(), "3000".to_owned()),
+            (ENV_PROCESS_INSTANCE.to_owned(), "test-instance".to_owned()),
         ]));
         let secrets = MapSecrets(HashMap::from([
             (PathBuf::from("/tmp/api"), "selected-api".to_owned()),
@@ -964,12 +955,13 @@ mod tests {
     fn absent_values_use_defaults_but_present_empty_values_fail_closed() {
         let defaults = ControllerConfig::load_from(&MapEnvironment::default(), &secrets())
             .expect("absent optional values use defaults");
-        assert_eq!(defaults.listen_address, DEFAULT_LISTEN_ADDRESS.parse().unwrap());
+        assert_eq!(
+            defaults.listen_address,
+            DEFAULT_LISTEN_ADDRESS.parse().unwrap()
+        );
 
-        let environment = MapEnvironment(HashMap::from([(
-            ENV_LISTEN_ADDR.to_owned(),
-            String::new(),
-        )]));
+        let environment =
+            MapEnvironment(HashMap::from([(ENV_LISTEN_ADDR.to_owned(), String::new())]));
         assert!(matches!(
             ControllerConfig::load_from(&environment, &secrets()),
             Err(ConfigError::InvalidValue(name)) if name == ENV_LISTEN_ADDR
