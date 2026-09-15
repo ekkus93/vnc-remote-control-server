@@ -86,6 +86,14 @@ Do not put either secret value in an environment variable. The supported environ
 
 The MCP adapter follows the same file-only rule for the controller bearer token: `VRC_MCP_CONTROLLER_TOKEN_FILE` contains a path, never the raw token value.
 
+### Controller environment namespace
+
+The controller treats `VRC_*` as a closed configuration namespace. Every public controller loader that reads controller environment state rejects unknown `VRC_*` names rather than silently ignoring typos. Only documented controller `VRC_*` variables are accepted. Unrelated process variables outside the `VRC_*` namespace are unaffected.
+
+Controller credentials remain file-backed. Raw `VRC_API_TOKEN` and `VRC_VNC_PASSWORD` variables are rejected; use `VRC_API_TOKEN_FILE` and `VRC_VNC_PASSWORD_FILE` to select the corresponding secret files. Rejection diagnostics name the unsupported variable but never echo its supplied value or secret-file contents.
+
+For optional controller settings, absence may select the documented default. A variable that is present with an empty value is still explicit input and is validated normally; empty strings are not silently converted to absence/defaults unless a specific variable contract explicitly says otherwise.
+
 The desktop converts the plaintext VNC source secret into `/tmp/vnc-runtime/passwd` at startup. That generated file is mode `0600`, is deleted at shutdown, and is never stored in the persistent home volume.
 
 ## 5. Build and start

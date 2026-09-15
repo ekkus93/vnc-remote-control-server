@@ -5,6 +5,13 @@
 //! an explicit live-connection cap, and graceful connection draining after the
 //! process termination signal.
 
+use crate::config::{
+    ENV_API_TOKEN_FILE, ENV_HTTP_BODY_TIMEOUT_MS, ENV_HTTP_HEADER_TIMEOUT_MS,
+    ENV_HTTP_MAX_CONNECTIONS, ENV_VNC_PASSWORD_FILE,
+    ENV_MAX_JSON_BYTES, ENV_SHUTDOWN_GRACE_MS, EnvironmentReadError, EnvironmentSource,
+    ProcessEnvironment, validate_controller_environment_names,
+    write_unsupported_controller_environment_variable,
+};
 use axum::Router;
 use axum::body::Body;
 use axum::http::header::CONNECTION;
@@ -15,7 +22,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use std::convert::Infallible;
-use std::env;
 use std::error::Error;
 use std::fmt;
 use std::future::Future;
@@ -53,12 +59,35 @@ pub struct RuntimeSettings {
 impl RuntimeSettings {
     /// Loads non-secret HTTP runtime limits from the process environment.
     pub fn load(maximum_body_bytes: usize) -> Result<Self, RuntimeConfigError> {
+        Self::load_from(&ProcessEnvironment, maximum_body_bytes)
+    }
+
+    /// Loads runtime limits through an injectable environment source.
+    pub fn load_from<E: EnvironmentSource>(
+        environment: &E,
+        maximum_body_bytes: usize,
+    ) -> Result<Self, RuntimeConfigError> {
+        validate_controller_environment_names(environment)
+            .map_err(RuntimeConfigError::UnsupportedEnvironmentVariable)?;
         Self::new(
-            parse_timeout("VRC_HTTP_HEADER_TIMEOUT_MS", DEFAULT_HEADER_READ_TIMEOUT_MS)?,
-            parse_timeout("VRC_HTTP_BODY_TIMEOUT_MS", DEFAULT_BODY_READ_TIMEOUT_MS)?,
-            parse_timeout("VRC_SHUTDOWN_GRACE_MS", DEFAULT_SHUTDOWN_GRACE_MS)?,
+            parse_timeout(
+                environment,
+                ENV_HTTP_HEADER_TIMEOUT_MS,
+                DEFAULT_HEADER_READ_TIMEOUT_MS,
+            )?,
+            parse_timeout(
+                environment,
+                ENV_HTTP_BODY_TIMEOUT_MS,
+                DEFAULT_BODY_READ_TIMEOUT_MS,
+            )?,
+            parse_timeout(
+                environment,
+                ENV_SHUTDOWN_GRACE_MS,
+                DEFAULT_SHUTDOWN_GRACE_MS,
+            )?,
             parse_bounded_usize(
-                "VRC_HTTP_MAX_CONNECTIONS",
+                environment,
+                ENV_HTTP_MAX_CONNECTIONS,
                 DEFAULT_MAX_CONNECTIONS,
                 1,
                 MAX_HTTP_CONNECTIONS,
@@ -76,19 +105,19 @@ impl RuntimeSettings {
         maximum_body_bytes: usize,
     ) -> Result<Self, RuntimeConfigError> {
         for (name, value) in [
-            ("VRC_HTTP_HEADER_TIMEOUT_MS", header_read_timeout),
-            ("VRC_HTTP_BODY_TIMEOUT_MS", body_read_timeout),
-            ("VRC_SHUTDOWN_GRACE_MS", shutdown_grace),
+            (ENV_HTTP_HEADER_TIMEOUT_MS, header_read_timeout),
+            (ENV_HTTP_BODY_TIMEOUT_MS, body_read_timeout),
+            (ENV_SHUTDOWN_GRACE_MS, shutdown_grace),
         ] {
             if value.is_zero() || value > Duration::from_millis(MAX_RUNTIME_TIMEOUT_MS) {
                 return Err(RuntimeConfigError::InvalidValue(name));
             }
         }
         if !(1..=MAX_HTTP_CONNECTIONS).contains(&maximum_connections) {
-            return Err(RuntimeConfigError::InvalidValue("VRC_HTTP_MAX_CONNECTIONS"));
+            return Err(RuntimeConfigError::InvalidValue(ENV_HTTP_MAX_CONNECTIONS));
         }
         if maximum_body_bytes == 0 {
-            return Err(RuntimeConfigError::InvalidValue("VRC_MAX_JSON_BYTES"));
+            return Err(RuntimeConfigError::InvalidValue(ENV_MAX_JSON_BYTES));
         }
         Ok(Self {
             header_read_timeout,
@@ -101,16 +130,21 @@ impl RuntimeSettings {
 }
 
 /// Runtime configuration failure that contains no request or secret data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeConfigError {
     /// One named duration or size is invalid.
     InvalidValue(&'static str),
+    /// A controller-prefixed environment variable is not part of the closed vocabulary.
+    UnsupportedEnvironmentVariable(String),
 }
 
 impl fmt::Display for RuntimeConfigError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidValue(name) => write!(formatter, "invalid runtime value: {name}"),
+            Self::UnsupportedEnvironmentVariable(name) => {
+                write_unsupported_controller_environment_variable(formatter, name)
+            }
         }
     }
 }
@@ -353,13 +387,25 @@ fn terminal_response(status: StatusCode) -> Response<Body> {
     response
 }
 
-fn parse_timeout(name: &'static str, default_ms: u64) -> Result<Duration, RuntimeConfigError> {
-    let milliseconds = match env::var(name) {
-        Ok(value) => value
+fn runtime_environment_value<E: EnvironmentSource>(
+    environment: &E,
+    name: &'static str,
+) -> Result<Option<String>, RuntimeConfigError> {
+    environment
+        .get(name)
+        .map_err(|EnvironmentReadError::NotUnicode| RuntimeConfigError::InvalidValue(name))
+}
+
+fn parse_timeout<E: EnvironmentSource>(
+    environment: &E,
+    name: &'static str,
+    default_ms: u64,
+) -> Result<Duration, RuntimeConfigError> {
+    let milliseconds = match runtime_environment_value(environment, name)? {
+        Some(value) => value
             .parse::<u64>()
             .map_err(|_| RuntimeConfigError::InvalidValue(name))?,
-        Err(env::VarError::NotPresent) => default_ms,
-        Err(env::VarError::NotUnicode(_)) => return Err(RuntimeConfigError::InvalidValue(name)),
+        None => default_ms,
     };
     let duration = Duration::from_millis(milliseconds);
     if duration.is_zero() || milliseconds > MAX_RUNTIME_TIMEOUT_MS {
@@ -368,18 +414,18 @@ fn parse_timeout(name: &'static str, default_ms: u64) -> Result<Duration, Runtim
     Ok(duration)
 }
 
-fn parse_bounded_usize(
+fn parse_bounded_usize<E: EnvironmentSource>(
+    environment: &E,
     name: &'static str,
     default: usize,
     minimum: usize,
     maximum: usize,
 ) -> Result<usize, RuntimeConfigError> {
-    let value = match env::var(name) {
-        Ok(value) => value
+    let value = match runtime_environment_value(environment, name)? {
+        Some(value) => value
             .parse::<usize>()
             .map_err(|_| RuntimeConfigError::InvalidValue(name))?,
-        Err(env::VarError::NotPresent) => default,
-        Err(env::VarError::NotUnicode(_)) => return Err(RuntimeConfigError::InvalidValue(name)),
+        None => default,
     };
     if !(minimum..=maximum).contains(&value) {
         return Err(RuntimeConfigError::InvalidValue(name));
@@ -391,9 +437,118 @@ fn parse_bounded_usize(
 mod tests {
     use super::*;
     use axum::routing::{get, post};
+    use std::collections::HashMap;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
     use tokio::time::{sleep, timeout};
+
+    #[derive(Default)]
+    struct MapEnvironment(HashMap<String, String>);
+
+    impl EnvironmentSource for MapEnvironment {
+        fn get(&self, name: &str) -> Result<Option<String>, EnvironmentReadError> {
+            Ok(self.0.get(name).cloned())
+        }
+
+        fn names(&self) -> Vec<String> {
+            self.0.keys().cloned().collect()
+        }
+    }
+
+    #[test]
+    fn runtime_loader_rejects_unknown_controller_environment_names() {
+        let environment = MapEnvironment(HashMap::from([
+            ("VRC_HTTP_HEADER_TIMEOUT_MSS".to_owned(), "1234".to_owned()),
+            ("HOME".to_owned(), "unrelated-value".to_owned()),
+        ]));
+        let error = RuntimeSettings::load_from(&environment, 1024)
+            .expect_err("public runtime loader rejects unknown VRC_* names");
+        let rendered = format!("{error:?} {error}");
+        assert!(matches!(
+            error,
+            RuntimeConfigError::UnsupportedEnvironmentVariable(ref name)
+                if name == "VRC_HTTP_HEADER_TIMEOUT_MSS"
+        ));
+        assert!(rendered.contains("VRC_HTTP_HEADER_TIMEOUT_MSS"));
+        assert!(rendered.contains("only documented controller VRC_*"));
+        assert!(!rendered.contains("1234"));
+        assert!(!rendered.contains("unrelated-value"));
+    }
+
+    #[test]
+    fn runtime_loader_preserves_supported_values_and_absent_defaults() {
+        let defaults = RuntimeSettings::load_from(&MapEnvironment::default(), 2048)
+            .expect("absent runtime variables use defaults");
+        assert_eq!(
+            defaults.header_read_timeout,
+            Duration::from_millis(DEFAULT_HEADER_READ_TIMEOUT_MS)
+        );
+        assert_eq!(
+            defaults.body_read_timeout,
+            Duration::from_millis(DEFAULT_BODY_READ_TIMEOUT_MS)
+        );
+        assert_eq!(
+            defaults.shutdown_grace,
+            Duration::from_millis(DEFAULT_SHUTDOWN_GRACE_MS)
+        );
+        assert_eq!(defaults.maximum_connections, DEFAULT_MAX_CONNECTIONS);
+
+        let configured = MapEnvironment(HashMap::from([
+            (ENV_HTTP_HEADER_TIMEOUT_MS.to_owned(), "1111".to_owned()),
+            (ENV_HTTP_BODY_TIMEOUT_MS.to_owned(), "2222".to_owned()),
+            (ENV_SHUTDOWN_GRACE_MS.to_owned(), "3333".to_owned()),
+            (ENV_HTTP_MAX_CONNECTIONS.to_owned(), "17".to_owned()),
+        ]));
+        let settings = RuntimeSettings::load_from(&configured, 4096)
+            .expect("supported runtime variables load");
+        assert_eq!(settings.header_read_timeout, Duration::from_millis(1111));
+        assert_eq!(settings.body_read_timeout, Duration::from_millis(2222));
+        assert_eq!(settings.shutdown_grace, Duration::from_millis(3333));
+        assert_eq!(settings.maximum_connections, 17);
+        assert_eq!(settings.maximum_body_bytes, 4096);
+    }
+
+    #[test]
+    fn runtime_loader_treats_present_empty_values_as_invalid_input() {
+        for name in [
+            ENV_HTTP_HEADER_TIMEOUT_MS,
+            ENV_HTTP_BODY_TIMEOUT_MS,
+            ENV_SHUTDOWN_GRACE_MS,
+            ENV_HTTP_MAX_CONNECTIONS,
+        ] {
+            let environment =
+                MapEnvironment(HashMap::from([(name.to_owned(), String::new())]));
+            assert_eq!(
+                RuntimeSettings::load_from(&environment, 1024),
+                Err(RuntimeConfigError::InvalidValue(name))
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_loader_raw_secret_alias_guidance_is_value_free() {
+        for (name, value, supported) in [
+            (
+                "VRC_API_TOKEN",
+                "runtime-secret-api",
+                ENV_API_TOKEN_FILE,
+            ),
+            (
+                "VRC_VNC_PASSWORD",
+                "runtime-secret-vnc",
+                ENV_VNC_PASSWORD_FILE,
+            ),
+        ] {
+            let environment =
+                MapEnvironment(HashMap::from([(name.to_owned(), value.to_owned())]));
+            let error = RuntimeSettings::load_from(&environment, 1024)
+                .expect_err("raw secret aliases fail in public runtime loader");
+            let rendered = format!("{error:?} {error}");
+            assert!(rendered.contains(name));
+            assert!(rendered.contains(supported));
+            assert!(!rendered.contains(value));
+        }
+    }
 
     fn test_settings() -> RuntimeSettings {
         RuntimeSettings::new(
@@ -469,7 +624,7 @@ mod tests {
                 1,
             ),
             Err(RuntimeConfigError::InvalidValue(
-                "VRC_HTTP_HEADER_TIMEOUT_MS"
+                ENV_HTTP_HEADER_TIMEOUT_MS
             ))
         );
         assert_eq!(
@@ -480,7 +635,7 @@ mod tests {
                 1,
                 1,
             ),
-            Err(RuntimeConfigError::InvalidValue("VRC_HTTP_BODY_TIMEOUT_MS"))
+            Err(RuntimeConfigError::InvalidValue(ENV_HTTP_BODY_TIMEOUT_MS))
         );
         assert_eq!(
             RuntimeSettings::new(
@@ -490,7 +645,7 @@ mod tests {
                 0,
                 1,
             ),
-            Err(RuntimeConfigError::InvalidValue("VRC_HTTP_MAX_CONNECTIONS"))
+            Err(RuntimeConfigError::InvalidValue(ENV_HTTP_MAX_CONNECTIONS))
         );
         assert_eq!(
             RuntimeSettings::new(
@@ -500,7 +655,7 @@ mod tests {
                 MAX_HTTP_CONNECTIONS + 1,
                 1,
             ),
-            Err(RuntimeConfigError::InvalidValue("VRC_HTTP_MAX_CONNECTIONS"))
+            Err(RuntimeConfigError::InvalidValue(ENV_HTTP_MAX_CONNECTIONS))
         );
     }
 
