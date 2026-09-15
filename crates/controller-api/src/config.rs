@@ -42,72 +42,85 @@ const DEFAULT_STABLE_CONNECTION_RESET_MS: u64 = 10_000;
 const DEFAULT_MANUAL_RECONNECT_INTERVAL_MS: u64 = 2_000;
 const DEFAULT_STALL_PROBE_AFTER_MS: u64 = 30_000;
 const DEFAULT_STALL_CONFIRM_AFTER_MS: u64 = 10_000;
+macro_rules! controller_environment_names {
+    ($($identifier:ident => $value:literal),+ $(,)?) => {
+        $(pub(crate) const $identifier: &str = $value;)+
+        pub(crate) const SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES: &[&str] = &[
+            $($identifier),+
+        ];
+    };
+}
+
+controller_environment_names! {
+    ENV_API_TOKEN_FILE => "VRC_API_TOKEN_FILE",
+    ENV_COMMAND_ACK_TIMEOUT_MS => "VRC_COMMAND_ACK_TIMEOUT_MS",
+    ENV_COMMAND_CAPACITY => "VRC_COMMAND_CAPACITY",
+    ENV_EVENT_CAPACITY => "VRC_EVENT_CAPACITY",
+    ENV_HTTP_BODY_TIMEOUT_MS => "VRC_HTTP_BODY_TIMEOUT_MS",
+    ENV_HTTP_HEADER_TIMEOUT_MS => "VRC_HTTP_HEADER_TIMEOUT_MS",
+    ENV_HTTP_MAX_CONNECTIONS => "VRC_HTTP_MAX_CONNECTIONS",
+    ENV_LISTEN_ADDR => "VRC_LISTEN_ADDR",
+    ENV_MANUAL_RECONNECT_INTERVAL_MS => "VRC_MANUAL_RECONNECT_INTERVAL_MS",
+    ENV_MAX_FRAMEBUFFER_BYTES => "VRC_MAX_FRAMEBUFFER_BYTES",
+    ENV_MAX_JSON_BYTES => "VRC_MAX_JSON_BYTES",
+    ENV_POLL_INTERVAL_MS => "VRC_POLL_INTERVAL_MS",
+    ENV_PROCESS_INSTANCE => "VRC_PROCESS_INSTANCE",
+    ENV_RECONNECT_JITTER_PER_MILLE => "VRC_RECONNECT_JITTER_PER_MILLE",
+    ENV_RECONNECT_MAX_MS => "VRC_RECONNECT_MAX_MS",
+    ENV_RECONNECT_MIN_MS => "VRC_RECONNECT_MIN_MS",
+    ENV_SCREENSHOT_MAX_CONCURRENT => "VRC_SCREENSHOT_MAX_CONCURRENT",
+    ENV_SCREENSHOT_TIMEOUT_MS => "VRC_SCREENSHOT_TIMEOUT_MS",
+    ENV_SHUTDOWN_GRACE_MS => "VRC_SHUTDOWN_GRACE_MS",
+    ENV_SHUTDOWN_TIMEOUT_MS => "VRC_SHUTDOWN_TIMEOUT_MS",
+    ENV_STABLE_CONNECTION_RESET_MS => "VRC_STABLE_CONNECTION_RESET_MS",
+    ENV_STALL_CONFIRM_AFTER_MS => "VRC_STALL_CONFIRM_AFTER_MS",
+    ENV_STALL_PROBE_AFTER_MS => "VRC_STALL_PROBE_AFTER_MS",
+    ENV_STARTUP_TIMEOUT_MS => "VRC_STARTUP_TIMEOUT_MS",
+    ENV_VNC_CONNECT_TIMEOUT_MS => "VRC_VNC_CONNECT_TIMEOUT_MS",
+    ENV_VNC_HOST => "VRC_VNC_HOST",
+    ENV_VNC_PASSWORD_FILE => "VRC_VNC_PASSWORD_FILE",
+    ENV_VNC_PORT => "VRC_VNC_PORT",
+    ENV_VNC_READ_TIMEOUT_MS => "VRC_VNC_READ_TIMEOUT_MS",
+    ENV_WEBSOCKET_EVENT_CAPACITY => "VRC_WEBSOCKET_EVENT_CAPACITY",
+    ENV_WEBSOCKET_IDLE_TIMEOUT_MS => "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+    ENV_WEBSOCKET_MAX_CLIENTS => "VRC_WEBSOCKET_MAX_CLIENTS",
+    ENV_WEBSOCKET_PING_INTERVAL_MS => "VRC_WEBSOCKET_PING_INTERVAL_MS",
+}
+
+const RAW_API_TOKEN_ENVIRONMENT_NAME: &str = "VRC_API_TOKEN";
+const RAW_VNC_PASSWORD_ENVIRONMENT_NAME: &str = "VRC_VNC_PASSWORD";
+
 #[cfg(test)]
 const CONFIG_VALUE_ENVIRONMENT_NAMES: &[&str] = &[
-    "VRC_API_TOKEN_FILE",
-    "VRC_COMMAND_ACK_TIMEOUT_MS",
-    "VRC_COMMAND_CAPACITY",
-    "VRC_EVENT_CAPACITY",
-    "VRC_LISTEN_ADDR",
-    "VRC_MANUAL_RECONNECT_INTERVAL_MS",
-    "VRC_MAX_FRAMEBUFFER_BYTES",
-    "VRC_MAX_JSON_BYTES",
-    "VRC_POLL_INTERVAL_MS",
-    "VRC_PROCESS_INSTANCE",
-    "VRC_RECONNECT_JITTER_PER_MILLE",
-    "VRC_RECONNECT_MAX_MS",
-    "VRC_RECONNECT_MIN_MS",
-    "VRC_SCREENSHOT_MAX_CONCURRENT",
-    "VRC_SCREENSHOT_TIMEOUT_MS",
-    "VRC_SHUTDOWN_TIMEOUT_MS",
-    "VRC_STABLE_CONNECTION_RESET_MS",
-    "VRC_STALL_CONFIRM_AFTER_MS",
-    "VRC_STALL_PROBE_AFTER_MS",
-    "VRC_STARTUP_TIMEOUT_MS",
-    "VRC_VNC_CONNECT_TIMEOUT_MS",
-    "VRC_VNC_HOST",
-    "VRC_VNC_PASSWORD_FILE",
-    "VRC_VNC_PORT",
-    "VRC_VNC_READ_TIMEOUT_MS",
-    "VRC_WEBSOCKET_EVENT_CAPACITY",
-    "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
-    "VRC_WEBSOCKET_MAX_CLIENTS",
-    "VRC_WEBSOCKET_PING_INTERVAL_MS",
-];
-const SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES: &[&str] = &[
-    "VRC_API_TOKEN_FILE",
-    "VRC_COMMAND_ACK_TIMEOUT_MS",
-    "VRC_COMMAND_CAPACITY",
-    "VRC_EVENT_CAPACITY",
-    "VRC_HTTP_BODY_TIMEOUT_MS",
-    "VRC_HTTP_HEADER_TIMEOUT_MS",
-    "VRC_HTTP_MAX_CONNECTIONS",
-    "VRC_LISTEN_ADDR",
-    "VRC_MANUAL_RECONNECT_INTERVAL_MS",
-    "VRC_MAX_FRAMEBUFFER_BYTES",
-    "VRC_MAX_JSON_BYTES",
-    "VRC_POLL_INTERVAL_MS",
-    "VRC_PROCESS_INSTANCE",
-    "VRC_RECONNECT_JITTER_PER_MILLE",
-    "VRC_RECONNECT_MAX_MS",
-    "VRC_RECONNECT_MIN_MS",
-    "VRC_SCREENSHOT_MAX_CONCURRENT",
-    "VRC_SCREENSHOT_TIMEOUT_MS",
-    "VRC_SHUTDOWN_GRACE_MS",
-    "VRC_SHUTDOWN_TIMEOUT_MS",
-    "VRC_STABLE_CONNECTION_RESET_MS",
-    "VRC_STALL_CONFIRM_AFTER_MS",
-    "VRC_STALL_PROBE_AFTER_MS",
-    "VRC_STARTUP_TIMEOUT_MS",
-    "VRC_VNC_CONNECT_TIMEOUT_MS",
-    "VRC_VNC_HOST",
-    "VRC_VNC_PASSWORD_FILE",
-    "VRC_VNC_PORT",
-    "VRC_VNC_READ_TIMEOUT_MS",
-    "VRC_WEBSOCKET_EVENT_CAPACITY",
-    "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
-    "VRC_WEBSOCKET_MAX_CLIENTS",
-    "VRC_WEBSOCKET_PING_INTERVAL_MS",
+    ENV_API_TOKEN_FILE,
+    ENV_COMMAND_ACK_TIMEOUT_MS,
+    ENV_COMMAND_CAPACITY,
+    ENV_EVENT_CAPACITY,
+    ENV_LISTEN_ADDR,
+    ENV_MANUAL_RECONNECT_INTERVAL_MS,
+    ENV_MAX_FRAMEBUFFER_BYTES,
+    ENV_MAX_JSON_BYTES,
+    ENV_POLL_INTERVAL_MS,
+    ENV_PROCESS_INSTANCE,
+    ENV_RECONNECT_JITTER_PER_MILLE,
+    ENV_RECONNECT_MAX_MS,
+    ENV_RECONNECT_MIN_MS,
+    ENV_SCREENSHOT_MAX_CONCURRENT,
+    ENV_SCREENSHOT_TIMEOUT_MS,
+    ENV_SHUTDOWN_TIMEOUT_MS,
+    ENV_STABLE_CONNECTION_RESET_MS,
+    ENV_STALL_CONFIRM_AFTER_MS,
+    ENV_STALL_PROBE_AFTER_MS,
+    ENV_STARTUP_TIMEOUT_MS,
+    ENV_VNC_CONNECT_TIMEOUT_MS,
+    ENV_VNC_HOST,
+    ENV_VNC_PASSWORD_FILE,
+    ENV_VNC_PORT,
+    ENV_VNC_READ_TIMEOUT_MS,
+    ENV_WEBSOCKET_EVENT_CAPACITY,
+    ENV_WEBSOCKET_IDLE_TIMEOUT_MS,
+    ENV_WEBSOCKET_MAX_CLIENTS,
+    ENV_WEBSOCKET_PING_INTERVAL_MS,
 ];
 const CONTROLLER_ENVIRONMENT_PREFIX: &str = "VRC_";
 const MAX_SECRET_BYTES: u64 = 4 * 1024;
@@ -218,23 +231,24 @@ impl ControllerConfig {
         E: EnvironmentSource,
         S: SecretReader,
     {
-        reject_unknown_controller_environment_names(environment)?;
+        validate_controller_environment_names(environment)
+            .map_err(ConfigError::UnsupportedEnvironmentVariable)?;
 
-        let listen_address = value_or(environment, "VRC_LISTEN_ADDR", DEFAULT_LISTEN_ADDRESS)?
+        let listen_address = value_or(environment, ENV_LISTEN_ADDR, DEFAULT_LISTEN_ADDRESS)?
             .parse::<SocketAddr>()
-            .map_err(|_| ConfigError::InvalidValue("VRC_LISTEN_ADDR"))?;
+            .map_err(|_| ConfigError::InvalidValue(ENV_LISTEN_ADDR))?;
         if listen_address.port() == 0 {
-            return Err(ConfigError::InvalidValue("VRC_LISTEN_ADDR"));
+            return Err(ConfigError::InvalidValue(ENV_LISTEN_ADDR));
         }
 
         let api_token_path = PathBuf::from(value_or(
             environment,
-            "VRC_API_TOKEN_FILE",
+            ENV_API_TOKEN_FILE,
             DEFAULT_API_TOKEN_FILE,
         )?);
         let vnc_password_path = PathBuf::from(value_or(
             environment,
-            "VRC_VNC_PASSWORD_FILE",
+            ENV_VNC_PASSWORD_FILE,
             DEFAULT_VNC_PASSWORD_FILE,
         )?);
         let api_token = ApiToken::from_secret(secrets.read_secret(&api_token_path)?);
@@ -246,7 +260,7 @@ impl ControllerConfig {
         }
         let vnc_password = secrets.read_secret(&vnc_password_path)?;
 
-        let process_instance = match environment_value(environment, "VRC_PROCESS_INSTANCE")? {
+        let process_instance = match environment_value(environment, ENV_PROCESS_INSTANCE)? {
             Some(value) => value,
             None => default_process_instance()?,
         };
@@ -254,71 +268,71 @@ impl ControllerConfig {
 
         let maximum_json_bytes = parse_bounded_usize(
             environment,
-            "VRC_MAX_JSON_BYTES",
+            ENV_MAX_JSON_BYTES,
             DEFAULT_MAXIMUM_JSON_BYTES,
             1,
             MAX_JSON_BYTES,
         )?;
         let command_ack_timeout = parse_duration_ms(
             environment,
-            "VRC_COMMAND_ACK_TIMEOUT_MS",
+            ENV_COMMAND_ACK_TIMEOUT_MS,
             DEFAULT_COMMAND_ACK_TIMEOUT_MS,
         )?;
         let shutdown_timeout = parse_duration_ms(
             environment,
-            "VRC_SHUTDOWN_TIMEOUT_MS",
+            ENV_SHUTDOWN_TIMEOUT_MS,
             DEFAULT_SHUTDOWN_TIMEOUT_MS,
         )?;
         if shutdown_timeout < Duration::from_millis(MIN_PROCESS_SHUTDOWN_TIMEOUT_MS) {
-            return Err(ConfigError::InvalidValue("VRC_SHUTDOWN_TIMEOUT_MS"));
+            return Err(ConfigError::InvalidValue(ENV_SHUTDOWN_TIMEOUT_MS));
         }
         let screenshot_concurrency = parse_bounded_usize(
             environment,
-            "VRC_SCREENSHOT_MAX_CONCURRENT",
+            ENV_SCREENSHOT_MAX_CONCURRENT,
             DEFAULT_SCREENSHOT_CONCURRENCY,
             1,
             MAX_SCREENSHOT_CONCURRENCY,
         )?;
         let screenshot_timeout = parse_duration_ms(
             environment,
-            "VRC_SCREENSHOT_TIMEOUT_MS",
+            ENV_SCREENSHOT_TIMEOUT_MS,
             DEFAULT_SCREENSHOT_TIMEOUT_MS,
         )?;
         let websocket_event_capacity = parse_bounded_usize(
             environment,
-            "VRC_WEBSOCKET_EVENT_CAPACITY",
+            ENV_WEBSOCKET_EVENT_CAPACITY,
             DEFAULT_WEBSOCKET_EVENT_CAPACITY,
             1,
             MAX_CHANNEL_CAPACITY,
         )?;
         let websocket_max_clients = parse_bounded_usize(
             environment,
-            "VRC_WEBSOCKET_MAX_CLIENTS",
+            ENV_WEBSOCKET_MAX_CLIENTS,
             DEFAULT_WEBSOCKET_MAX_CLIENTS,
             1,
             MAX_CHANNEL_CAPACITY,
         )?;
         let websocket_ping_interval = parse_duration_ms(
             environment,
-            "VRC_WEBSOCKET_PING_INTERVAL_MS",
+            ENV_WEBSOCKET_PING_INTERVAL_MS,
             DEFAULT_WEBSOCKET_PING_INTERVAL_MS,
         )?;
         let websocket_idle_timeout = parse_duration_ms(
             environment,
-            "VRC_WEBSOCKET_IDLE_TIMEOUT_MS",
+            ENV_WEBSOCKET_IDLE_TIMEOUT_MS,
             DEFAULT_WEBSOCKET_IDLE_TIMEOUT_MS,
         )?;
         if websocket_idle_timeout <= websocket_ping_interval {
-            return Err(ConfigError::InvalidValue("VRC_WEBSOCKET_IDLE_TIMEOUT_MS"));
+            return Err(ConfigError::InvalidValue(ENV_WEBSOCKET_IDLE_TIMEOUT_MS));
         }
 
-        let vnc_host = value_or(environment, "VRC_VNC_HOST", DEFAULT_VNC_HOST)?;
+        let vnc_host = value_or(environment, ENV_VNC_HOST, DEFAULT_VNC_HOST)?;
         if vnc_host.is_empty() || vnc_host.len() > 253 {
-            return Err(ConfigError::InvalidValue("VRC_VNC_HOST"));
+            return Err(ConfigError::InvalidValue(ENV_VNC_HOST));
         }
-        let vnc_port = parse_u16(environment, "VRC_VNC_PORT", DEFAULT_VNC_PORT)?;
+        let vnc_port = parse_u16(environment, ENV_VNC_PORT, DEFAULT_VNC_PORT)?;
         if vnc_port == 0 {
-            return Err(ConfigError::InvalidValue("VRC_VNC_PORT"));
+            return Err(ConfigError::InvalidValue(ENV_VNC_PORT));
         }
 
         let worker = WorkerSettings {
@@ -328,75 +342,75 @@ impl ControllerConfig {
                 password: vnc_password,
                 connect_timeout: parse_duration_ms(
                     environment,
-                    "VRC_VNC_CONNECT_TIMEOUT_MS",
+                    ENV_VNC_CONNECT_TIMEOUT_MS,
                     10_000,
                 )?,
-                read_timeout: parse_duration_ms(environment, "VRC_VNC_READ_TIMEOUT_MS", 10_000)?,
+                read_timeout: parse_duration_ms(environment, ENV_VNC_READ_TIMEOUT_MS, 10_000)?,
             },
             command_capacity: parse_bounded_usize(
                 environment,
-                "VRC_COMMAND_CAPACITY",
+                ENV_COMMAND_CAPACITY,
                 DEFAULT_COMMAND_CAPACITY,
                 1,
                 MAX_CHANNEL_CAPACITY,
             )?,
             event_capacity: parse_bounded_usize(
                 environment,
-                "VRC_EVENT_CAPACITY",
+                ENV_EVENT_CAPACITY,
                 DEFAULT_EVENT_CAPACITY,
                 1,
                 MAX_CHANNEL_CAPACITY,
             )?,
             maximum_framebuffer_bytes: parse_bounded_usize(
                 environment,
-                "VRC_MAX_FRAMEBUFFER_BYTES",
+                ENV_MAX_FRAMEBUFFER_BYTES,
                 MAX_FRAMEBUFFER_BYTES,
                 1,
                 MAX_FRAMEBUFFER_BYTES,
             )?,
             poll_interval: parse_duration_ms(
                 environment,
-                "VRC_POLL_INTERVAL_MS",
+                ENV_POLL_INTERVAL_MS,
                 DEFAULT_POLL_INTERVAL_MS,
             )?,
             startup_timeout: parse_duration_ms(
                 environment,
-                "VRC_STARTUP_TIMEOUT_MS",
+                ENV_STARTUP_TIMEOUT_MS,
                 DEFAULT_STARTUP_TIMEOUT_MS,
             )?,
             reconnect_min_delay: parse_duration_ms(
                 environment,
-                "VRC_RECONNECT_MIN_MS",
+                ENV_RECONNECT_MIN_MS,
                 DEFAULT_RECONNECT_MIN_MS,
             )?,
             reconnect_max_delay: parse_duration_ms(
                 environment,
-                "VRC_RECONNECT_MAX_MS",
+                ENV_RECONNECT_MAX_MS,
                 DEFAULT_RECONNECT_MAX_MS,
             )?,
             reconnect_jitter_per_mille: parse_u16(
                 environment,
-                "VRC_RECONNECT_JITTER_PER_MILLE",
+                ENV_RECONNECT_JITTER_PER_MILLE,
                 DEFAULT_RECONNECT_JITTER_PER_MILLE,
             )?,
             stable_connection_reset: parse_duration_ms(
                 environment,
-                "VRC_STABLE_CONNECTION_RESET_MS",
+                ENV_STABLE_CONNECTION_RESET_MS,
                 DEFAULT_STABLE_CONNECTION_RESET_MS,
             )?,
             manual_reconnect_interval: parse_duration_ms(
                 environment,
-                "VRC_MANUAL_RECONNECT_INTERVAL_MS",
+                ENV_MANUAL_RECONNECT_INTERVAL_MS,
                 DEFAULT_MANUAL_RECONNECT_INTERVAL_MS,
             )?,
             stall_probe_after: parse_duration_ms(
                 environment,
-                "VRC_STALL_PROBE_AFTER_MS",
+                ENV_STALL_PROBE_AFTER_MS,
                 DEFAULT_STALL_PROBE_AFTER_MS,
             )?,
             stall_confirm_after: parse_duration_ms(
                 environment,
-                "VRC_STALL_CONFIRM_AFTER_MS",
+                ENV_STALL_CONFIRM_AFTER_MS,
                 DEFAULT_STALL_CONFIRM_AFTER_MS,
             )?,
         };
@@ -408,9 +422,9 @@ impl ControllerConfig {
             .max(worker.poll_interval);
         let minimum_shutdown_timeout = maximum_worker_blocking_wait
             .checked_add(Duration::from_millis(MIN_PROCESS_SHUTDOWN_TIMEOUT_MS))
-            .ok_or(ConfigError::InvalidValue("VRC_SHUTDOWN_TIMEOUT_MS"))?;
+            .ok_or(ConfigError::InvalidValue(ENV_SHUTDOWN_TIMEOUT_MS))?;
         if shutdown_timeout < minimum_shutdown_timeout {
-            return Err(ConfigError::InvalidValue("VRC_SHUTDOWN_TIMEOUT_MS"));
+            return Err(ConfigError::InvalidValue(ENV_SHUTDOWN_TIMEOUT_MS));
         }
 
         Ok(Self {
@@ -454,10 +468,7 @@ impl fmt::Display for ConfigError {
         match self {
             Self::InvalidValue(name) => write!(formatter, "invalid configuration value: {name}"),
             Self::UnsupportedEnvironmentVariable(name) => {
-                write!(
-                    formatter,
-                    "unsupported controller environment variable: {name}"
-                )
+                write_unsupported_controller_environment_variable(formatter, name)
             }
             Self::SecretFile { path, reason } => {
                 write!(
@@ -631,17 +642,38 @@ fn validate_secret_permissions(_path: &Path, _metadata: &fs::Metadata) -> Result
     Ok(())
 }
 
-fn reject_unknown_controller_environment_names<E: EnvironmentSource>(
+pub(crate) fn validate_controller_environment_names<E: EnvironmentSource>(
     environment: &E,
-) -> Result<(), ConfigError> {
+) -> Result<(), String> {
     for name in environment.names() {
         if name.starts_with(CONTROLLER_ENVIRONMENT_PREFIX)
             && !SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES.contains(&name.as_str())
         {
-            return Err(ConfigError::UnsupportedEnvironmentVariable(name));
+            return Err(name);
         }
     }
     Ok(())
+}
+
+pub(crate) fn write_unsupported_controller_environment_variable(
+    formatter: &mut fmt::Formatter<'_>,
+    name: &str,
+) -> fmt::Result {
+    write!(
+        formatter,
+        "unsupported controller environment variable: {name}; only documented controller VRC_* environment variables are accepted"
+    )?;
+    match name {
+        RAW_API_TOKEN_ENVIRONMENT_NAME => write!(
+            formatter,
+            "; use {ENV_API_TOKEN_FILE} for the file-backed API token"
+        ),
+        RAW_VNC_PASSWORD_ENVIRONMENT_NAME => write!(
+            formatter,
+            "; use {ENV_VNC_PASSWORD_FILE} for the file-backed VNC password"
+        ),
+        _ => Ok(()),
+    }
 }
 
 fn environment_value<E: EnvironmentSource>(
@@ -717,7 +749,7 @@ fn validate_process_instance(value: &str) -> Result<(), ConfigError> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
-        return Err(ConfigError::InvalidValue("VRC_PROCESS_INSTANCE"));
+        return Err(ConfigError::InvalidValue(ENV_PROCESS_INSTANCE));
     }
     Ok(())
 }
@@ -725,7 +757,7 @@ fn validate_process_instance(value: &str) -> Result<(), ConfigError> {
 fn default_process_instance() -> Result<String, ConfigError> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_| ConfigError::InvalidValue("VRC_PROCESS_INSTANCE"))?
+        .map_err(|_| ConfigError::InvalidValue(ENV_PROCESS_INSTANCE))?
         .as_nanos();
     Ok(format!("p{}-{nanos:x}", std::process::id()))
 }
@@ -815,30 +847,21 @@ mod tests {
     #[test]
     fn environment_can_select_paths_and_bounded_nonsecret_values() {
         let environment = MapEnvironment(HashMap::from([
-            ("VRC_LISTEN_ADDR".to_owned(), "0.0.0.0:9090".to_owned()),
-            ("VRC_API_TOKEN_FILE".to_owned(), "/tmp/api".to_owned()),
-            ("VRC_VNC_PASSWORD_FILE".to_owned(), "/tmp/vnc".to_owned()),
-            ("VRC_VNC_HOST".to_owned(), "desktop.internal".to_owned()),
-            ("VRC_VNC_PORT".to_owned(), "5999".to_owned()),
-            ("VRC_COMMAND_CAPACITY".to_owned(), "8".to_owned()),
-            ("VRC_EVENT_CAPACITY".to_owned(), "9".to_owned()),
-            ("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "1500".to_owned()),
-            ("VRC_VNC_CONNECT_TIMEOUT_MS".to_owned(), "1000".to_owned()),
-            ("VRC_VNC_READ_TIMEOUT_MS".to_owned(), "1000".to_owned()),
-            ("VRC_WEBSOCKET_EVENT_CAPACITY".to_owned(), "10".to_owned()),
-            ("VRC_WEBSOCKET_MAX_CLIENTS".to_owned(), "3".to_owned()),
-            (
-                "VRC_WEBSOCKET_PING_INTERVAL_MS".to_owned(),
-                "1000".to_owned(),
-            ),
-            (
-                "VRC_WEBSOCKET_IDLE_TIMEOUT_MS".to_owned(),
-                "3000".to_owned(),
-            ),
-            (
-                "VRC_PROCESS_INSTANCE".to_owned(),
-                "test-instance".to_owned(),
-            ),
+            (ENV_LISTEN_ADDR.to_owned(), "0.0.0.0:9090".to_owned()),
+            (ENV_API_TOKEN_FILE.to_owned(), "/tmp/api".to_owned()),
+            (ENV_VNC_PASSWORD_FILE.to_owned(), "/tmp/vnc".to_owned()),
+            (ENV_VNC_HOST.to_owned(), "desktop.internal".to_owned()),
+            (ENV_VNC_PORT.to_owned(), "5999".to_owned()),
+            (ENV_COMMAND_CAPACITY.to_owned(), "8".to_owned()),
+            (ENV_EVENT_CAPACITY.to_owned(), "9".to_owned()),
+            (ENV_SHUTDOWN_TIMEOUT_MS.to_owned(), "1500".to_owned()),
+            (ENV_VNC_CONNECT_TIMEOUT_MS.to_owned(), "1000".to_owned()),
+            (ENV_VNC_READ_TIMEOUT_MS.to_owned(), "1000".to_owned()),
+            (ENV_WEBSOCKET_EVENT_CAPACITY.to_owned(), "10".to_owned()),
+            (ENV_WEBSOCKET_MAX_CLIENTS.to_owned(), "3".to_owned()),
+            (ENV_WEBSOCKET_PING_INTERVAL_MS.to_owned(), "1000".to_owned()),
+            (ENV_WEBSOCKET_IDLE_TIMEOUT_MS.to_owned(), "3000".to_owned()),
+            (ENV_PROCESS_INSTANCE.to_owned(), "test-instance".to_owned()),
         ]));
         let secrets = MapSecrets(HashMap::from([
             (PathBuf::from("/tmp/api"), "selected-api".to_owned()),
@@ -875,17 +898,17 @@ mod tests {
     #[test]
     fn invalid_ports_limits_and_durations_fail_closed() {
         for (name, value) in [
-            ("VRC_LISTEN_ADDR", "127.0.0.1:0"),
-            ("VRC_VNC_PORT", "0"),
-            ("VRC_COMMAND_CAPACITY", "0"),
-            ("VRC_MAX_JSON_BYTES", "2097153"),
-            ("VRC_SCREENSHOT_MAX_CONCURRENT", "65"),
-            ("VRC_WEBSOCKET_EVENT_CAPACITY", "0"),
-            ("VRC_WEBSOCKET_MAX_CLIENTS", "0"),
-            ("VRC_WEBSOCKET_PING_INTERVAL_MS", "0"),
-            ("VRC_COMMAND_ACK_TIMEOUT_MS", "0"),
-            ("VRC_SHUTDOWN_TIMEOUT_MS", "499"),
-            ("VRC_RECONNECT_JITTER_PER_MILLE", "501"),
+            (ENV_LISTEN_ADDR, "127.0.0.1:0"),
+            (ENV_VNC_PORT, "0"),
+            (ENV_COMMAND_CAPACITY, "0"),
+            (ENV_MAX_JSON_BYTES, "2097153"),
+            (ENV_SCREENSHOT_MAX_CONCURRENT, "65"),
+            (ENV_WEBSOCKET_EVENT_CAPACITY, "0"),
+            (ENV_WEBSOCKET_MAX_CLIENTS, "0"),
+            (ENV_WEBSOCKET_PING_INTERVAL_MS, "0"),
+            (ENV_COMMAND_ACK_TIMEOUT_MS, "0"),
+            (ENV_SHUTDOWN_TIMEOUT_MS, "499"),
+            (ENV_RECONNECT_JITTER_PER_MILLE, "501"),
         ] {
             let environment = MapEnvironment(HashMap::from([(name.to_owned(), value.to_owned())]));
             assert!(ControllerConfig::load_from(&environment, &secrets()).is_err());
@@ -895,32 +918,69 @@ mod tests {
     #[test]
     fn process_shutdown_budget_covers_longest_single_worker_wait_plus_cleanup_margin() {
         let common = [
-            ("VRC_VNC_CONNECT_TIMEOUT_MS".to_owned(), "1000".to_owned()),
-            ("VRC_VNC_READ_TIMEOUT_MS".to_owned(), "1000".to_owned()),
-            ("VRC_POLL_INTERVAL_MS".to_owned(), "1000".to_owned()),
+            (ENV_VNC_CONNECT_TIMEOUT_MS.to_owned(), "1000".to_owned()),
+            (ENV_VNC_READ_TIMEOUT_MS.to_owned(), "1000".to_owned()),
+            (ENV_POLL_INTERVAL_MS.to_owned(), "1000".to_owned()),
         ];
         let below = MapEnvironment(HashMap::from_iter(
             common
                 .clone()
                 .into_iter()
-                .chain([("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "1499".to_owned())]),
+                .chain([(ENV_SHUTDOWN_TIMEOUT_MS.to_owned(), "1499".to_owned())]),
         ));
         assert!(ControllerConfig::load_from(&below, &secrets()).is_err());
 
         let floor = MapEnvironment(HashMap::from_iter(
             common
                 .into_iter()
-                .chain([("VRC_SHUTDOWN_TIMEOUT_MS".to_owned(), "1500".to_owned())]),
+                .chain([(ENV_SHUTDOWN_TIMEOUT_MS.to_owned(), "1500".to_owned())]),
         ));
         let config = ControllerConfig::load_from(&floor, &secrets()).expect("floor is valid");
         assert_eq!(config.shutdown_timeout, Duration::from_millis(1500));
     }
 
     #[test]
+    fn controller_environment_vocabulary_is_unique_and_covers_config_values() {
+        let unique = SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES.len());
+        for name in CONFIG_VALUE_ENVIRONMENT_NAMES {
+            assert!(SUPPORTED_CONTROLLER_ENVIRONMENT_NAMES.contains(name));
+        }
+    }
+
+    #[test]
+    fn absent_values_use_defaults_but_present_empty_values_fail_closed() {
+        let defaults = ControllerConfig::load_from(&MapEnvironment::default(), &secrets())
+            .expect("absent optional values use defaults");
+        assert_eq!(
+            defaults.listen_address,
+            DEFAULT_LISTEN_ADDRESS.parse().unwrap()
+        );
+
+        let environment =
+            MapEnvironment(HashMap::from([(ENV_LISTEN_ADDR.to_owned(), String::new())]));
+        assert!(matches!(
+            ControllerConfig::load_from(&environment, &secrets()),
+            Err(ConfigError::InvalidValue(name)) if name == ENV_LISTEN_ADDR
+        ));
+    }
+
+    #[test]
     fn raw_secret_values_cannot_be_supplied_directly_by_environment() {
-        for (name, secret_value) in [
-            ("VRC_API_TOKEN", "ignored-api-value"),
-            ("VRC_VNC_PASSWORD", "ignored-vnc-value"),
+        for (name, secret_value, supported_file_variable) in [
+            (
+                RAW_API_TOKEN_ENVIRONMENT_NAME,
+                "ignored-api-value",
+                ENV_API_TOKEN_FILE,
+            ),
+            (
+                RAW_VNC_PASSWORD_ENVIRONMENT_NAME,
+                "ignored-vnc-value",
+                ENV_VNC_PASSWORD_FILE,
+            ),
         ] {
             let environment =
                 MapEnvironment(HashMap::from([(name.to_owned(), secret_value.to_owned())]));
@@ -932,6 +992,8 @@ mod tests {
                 ConfigError::UnsupportedEnvironmentVariable(variable) if variable == name
             ));
             assert!(rendered.contains(name));
+            assert!(rendered.contains(supported_file_variable));
+            assert!(rendered.contains("only documented controller VRC_*"));
             assert!(!rendered.contains(secret_value));
         }
     }
@@ -950,6 +1012,7 @@ mod tests {
             ConfigError::UnsupportedEnvironmentVariable(variable) if variable == "VRC_LISTEN_ADR"
         ));
         assert!(rendered.contains("VRC_LISTEN_ADR"));
+        assert!(rendered.contains("only documented controller VRC_*"));
         assert!(!rendered.contains("127.0.0.1:9090"));
         assert!(!rendered.contains("unrelated-process-value"));
     }
@@ -972,7 +1035,7 @@ mod tests {
     fn process_instance_is_strictly_bounded() {
         for value in ["", "has space", "slash/value"] {
             let environment = MapEnvironment(HashMap::from([(
-                "VRC_PROCESS_INSTANCE".to_owned(),
+                ENV_PROCESS_INSTANCE.to_owned(),
                 value.to_owned(),
             )]));
             assert!(ControllerConfig::load_from(&environment, &secrets()).is_err());

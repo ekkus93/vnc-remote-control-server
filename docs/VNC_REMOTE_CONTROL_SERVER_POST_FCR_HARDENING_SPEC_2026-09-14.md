@@ -140,6 +140,8 @@ Add Rust configuration tests covering:
 - supported non-secret controller variables still work;
 - empty or absent optional variables preserve current defaults.
 
+> **PRH erratum (2026-09-14):** the bullet above was too broad. Current fail-closed behavior distinguishes absence from explicit empty input: an absent optional variable may use its documented default, while a present empty value remains explicit input and is validated normally unless that variable specifically documents empty as valid. See `VNC_REMOTE_CONTROL_SERVER_POST_PFH_REVIEW_HARDENING_SPEC_2026-09-14.md`.
+
 If controller config has multiple loading entry points, every public loading entry point must receive the same validation or delegate to a single validated path.
 
 ## 6. Finding PFH-003 — Public Python client timeout validation

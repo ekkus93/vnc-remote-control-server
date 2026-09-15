@@ -99,11 +99,15 @@ class _RequestOptions:
 
 def _validate_timeout(timeout: object) -> float:
     """Return one positive finite timeout without bool or string coercion."""
+    message = "timeout must be a positive finite number"
     if isinstance(timeout, bool) or not isinstance(timeout, int | float):
-        raise ValueError("timeout must be a positive finite number")
-    normalized = float(timeout)
+        raise ValueError(message)
+    try:
+        normalized = float(timeout)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
     if not math.isfinite(normalized) or normalized <= 0:
-        raise ValueError("timeout must be a positive finite number")
+        raise ValueError(message)
     return normalized
 
 
@@ -307,6 +311,8 @@ class VncRemoteControlClient:
         _http_open: HttpOpen | None = None,
         _websocket_factory: WebSocketFactory | None = None,
     ) -> None:
+        if not isinstance(base_url, str):
+            raise ValueError("base_url must be a string")
         parsed = urlsplit(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("base_url must be an absolute http:// or https:// URL")
@@ -316,6 +322,8 @@ class VncRemoteControlClient:
             raise ValueError("base_url must not contain a query string or fragment")
         normalized_timeout = _validate_timeout(timeout)
         if token is not None:
+            if not isinstance(token, str):
+                raise ValueError("token must be a string when provided")
             if not token:
                 raise ValueError("token must not be empty")
             if "\r" in token or "\n" in token:
