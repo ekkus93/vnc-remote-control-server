@@ -20,7 +20,7 @@ COPY docs/openapi.json ./docs/openapi.json
 RUN cargo build --locked --release --package controller-api --bin controller-api \
     && strip /workspace/target/release/controller-api
 
-FROM debian:13.6-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
+FROM debian:13.7-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS runtime
 
 ARG CONTROLLER_UID=10002
 ARG CONTROLLER_GID=10002
