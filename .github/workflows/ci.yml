@@ -124,7 +124,7 @@ jobs:
 
       - name: Upload rustfmt failure diff
         if: ${{ failure() && steps.rustfmt_check.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rustfmt-failure-${{ github.run_id }}
           path: artifacts/rustfmt.patch
@@ -231,7 +231,7 @@ jobs:
           PY
 
       - name: Upload CI evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-evidence-${{ github.run_id }}
           path: artifacts/ci-evidence.json
@@ -295,7 +295,7 @@ jobs:
 
       - name: Upload WorkerHandle E2E failure artifacts
         if: ${{ failure() && steps.worker_e2e.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: worker-e2e-failure-${{ github.run_id }}
           path: artifacts/worker-e2e-failure
@@ -376,7 +376,7 @@ jobs:
 
       - name: Upload MCP E2E failure diagnostics
         if: ${{ failure() && steps.mcp_e2e.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: mcp-e2e-failure-${{ github.run_id }}
           path: artifacts/mcp-e2e-failure
@@ -391,7 +391,7 @@ jobs:
 
       - name: Upload R13 integration failure diagnostics
         if: ${{ failure() && steps.r13_integration.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: r13-integration-failure-${{ github.run_id }}
           path: artifacts/r13-integration-failure
